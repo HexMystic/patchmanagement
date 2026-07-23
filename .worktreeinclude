@@ -1,0 +1,12 @@
+# .worktreeinclude
+# Files listed here are gitignored but must be copied into every new git
+# worktree so a freshly-created worktree is immediately usable without
+# re-running secret/config setup. See /docs/WORKFLOW.md.
+
+.env
+.env.local
+web/.env
+web/.env.local
+src/.env
+/lab/keys/
+appsettings.Development.local.json

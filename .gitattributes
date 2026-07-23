@@ -1,0 +1,10 @@
+# Keep shell scripts, Dockerfiles and entrypoints LF so they run in Linux
+# containers regardless of the host's core.autocrlf setting.
+*.sh            text eol=lf
+entrypoint.sh   text eol=lf
+Dockerfile*     text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+
+# PowerShell stays CRLF-friendly on Windows.
+*.ps1           text eol=crlf

@@ -1,0 +1,67 @@
+# ---------------------------------------------------------------------------
+# Patch Management Platform — .gitignore
+# ---------------------------------------------------------------------------
+
+# ---- Secrets / environment (NEVER commit) ----
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.pfx
+*.p12
+*_rsa
+*_ed25519
+secrets/
+/lab/keys/
+appsettings.*.local.json
+
+# ---- Lab content (large binaries, fetched not committed) ----
+/lab/content/wsusscn2.cab
+/lab/content/*.cab
+/lab/content/*.msu
+/lab/content/*.msi
+
+# ---- .NET ----
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.userosscache
+*.dbmdl
+project.lock.json
+artifacts/
+TestResults/
+*.trx
+*.coverage
+*.nupkg
+.vs/
+
+# ---- Node / web ----
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+.next/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- Docker ----
+*.env.docker
+docker-compose.override.yml
+
+# ---- IDE / editor ----
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- Logs / temp ----
+*.log
+logs/
+tmp/

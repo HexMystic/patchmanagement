@@ -1,0 +1,23 @@
+# RHEL-family lab target (Rocky / AlmaLinux). Parameterised by BASE_IMAGE.
+# IMPORTANT: this image is deliberately NOT upgraded — targets must be behind
+# on patches so the assessment engine has missing updates to find.
+ARG BASE_IMAGE=rockylinux:9
+FROM ${BASE_IMAGE}
+
+# Install ONLY sshd + sudo. No `dnf upgrade` on purpose.
+RUN dnf -y install openssh-server sudo passwd \
+ && dnf clean all \
+ && ssh-keygen -A \
+ && useradd -m -s /bin/bash labadmin \
+ && echo 'labadmin ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/labadmin \
+ && chmod 0440 /etc/sudoers.d/labadmin \
+ && passwd -l labadmin \
+ && sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
+ && sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config \
+ && sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+EXPOSE 22
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -1,0 +1,86 @@
+# ===========================================================================
+# LAB FLEET — the Linux endpoints to be patched (NOT product infra).
+#
+# 5 distros, each: sshd + ed25519 key auth, a NOPASSWD sudo user (labadmin),
+# distinct host port, pinned linux/amd64, deliberately behind on packages.
+# Product infra (Postgres/Redis) lives in the ROOT docker-compose.yml.
+#
+# Bring up:   docker compose -f lab/docker-compose.yml up -d --build
+# Keys:       run scripts/lab-keygen.ps1 FIRST to create lab/keys/lab_ed25519(.pub)
+# Reach from app containers via host.docker.internal:<port>.
+# ===========================================================================
+name: patchmgmt-lab
+
+x-pubkey: &pubkey
+  - "./keys/lab_ed25519.pub:/pubkey/authorized_key.pub:ro"
+
+services:
+  ubuntu2204:
+    build:
+      context: ./distros
+      dockerfile: Dockerfile.debian
+      args:
+        BASE_IMAGE: "ubuntu:22.04"
+    platform: linux/amd64
+    container_name: lab-ubuntu2204
+    hostname: ubuntu2204
+    ports:
+      - "2201:22"
+    volumes: *pubkey
+    restart: unless-stopped
+
+  ubuntu2404:
+    build:
+      context: ./distros
+      dockerfile: Dockerfile.debian
+      args:
+        BASE_IMAGE: "ubuntu:24.04"
+    platform: linux/amd64
+    container_name: lab-ubuntu2404
+    hostname: ubuntu2404
+    ports:
+      - "2202:22"
+    volumes: *pubkey
+    restart: unless-stopped
+
+  debian12:
+    build:
+      context: ./distros
+      dockerfile: Dockerfile.debian
+      args:
+        BASE_IMAGE: "debian:12"
+    platform: linux/amd64
+    container_name: lab-debian12
+    hostname: debian12
+    ports:
+      - "2203:22"
+    volumes: *pubkey
+    restart: unless-stopped
+
+  rocky9:
+    build:
+      context: ./distros
+      dockerfile: Dockerfile.rhel
+      args:
+        BASE_IMAGE: "rockylinux:9"
+    platform: linux/amd64
+    container_name: lab-rocky9
+    hostname: rocky9
+    ports:
+      - "2204:22"
+    volumes: *pubkey
+    restart: unless-stopped
+
+  alma9:
+    build:
+      context: ./distros
+      dockerfile: Dockerfile.rhel
+      args:
+        BASE_IMAGE: "almalinux:9"
+    platform: linux/amd64
+    container_name: lab-alma9
+    hostname: alma9
+    ports:
+      - "2205:22"
+    volumes: *pubkey
+    restart: unless-stopped

@@ -1,0 +1,51 @@
+# ===========================================================================
+# ROOT compose — PRODUCT INFRASTRUCTURE (Postgres + Redis)
+#
+# This is the product's own backing stack. It is intentionally SEPARATE from
+# /lab/docker-compose.yml, which models the fleet of endpoints to be patched.
+# Only the MAIN git worktree runs this stack; other worktrees connect to it.
+# See /docs/adr/0004-split-docker-stacks.md and /docs/WORKFLOW.md.
+# ===========================================================================
+name: patchmgmt
+
+services:
+  postgres:
+    image: postgres:16
+    platform: linux/amd64
+    container_name: patchmgmt-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-patchmgmt}
+      POSTGRES_USER: ${POSTGRES_USER:-patchmgmt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-patchmgmt}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-patchmgmt} -d ${POSTGRES_DB:-patchmgmt}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    platform: linux/amd64
+    container_name: patchmgmt-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    name: patchmgmt-pgdata
+  redisdata:
+    name: patchmgmt-redisdata

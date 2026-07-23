@@ -1,0 +1,62 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Edit",
+      "Write",
+      "Read"
+    ],
+    "deny": [
+      "Bash(rm -rf*)",
+      "Bash(rm -fr*)",
+      "Bash(rm -r -f*)",
+      "Bash(sudo rm -rf*)",
+      "Bash(sudo rm -fr*)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(docker system prune*)",
+      "Bash(dd *)",
+      "Bash(dd if=*)",
+      "Bash(mkfs*)",
+      "Bash(format*)",
+      "Bash(shutdown*)",
+      "Bash(winrs*)",
+      "PowerShell(rm -rf*)",
+      "PowerShell(rm -fr*)",
+      "PowerShell(Remove-Item -Recurse -Force*)",
+      "PowerShell(git push --force*)",
+      "PowerShell(git push -f*)",
+      "PowerShell(git reset --hard*)",
+      "PowerShell(docker system prune*)",
+      "PowerShell(dd *)",
+      "PowerShell(mkfs*)",
+      "PowerShell(format*)",
+      "PowerShell(Format-Volume*)",
+      "PowerShell(shutdown*)",
+      "PowerShell(Stop-Computer*)",
+      "PowerShell(Restart-Computer*)",
+      "PowerShell(Enter-PSSession*)",
+      "PowerShell(New-PSSession*)",
+      "PowerShell(Invoke-Command*)",
+      "PowerShell(Connect-WSMan*)",
+      "PowerShell(Test-WSMan*)",
+      "PowerShell(winrs*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "python \"${CLAUDE_PROJECT_DIR:-C:/Users/Mubashar/Desktop/random/patchmanagement}/.claude/hooks/lab_only_guard.py\"",
+            "statusMessage": "Enforcing lab-only endpoint access (localhost SSH; no WinRM)"
+          }
+        ]
+      }
+    ]
+  }
+}
