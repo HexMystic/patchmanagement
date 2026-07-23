@@ -157,3 +157,50 @@ separate worktrees. **Phase 8 is solo.**
 - **Exit criteria:** Append-only audit of every privileged action; evidence bundles
   for verified patches; compliance exports; credentials never appear in any record.
 - **Owned paths:** `src/Modules/Audit`.
+
+---
+
+## Session Log
+
+Running record of what each session accomplished, so a future session has continuity
+without re-explaining. Newest entry first.
+
+### 2026-07-24 — Phase 0 complete
+**Outcome:** Phase 0 (environment & design) complete. Initial commit `e50a171` pushed
+to `origin/main` — private repo `github.com/HexMystic/patchmanagement`. Next up:
+**Phase 1 (Contracts, solo)**.
+
+**Environment verified:** .NET SDK 9.0.314, Node 24.16.0, npm 11.13, Git 2.54,
+PowerShell 7.6.4, Docker 29.6.2 / Compose v5.3.1, WSL2. Installed this session via
+winget: .NET 9 SDK + PowerShell 7. `scripts/verify-env.ps1` → all required checks pass.
+
+**Delivered:** repo scaffold; governance/design docs (CLAUDE.md, this ROADMAP,
+WORKFLOW, phases/phase-1..4, adr/0001–0008, HARD-PROBLEMS, THREAT-MODEL,
+DIFFERENTIATORS); root compose (Postgres 16 + Redis); `/lab` fleet of 5 distros
+(Ubuntu 22.04/24.04, Debian 12, Rocky 9, Alma 9) with SSH key-auth + NOPASSWD sudo
+verified on `localhost:2201–2205`; `lab-keygen.ps1` + `verify-env.ps1`;
+`wsusscn2.cab` (627.7 MB) downloaded to `/lab/content` (gitignored, **not parsed**);
+static lab-only guardrail (`.claude/hooks/lab_only_guard.py`) tested.
+
+**Decisions locked (see `docs/adr/`):** 0002 pluggable `IKeyProvider` (software
+default; envelope encryption w/ KEK rotation + DEK re-wrap, no credential
+re-encryption) · 0003 cloud-agnostic connector (bastion = config) · 0004 split compose
+stacks · 0005 in-house CQRS mediator (no MediatR/AutoMapper — commercial in 2025) ·
+0006 multi-tenant PostgreSQL RLS from day one · 0007 static lab-only guardrail
+(localhost SSH; WinRM denied) · 0008 Windows content = wsusscn2.cab (applicability) +
+MSRC CSAF (CVE overlay).
+
+**Outstanding items:**
+- **Postgres 16 container not yet running.** Docker Hub's CloudFront CDN persistently
+  EOF-ed `postgres:16`'s large layers this session (30+ retries; redis:7 and all 5
+  distro bases pulled fine). Non-blocking for Phase 0 (Postgres first used in Phase 1
+  migrations). **When the CDN recovers:** `docker pull postgres:16 && docker compose
+  up -d`. If it persists, consider `postgres:16-alpine` (smaller layers). Redis is up
+  and healthy.
+- **Git identity** set repo-locally (`HexMystic` / `aiclaude@securelinkme.net`) — no
+  global config changed.
+- Line-ending note: `.gitattributes` pins `*.sh`/Dockerfiles/`*.yml` to LF (container
+  safety); other text files follow the host `core.autocrlf`.
+
+**For the next session (Phase 1 — Contracts, solo):** read `docs/phases/phase-1.md`;
+bring the root stack up first (needs Postgres for migrations + the RLS isolation test).
