@@ -16,7 +16,7 @@ separate worktrees. **Phase 8 is solo.**
 | # | Phase | Mode | Depends on | Status |
 |---|-------|------|-----------|--------|
 | 0 | Environment & design | solo | — | **complete** |
-| 1 | Contracts | solo | 0 | **complete** |
+| 1 | Contracts | solo | 0 | **complete\*** |
 | 2 | Credential vault | parallel | 1 | not-started |
 | 3 | Endpoint connector | parallel | 1 | not-started |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
@@ -29,6 +29,10 @@ separate worktrees. **Phase 8 is solo.**
 | 11 | Scheduling, notifications, reporting | parallel | 6 | not-started |
 | 12 | UI | parallel | 1 | not-started |
 | 13 | Audit, compliance, evidence | parallel | 6 | not-started |
+
+**\*Phase 1** is complete for the *agreed foundational scope*, but an independent review
+(`docs/reviews/phase-1-review.md`) raises **1 critical + 5 high** findings. **Do not start the
+Phases 2/3/5 fan-out until C1 is resolved** — see "Phase 1 review — follow-ups" below.
 
 ---
 
@@ -180,10 +184,79 @@ separate worktrees. **Phase 8 is solo.**
 
 ---
 
+## Phase 1 review — follow-ups (OPEN)
+
+Source: `docs/reviews/phase-1-review.md`, reviewed at commit `fb7b4b5`.
+Verdict summary: the RLS work, the state machine, and the append-only audit grants hold up;
+the gap is what the frozen contract *didn't* include.
+
+### Decision required — blocks the parallel fan-out
+**C1 — schema scope vs the DIFFERENTIATORS gate.** Phase 1 shipped **8 of the 18** tables listed
+in `phase-1.md`, per the explicitly-chosen "foundational core" scope (Session Log, 2026-07-24).
+But `DIFFERENTIATORS.md` ends with a gate: *"The Phase 1 contract review must confirm every field
+above exists before Phase 1 is marked complete."* That gate was never amended, so the docs now
+contradict the delivery. **Pick one:**
+- **(a) Extend Phase 1** — add the tables the differentiators/hard-problems need *now*:
+  `patches` (`reversible`, `requires_reboot`), `advisories`, `advisory_affects` (`backported`,
+  `fixed_version`), `patch_supersedence`, `content_sources`, `exceptions`, `health_probes`,
+  `deployments`/`waves`/`deployment_targets`, `schedules`, plus asset provenance/evidence.
+- **(b) Formally amend** `DIFFERENTIATORS.md` + `phase-1.md` to the foundational scope, and record
+  which phase now owns each deferred table.
+
+Until this is settled, the deferred tables get designed piecemeal by whichever **parallel** phase
+reaches them first — which defeats the purpose of a solo contracts phase.
+
+*Correction for the record:* the review reads the scope cut as unilateral. It was an explicit,
+approved decision — the real gap is that `DIFFERENTIATORS.md`'s gate wasn't amended to match.
+
+### High
+| # | Finding | Where it should land |
+|---|---------|----------------------|
+| H1 | **No authN/authZ anywhere on the roadmap** — tenancy is a caller-supplied `X-Tenant-Id` header; `operators.role`/`external_auth_ref` are never populated | Needs a **new phase** (operator login, tenant claims, RBAC) **before Phase 12** |
+| H2 | `advisory.schema.json` is closed (`additionalProperties:false`) and cannot carry KEV/EPSS/CVSS provenance; `severity` has no `unknown`; no **patch** schema at all | Phase 1 amend / Phase 5 |
+| H3 | **Zero foreign keys** — incl. no `tenant_id → tenants(id)`; permits cross-tenant dangling refs and phantom tenants. Wants composite `(tenant_id, id)` FKs + `UNIQUE (tenant_id, id)` parents | Phase 1 (cheap now) |
+| H4 | **No test enforces the RLS convention** on tables later phases add (ENABLE+FORCE+policy+grants); no `ALTER DEFAULT PRIVILEGES` | Phase 1 (~20-line `pg_class`/`pg_policies` test) |
+| H5 | OpenAPI is an empty skeleton that declares itself **regenerated code-first**, inverting the freeze CLAUDE.md §4.5 defines | Reconcile CLAUDE.md ↔ `api/openapi.yaml` |
+
+### Medium / Low (detail in the review)
+`M1` exception/superseded conflated with `assessed-compliant` · `M2` no honest failure states once
+deploy starts (can't record `unreachable` mid-wave) · `M3` one enum for asset reachability *and*
+finding lifecycle · `M4` audit can't express system-scope actions (breaks Phase 2 KEK rotation) +
+`EfAuditLog` flushes the shared DbContext · `M5` app role can `DELETE` findings and `data_keys` ·
+`M6` no tenant context off the HTTP path (Hangfire jobs silently no-op) · `M7` single-secret
+`ResolvedCredential` (no key+sudo password) and unpinned buffer · `M8` `state`/`kind`/`source` are
+unconstrained `text` · `M9` no uniqueness for idempotent upserts · `L1`–`L7` as listed.
+
+**Cheap Phase-1 hardening to do first:** H3, H4, M5, M8, M9.
+
+---
+
 ## Session Log
 
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
+
+### 2026-07-24 (end of session) — STOPPING POINT · resume here
+Phase 1 merged to `main` at **`fb7b4b5`**, 25/25 tests green, pushed. An independent review then
+landed at `docs/reviews/phase-1-review.md` — **1 critical, 5 high, 9 medium, 7 low**.
+
+**Resume tomorrow in this order:**
+1. **Decide C1** (extend Phase 1's schema **vs** formally amend `DIFFERENTIATORS.md`/`phase-1.md`).
+   See "Phase 1 review — follow-ups". **This gates everything else.**
+2. Then the cheap Phase-1 hardening: **H3** (FKs incl. `tenant_id → tenants`), **H4** (a test that
+   every tenant table has ENABLE+FORCE+policy), **M5** (drop `DELETE` on `findings`/`data_keys`),
+   **M8** (CHECK constraints on `state`/`kind`/`source`), **M9** (unique keys for idempotent upserts).
+3. Decide where **H1 (authentication/RBAC)** lands — it is currently on no phase, and Phase 12 needs it.
+4. **Only then** start the Phases 2/3/5 parallel fan-out.
+
+**Do NOT start the fan-out before C1 is resolved** — parallel sessions would each set part of the
+deferred contract independently.
+
+**Environment prerequisites for the next session:**
+- **Smart App Control must stay OFF** (re-enabling blocks `dotnet run`/`dotnet test` — see below).
+- Bring infra up: `docker compose up -d` (root) and `docker compose -f lab/docker-compose.yml up -d` (lab).
+- Dev DB was truncated at end of session (schema + RLS intact, no rows). Migrations already applied.
+- `dotnet` lives at `C:\Program Files\dotnet` (may not be on a stale shell's PATH).
 
 ### 2026-07-24 — Phase 1 complete (Contracts)
 **Outcome:** Phase 1 (Contracts, solo) complete. **Phases 2 (Vault), 3 (Connector), and 5
