@@ -1,0 +1,105 @@
+openapi: 3.0.3
+info:
+  title: Patch Management Platform API
+  version: 0.1.0-phase1
+  description: >
+    Phase 1 contract skeleton. Defines the error envelope and the two endpoints that
+    exist today (/health and the RLS diagnostic /diag/assets). Real resource endpoints
+    are added by later phases; this file is regenerated code-first once controllers exist.
+
+servers:
+  - url: http://localhost:5080
+    description: Local dev host
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Liveness probe.
+      tags: [diagnostics]
+      responses:
+        "200":
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /diag/assets:
+    get:
+      operationId: getDiagAssets
+      summary: >
+        Diagnostic: list asset hostnames visible to the current tenant. A real
+        tenant-scoped read that goes through the restricted DB role + PostgreSQL RLS.
+        With no tenant, RLS returns an empty set (fail closed).
+      tags: [diagnostics]
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+      responses:
+        "200":
+          description: The hostnames visible to the resolved tenant (possibly empty).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetsDiagnostic"
+        "500":
+          $ref: "#/components/responses/Problem"
+
+components:
+  parameters:
+    TenantHeader:
+      name: X-Tenant-Id
+      in: header
+      required: false
+      description: >
+        DEV tenant selector. Replaced by an authenticated tenant claim before production.
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Problem:
+      description: An error, as an RFC 7807 problem document.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+  schemas:
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+
+    AssetsDiagnostic:
+      type: object
+      additionalProperties: false
+      required: [count, hostnames]
+      properties:
+        count:
+          type: integer
+          minimum: 0
+        hostnames:
+          type: array
+          items:
+            type: string
+
+    Problem:
+      description: RFC 7807 problem details — the standard error envelope for this API.
+      type: object
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string

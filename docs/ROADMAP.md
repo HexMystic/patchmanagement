@@ -16,7 +16,7 @@ separate worktrees. **Phase 8 is solo.**
 | # | Phase | Mode | Depends on | Status |
 |---|-------|------|-----------|--------|
 | 0 | Environment & design | solo | — | **complete** |
-| 1 | Contracts | solo | 0 | not-started |
+| 1 | Contracts | solo | 0 | **complete** |
 | 2 | Credential vault | parallel | 1 | not-started |
 | 3 | Endpoint connector | parallel | 1 | not-started |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
@@ -41,7 +41,7 @@ separate worktrees. **Phase 8 is solo.**
   DIFFERENTIATORS, ADRs 0001–0008, phase-1..4 specs) present and cross-linked.
 - **Owned paths:** `/`, `/lab`, `/scripts`, `/docs`, `.claude/`, `docker-compose.yml`.
 
-## Phase 1 — Contracts  · solo · Status: not-started
+## Phase 1 — Contracts  · solo · Status: complete
 - **Goal:** Freeze the foundational contracts everything else depends on.
 - **Dependencies:** Phase 0.
 - **Exit criteria:** PostgreSQL schema with `tenant_id` on every table + **RLS
@@ -184,6 +184,43 @@ separate worktrees. **Phase 8 is solo.**
 
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
+
+### 2026-07-24 — Phase 1 complete (Contracts)
+**Outcome:** Phase 1 (Contracts, solo) complete. **Phases 2 (Vault), 3 (Connector), and 5
+(Content) are now parallel-safe** — the first real fan-out (see WORKFLOW.md).
+
+**Built (foundational scope):** a .NET 9 solution (Clean Architecture, modular monorepo):
+- `PatchManagement.Contracts` — `EndpointState` + `StateMachine` (11 frozen states,
+  transitions-as-data, extensible via `With`, reopenable, no dead-ends); `ICredentialProvider`
+  + `ResolvedCredential`; `IAuditLog` + `AuditEntry`; `IModuleRegistrar`.
+- `PatchManagement.Persistence` — EF Core 9 + Npgsql; 8 core tables (tenants, operators,
+  credentials, data_keys, audit_log, assets, asset_packages, findings); `AppDbContext`;
+  `RlsConnectionInterceptor`; `EfAuditLog`; migrations `InitialCreate` + `RlsAndRoles`.
+- `PatchManagement.Api` — reflection module discovery (base-dir scan, no shared file);
+  `X-Tenant-Id` tenant middleware; `/health` + `/diag/assets`.
+- `api/openapi.yaml`; `schemas/{advisory,finding}.schema.json` + samples; `db/roles.sql`;
+  `db/schema.sql` (pg_dump export); `.config/dotnet-tools.json` (pins dotnet-ef).
+
+**RLS & requirements (a–d) met:** every tenant table `ENABLE`+`FORCE` RLS + `tenant_isolation`
+policy (`NULLIF(current_setting('app.tenant_id',true),'')::uuid` → fail-closed); app connects
+as non-owner `patchmgmt_app`, migrations as owner `patchmgmt`; `audit_log` is append-only
+(SELECT/INSERT only); module DI convention needs no shared registration file (parallel-safe).
+
+**Tests: 25/25 green** — 19 contracts unit; 6 integration (RLS isolation through the HTTP
+pipeline AND at the DbContext as the restricted role; append-only-audit denial; JSON-schema
+validation).
+
+**Environment — Smart App Control:** SAC blocked *execution* of freshly-built unsigned binaries
+(`0x800711C7`), stopping the app host + integration tests (compilation was fine). **Resolved by
+disabling Smart App Control** (dev machine). Keep SAC off for this project (or build/test in
+WSL/CI) — re-enabling it will block `dotnet run`/`dotnet test` again.
+
+**Decisions this phase:** foundational schema scope (later phases add their own tables following
+the frozen conventions); EF-first migrations with RLS applied via raw SQL; RLS set via
+`set_config` on every connection open (leak-safe under pooling, no per-request transaction);
+integration tests use an **ephemeral DB on the running compose Postgres** (Testcontainers was
+also SAC-blocked). Carry-overs: alpine→Debian(glibc) revert before perf/prod (ADR 0009);
+`findings.advisory_id/patch_id` stay FK-less until Phases 5/6.
 
 ### 2026-07-24 — Root stack up (Postgres switched to alpine)
 **Root product-infra stack is healthy:** `postgres:16-alpine` + `redis:7` both

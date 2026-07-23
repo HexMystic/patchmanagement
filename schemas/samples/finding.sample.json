@@ -1,0 +1,13 @@
+{
+  "id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+  "tenantId": "11111111-1111-1111-1111-111111111111",
+  "assetId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  "advisoryId": null,
+  "patchId": null,
+  "state": "assessed-missing",
+  "reversible": false,
+  "riskScore": 72.5,
+  "riskExplanation": { "cvss": 7.5, "kev": false, "epss": 0.42, "exposure": "internal" },
+  "openedAt": "2026-07-24T09:00:00Z",
+  "closedAt": null
+}

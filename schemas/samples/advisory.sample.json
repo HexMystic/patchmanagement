@@ -1,0 +1,16 @@
+{
+  "source": "usn",
+  "externalId": "USN-6789-1",
+  "title": "OpenSSL vulnerabilities",
+  "severity": "high",
+  "publishedAt": "2026-06-01T12:00:00Z",
+  "cvss": 7.5,
+  "affects": [
+    {
+      "packageName": "openssl",
+      "ecosystem": "deb",
+      "fixedVersion": "3.0.2-0ubuntu1.16",
+      "backported": true
+    }
+  ]
+}

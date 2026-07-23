@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://patchmanagement.dev/schemas/finding.schema.json",
+  "title": "Finding",
+  "description": "An assessment finding correlating an asset with content. States match the frozen state machine; closedAt is nullable so a closed finding can be reopened.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "tenantId", "assetId", "state", "reversible"],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "tenantId": { "type": "string", "format": "uuid" },
+    "assetId": { "type": "string", "format": "uuid" },
+    "advisoryId": { "type": ["string", "null"], "format": "uuid" },
+    "patchId": { "type": ["string", "null"], "format": "uuid" },
+    "state": {
+      "type": "string",
+      "enum": [
+        "unreachable",
+        "auth-failed",
+        "scan-failed",
+        "assessed-compliant",
+        "assessed-missing",
+        "deploy-in-progress",
+        "deploy-failed",
+        "pending-reboot",
+        "verified",
+        "rollback-in-progress",
+        "rolled-back"
+      ]
+    },
+    "reversible": { "type": "boolean" },
+    "riskScore": { "type": ["number", "null"], "minimum": 0 },
+    "riskExplanation": {
+      "type": ["object", "null"],
+      "description": "Explainability: the weighted inputs that produced riskScore."
+    },
+    "openedAt": { "type": "string", "format": "date-time" },
+    "closedAt": { "type": ["string", "null"], "format": "date-time" }
+  }
+}

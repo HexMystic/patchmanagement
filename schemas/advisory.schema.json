@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://patchmanagement.dev/schemas/advisory.schema.json",
+  "title": "Advisory",
+  "description": "A normalized vulnerability/patch advisory record from a content source (Phase 5).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "externalId", "title", "severity"],
+  "properties": {
+    "source": {
+      "type": "string",
+      "enum": ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2"]
+    },
+    "externalId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The source's identifier, e.g. CVE-2025-12345, USN-1234-1, RHSA-2025:0001."
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "severity": {
+      "type": "string",
+      "enum": ["none", "low", "medium", "high", "critical"]
+    },
+    "publishedAt": { "type": "string", "format": "date-time" },
+    "cvss": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 10
+    },
+    "affects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["packageName", "ecosystem"],
+        "properties": {
+          "packageName": { "type": "string", "minLength": 1 },
+          "ecosystem": {
+            "type": "string",
+            "description": "e.g. deb, rpm, windows.",
+            "minLength": 1
+          },
+          "fixedVersion": { "type": ["string", "null"] },
+          "backported": {
+            "type": "boolean",
+            "description": "True when the distro backported the fix without an upstream version bump."
+          }
+        }
+      }
+    }
+  }
+}
