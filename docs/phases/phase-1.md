@@ -17,6 +17,13 @@ beyond what the contract needs (migrations, RLS, enums, schema validation).
 4. `schemas/*.json` — JSON Schemas for content records and assessment findings.
 5. State machine (states + legal transitions) encoded in `src/Shared/Contracts`
    and documented here.
+6. Contract interfaces in `src/Shared/Contracts`:
+   - **`ICredentialProvider`** — resolve a credential reference to an in-memory-only
+     credential. Implemented later by the Phase 2 vault; defining it here lets **Phase
+     3's connector build in parallel with a test double** (see `phase-3.md`).
+   - **`IAuditLog`** — append-only audit sink. Cross-cutting: **used by Phase 2 from
+     day one** to log credential access; the full module is Phase 13. Back it with the
+     `audit_log` table (no UPDATE/DELETE grants to the app role → append-only).
 
 ## Multi-tenancy & RLS (the core rule)
 - Every table: `tenant_id uuid not null`.
@@ -98,6 +105,8 @@ It gates Phase 8/9 rollback. Default `false` (safe) when unknown.
 - EF model matches SQL; `dotnet ef migrations` clean.
 - `openapi.yaml` validates; `schemas/*.json` validate sample records.
 - State-machine guard rejects every illegal transition (unit tests).
+- `ICredentialProvider` and `IAuditLog` interfaces compile and are documented; the
+  `audit_log` table is append-only (app role has INSERT/SELECT, no UPDATE/DELETE).
 
 ## Verify
 `docker compose up -d postgres`; run migrations; run the RLS + state-machine tests;

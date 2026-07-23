@@ -19,10 +19,34 @@ public interface IEndpointConnector
     Task<FileResult>         PullAsync(EndpointTarget t, FileTransfer f, CancellationToken ct);
 }
 ```
-- `EndpointTarget` carries host, protocol, port, credential-ref (resolved via the
-  vault at call time — never a raw secret), and an **optional bastion/jump config**.
+- `EndpointTarget` carries host, protocol, port, a **credential reference** (an id/
+  scope — never a raw secret), and an **optional bastion/jump config**.
 - **Bastion is configuration, not code** (ADR 0003): the connector never knows it
   is talking to a cloud VM. Direct vs jump-host is a property of the target.
+
+## Credentials — depend on the Phase 1 interface, NOT the Phase 2 vault
+The connector resolves credentials through **`ICredentialProvider`**, an interface
+**defined in the Phase 1 contracts** — it does **not** depend on the Phase 2 vault
+*implementation*. This keeps **Phases 2 and 3 genuinely parallel**: neither blocks the
+other.
+
+```csharp
+// Phase 1 contract (src/Shared/Contracts) — the connector only sees this.
+public interface ICredentialProvider
+{
+    // Returns a resolved, in-memory-only credential for a reference; never logged,
+    // never persisted by the connector. The real implementation is the Phase 2 vault.
+    Task<ResolvedCredential> ResolveAsync(CredentialRef reference, CancellationToken ct);
+}
+```
+
+- **Production wiring:** DI binds `ICredentialProvider` → the Phase 2 vault. The
+  connector code is unaware of envelope encryption, key providers, or the vault at all.
+- **Phase 3 integration tests:** use a **test double** (`FakeCredentialProvider`) that
+  returns the lab ed25519 key material for `localhost:2201–2205`. This lets the full
+  SSH connector suite run against the lab **without the Phase 2 vault existing yet**.
+- The connector still honors the credential invariants (CLAUDE.md NEVER #1/#2): a
+  `ResolvedCredential` is used in memory only and never logged or returned.
 
 ## Non-negotiables (CLAUDE.md NEVER #5)
 - **Idempotent:** every operation is safe to retry; callers may re-invoke after a
@@ -47,7 +71,9 @@ public interface IEndpointConnector
   remote Windows cloud VMs (cloud-agnostic). No dev target locally (no Hyper-V).
 
 ## Exit criteria
-Provider-neutral connector; SSH integration tests pass against all 5 lab containers
-(run a command, push/pull a file); timeouts enforced (a test proves a hung op is
-cancelled); concurrency limiter caps sessions; bastion config path exercised in a
-unit test without any cloud assumption in the connector code.
+Provider-neutral connector; **credentials resolved only through the Phase-1
+`ICredentialProvider`**, with a `FakeCredentialProvider` test double so the suite runs
+**without the Phase 2 vault** (Phases 2 & 3 stay parallel); SSH integration tests pass
+against all 5 lab containers (run a command, push/pull a file); timeouts enforced (a
+test proves a hung op is cancelled); concurrency limiter caps sessions; bastion config
+path exercised in a unit test without any cloud assumption in the connector code.

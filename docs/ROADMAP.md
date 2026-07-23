@@ -15,7 +15,7 @@ separate worktrees. **Phase 8 is solo.**
 
 | # | Phase | Mode | Depends on | Status |
 |---|-------|------|-----------|--------|
-| 0 | Environment & design | solo | — | **in-progress** |
+| 0 | Environment & design | solo | — | **complete** |
 | 1 | Contracts | solo | 0 | not-started |
 | 2 | Credential vault | parallel | 1 | not-started |
 | 3 | Endpoint connector | parallel | 1 | not-started |
@@ -32,7 +32,7 @@ separate worktrees. **Phase 8 is solo.**
 
 ---
 
-## Phase 0 — Environment & design  · solo · Status: in-progress
+## Phase 0 — Environment & design  · solo · Status: complete
 - **Goal:** Working local environment + all Phase-0 governance/design docs. No app code.
 - **Dependencies:** none.
 - **Exit criteria:** `scripts/verify-env.ps1` all-green; root stack (pg/redis) and
@@ -47,7 +47,16 @@ separate worktrees. **Phase 8 is solo.**
 - **Exit criteria:** PostgreSQL schema with `tenant_id` on every table + **RLS
   policies**; EF Core model + migrations; OpenAPI spec; JSON schemas for content &
   assessment records; the **honest endpoint state machine** (states + legal
-  transitions) encoded and documented; reversible/irreversible patch flag present.
+  transitions) encoded and documented; reversible/irreversible patch flag present;
+  the **append-only audit interface (`IAuditLog`) + `audit_log` table** defined here
+  (see cross-cutting note below).
+- **Cross-cutting — audit logging:** audit is a cross-cutting concern, not just the
+  Phase 13 module. The **append-only `IAuditLog` interface + `audit_log` table must be
+  defined in these Phase 1 contracts** so that **Phase 2's vault can log every
+  credential access from day one** (and Phases 3–8 can audit privileged endpoint
+  actions as they are built). Phase 13 later delivers the *full* module — retention,
+  evidence bundles, compliance exports, UI — on top of this same interface. The
+  interface is frozen here; the implementation grows over time.
 - **Owned paths:** `src/Shared/Contracts`, `src/Infrastructure/Persistence`,
   `db/migrations`, `docs/phases/phase-1.md`, `api/openapi.yaml`, `schemas/`.
 - **Detail:** `docs/phases/phase-1.md`.
@@ -59,7 +68,8 @@ separate worktrees. **Phase 8 is solo.**
   Vault / AWS KMS / HashiCorp Vault; master-KEK → per-tenant DEK → credential
   envelope; **KEK rotation + DEK re-wrap without re-encrypting credentials**;
   decryption in-memory only; enforced never-log / never-return invariants with
-  tests proving them.
+  tests proving them; **every credential access logged via the Phase-1 `IAuditLog`
+  from day one** (metadata only — never the secret).
 - **Owned paths:** `src/Modules/Vault`.
 - **Detail:** `docs/phases/phase-2.md`. See `docs/THREAT-MODEL.md`.
 
@@ -92,12 +102,17 @@ separate worktrees. **Phase 8 is solo.**
 - **See:** `docs/HARD-PROBLEMS.md` (wsusscn2.cab vs MSRC CSAF).
 
 ## Phase 6 — Assessment  · solo · Status: not-started
-- **Goal:** Correlate inventory ↔ content into findings.
+- **Goal:** Correlate inventory ↔ content into findings, and govern which findings are
+  actionable (including the exception / risk-acceptance workflow).
 - **Dependencies:** Phases 4 & 5.
 - **Exit criteria:** CVE↔package correlation; **backport handling** (RHEL/Debian);
   **supersedence** chains; **version comparison** (RPM epochs, Debian revisions,
   Windows build numbers); classify each finding's patch **reversible/irreversible**;
-  emit findings in states `assessed-compliant` / `assessed-missing`.
+  emit findings in states `assessed-compliant` / `assessed-missing`; **exception /
+  risk-acceptance workflow** (HARD-PROBLEMS #7) — first-class `exceptions` (scope:
+  finding/asset/group; reason; approver; **expiry**) that move a finding out of
+  actionable **without deleting it**, **auto-reopen on expiry**, and are **audited via
+  the Phase-1 `IAuditLog`**.
 - **Owned paths:** `src/Modules/Assessment`.
 - **See:** `docs/HARD-PROBLEMS.md`.
 
@@ -154,6 +169,11 @@ separate worktrees. **Phase 8 is solo.**
 ## Phase 13 — Audit, compliance, evidence  · parallel · Status: not-started
 - **Goal:** Immutable audit trail + compliance evidence.
 - **Dependencies:** Phase 6.
+- **Note:** the append-only **`IAuditLog` interface + `audit_log` table are defined in
+  Phase 1** and already used by Phase 2's vault (credential-access logging) and later
+  phases. This phase delivers the **full module on top of that same interface** —
+  retention/immutability guarantees, evidence bundles, compliance exports, and UI — not
+  a new audit primitive.
 - **Exit criteria:** Append-only audit of every privileged action; evidence bundles
   for verified patches; compliance exports; credentials never appear in any record.
 - **Owned paths:** `src/Modules/Audit`.
