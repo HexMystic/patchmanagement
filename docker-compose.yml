@@ -10,7 +10,11 @@ name: patchmgmt
 
 services:
   postgres:
-    image: postgres:16
+    # DEV image is postgres:16-alpine (musl). This differs from the Debian-based
+    # postgres:16 in libc collation — text sort order & index ordering differ.
+    # Production MUST pin one variant consistently; revert to postgres:16 (glibc)
+    # before any performance testing or production packaging. See ADR 0009.
+    image: postgres:16-alpine
     platform: linux/amd64
     container_name: patchmgmt-postgres
     environment:

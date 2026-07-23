@@ -185,6 +185,21 @@ separate worktrees. **Phase 8 is solo.**
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
+### 2026-07-24 — Root stack up (Postgres switched to alpine)
+**Root product-infra stack is healthy:** `postgres:16-alpine` + `redis:7` both
+`healthy` via `docker compose -f docker-compose.yml up -d`. Phase 1's database
+prerequisite (migrations + RLS test) is now met.
+
+**Why alpine — and the parity gap (ADR 0009):** Docker Hub's CloudFront CDN
+persistently EOF-ed the Debian `postgres:16` image's large layers (~40+ failures this
+session; redis and all 5 distro bases pulled fine). Switched the dev image to
+`postgres:16-alpine`, which pulls reliably. **Known dev/prod parity gap:** Alpine uses
+**musl libc**, Debian uses **glibc** — their collations sort text differently, changing
+`ORDER BY` results and **B-tree index ordering** on text keys. **Production must pin the
+Debian `postgres:16` (glibc) variant, and dev must be reverted to match before any
+performance testing or production packaging.** Do not treat Alpine as the prod baseline.
+Tracked in `docs/adr/0009-postgres-alpine-dev-image.md`.
+
 ### 2026-07-24 — Phase 0 complete
 **Outcome:** Phase 0 (environment & design) complete. Initial commit `e50a171` pushed
 to `origin/main` — private repo `github.com/HexMystic/patchmanagement`. Next up:
@@ -211,12 +226,11 @@ stacks · 0005 in-house CQRS mediator (no MediatR/AutoMapper — commercial in 2
 MSRC CSAF (CVE overlay).
 
 **Outstanding items:**
-- **Postgres 16 container not yet running.** Docker Hub's CloudFront CDN persistently
-  EOF-ed `postgres:16`'s large layers this session (30+ retries; redis:7 and all 5
-  distro bases pulled fine). Non-blocking for Phase 0 (Postgres first used in Phase 1
-  migrations). **When the CDN recovers:** `docker pull postgres:16 && docker compose
-  up -d`. If it persists, consider `postgres:16-alpine` (smaller layers). Redis is up
-  and healthy.
+- **Postgres CDN issue — RESOLVED** (see the newer log entry above): the Debian
+  `postgres:16` image would not pull (CloudFront EOF on large layers). Switched the dev
+  image to `postgres:16-alpine` (ADR 0009); root stack now healthy. **Carry-over parity
+  gap:** revert dev to Debian `postgres:16` (glibc) — and pin it for prod — before any
+  performance testing or production packaging (musl vs glibc collation differences).
 - **Git identity** set repo-locally (`HexMystic` / `aiclaude@securelinkme.net`) — no
   global config changed.
 - Line-ending note: `.gitattributes` pins `*.sh`/Dockerfiles/`*.yml` to LF (container
