@@ -30,9 +30,11 @@ separate worktrees. **Phase 8 is solo.**
 | 12 | UI | parallel | 1 | not-started |
 | 13 | Audit, compliance, evidence | parallel | 6 | not-started |
 
-**\*Phase 1** is complete for the *agreed foundational scope*, but an independent review
-(`docs/reviews/phase-1-review.md`) raises **1 critical + 5 high** findings. **Do not start the
-Phases 2/3/5 fan-out until C1 is resolved** — see "Phase 1 review — follow-ups" below.
+**\*Phase 1** is complete for the *amended* scope (see C1 below). **C1 is resolved** and the C1
+slice closes **H2/H3/H4** as well; the asterisk stays until that slice clears a fresh-session
+review against `docs/reviews/phase-1-review.md`. **H1 (no auth/RBAC on any phase), H5 (OpenAPI
+freeze inversion), M1–M9 and L1–L7 remain open.** The Phases 2/3/5 fan-out unblocks once the
+review clears.
 
 ---
 
@@ -190,44 +192,63 @@ Source: `docs/reviews/phase-1-review.md`, reviewed at commit `fb7b4b5`.
 Verdict summary: the RLS work, the state machine, and the append-only audit grants hold up;
 the gap is what the frozen contract *didn't* include.
 
-### Decision required — blocks the parallel fan-out
-**C1 — schema scope vs the DIFFERENTIATORS gate.** Phase 1 shipped **8 of the 18** tables listed
-in `phase-1.md`, per the explicitly-chosen "foundational core" scope (Session Log, 2026-07-24).
-But `DIFFERENTIATORS.md` ends with a gate: *"The Phase 1 contract review must confirm every field
-above exists before Phase 1 is marked complete."* That gate was never amended, so the docs now
-contradict the delivery. **Pick one:**
-- **(a) Extend Phase 1** — add the tables the differentiators/hard-problems need *now*:
-  `patches` (`reversible`, `requires_reboot`), `advisories`, `advisory_affects` (`backported`,
-  `fixed_version`), `patch_supersedence`, `content_sources`, `exceptions`, `health_probes`,
-  `deployments`/`waves`/`deployment_targets`, `schedules`, plus asset provenance/evidence.
-- **(b) Formally amend** `DIFFERENTIATORS.md` + `phase-1.md` to the foundational scope, and record
-  which phase now owns each deferred table.
+### C1 — RESOLVED 2026-07-24 (option b + partial pull-forward)
+**Decision:** formally amend `DIFFERENTIATORS.md` + `phase-1.md` + `CLAUDE.md` §4.1 to the
+foundational scope, **and** pull forward the five tables that cross module boundaries and would
+otherwise be designed twice by parallel phases: `content_sources`, `advisories`,
+`advisory_affects`, `patches`, `patch_supersedence`. Everything else deferred **with a named
+owner** (`phase-1.md` Group C). Delivered in the C1 slice — see the Session Log entry.
 
-Until this is settled, the deferred tables get designed piecemeal by whichever **parallel** phase
-reaches them first — which defeats the purpose of a solo contracts phase.
+**Tenancy — the content catalogue is global (ADR 0010).** `phase-1.md` and CLAUDE.md §4.1 both
+specified *every* table as tenant-scoped, so this is a deliberate constitution amendment, not a
+gap-fill: content is public vendor data, identical per tenant, and per-tenant copies would force
+Phase 5's sync into a per-tenant loop it has no tenant context for (M6). The five tables carry no
+`tenant_id` and no RLS, are read-only to `patchmgmt_app`, and are written only by the new
+`patchmgmt_content` role. The exemption is **asserted by `RlsConventionTests`** (not a silent
+gap): a sixth global table fails the test until someone edits the list and defends it.
+
+**`exceptions` is deferred AND cross-consumer — not single-owner.** Phase 6 creates it, but
+Phase 7 (score suppression), Phase 8 (target exclusion) and Phase 13 (compliance export) all read
+it. Its shape must therefore be **frozen at the start of Phase 6** (which is `solo`) and **not**
+evolved piecemeal by 7/8/13 — otherwise this repeats C1 one phase later. Related and still open:
+**M1** (exception/superseded conflated with `assessed-compliant`) is a **Phase-6-entry decision**,
+because the honest fix is a state-machine change; it was deliberately left out of the C1 slice.
 
 *Correction for the record:* the review reads the scope cut as unilateral. It was an explicit,
-approved decision — the real gap is that `DIFFERENTIATORS.md`'s gate wasn't amended to match.
+approved decision — the real gap was that `DIFFERENTIATORS.md`'s gate wasn't amended to match.
+
+**Deferred-table ownership** (authoritative list in `phase-1.md` Group C): `deployments`/`waves`/
+`deployment_targets` → Phase 8 · `health_probes` → Phase 9 · `schedules` → Phase 11 ·
+`exceptions` → Phase 6 (cross-consumer) · asset provenance/evidence → Phase 4 ·
+`advisory_patches` (CVE→KB join) → Phase 5.
 
 ### High
-| # | Finding | Where it should land |
-|---|---------|----------------------|
-| H1 | **No authN/authZ anywhere on the roadmap** — tenancy is a caller-supplied `X-Tenant-Id` header; `operators.role`/`external_auth_ref` are never populated | Needs a **new phase** (operator login, tenant claims, RBAC) **before Phase 12** |
-| H2 | `advisory.schema.json` is closed (`additionalProperties:false`) and cannot carry KEV/EPSS/CVSS provenance; `severity` has no `unknown`; no **patch** schema at all | Phase 1 amend / Phase 5 |
-| H3 | **Zero foreign keys** — incl. no `tenant_id → tenants(id)`; permits cross-tenant dangling refs and phantom tenants. Wants composite `(tenant_id, id)` FKs + `UNIQUE (tenant_id, id)` parents | Phase 1 (cheap now) |
-| H4 | **No test enforces the RLS convention** on tables later phases add (ENABLE+FORCE+policy+grants); no `ALTER DEFAULT PRIVILEGES` | Phase 1 (~20-line `pg_class`/`pg_policies` test) |
-| H5 | OpenAPI is an empty skeleton that declares itself **regenerated code-first**, inverting the freeze CLAUDE.md §4.5 defines | Reconcile CLAUDE.md ↔ `api/openapi.yaml` |
+| # | Finding | Where it should land | Status |
+|---|---------|----------------------|--------|
+| H1 | **No authN/authZ anywhere on the roadmap** — tenancy is a caller-supplied `X-Tenant-Id` header; `operators.role`/`external_auth_ref` are never populated | Needs a **new phase** (operator login, tenant claims, RBAC) **before Phase 12** | **OPEN — next decision** |
+| H2 | `advisory.schema.json` is closed (`additionalProperties:false`) and cannot carry KEV/EPSS/CVSS provenance; `severity` has no `unknown`; no **patch** schema at all | Phase 1 amend / Phase 5 | closed by C1 slice |
+| H3 | **Zero foreign keys** — incl. no `tenant_id → tenants(id)`; permits cross-tenant dangling refs and phantom tenants. Wants composite `(tenant_id, id)` FKs + `UNIQUE (tenant_id, id)` parents | Phase 1 (cheap now) | closed by C1 slice |
+| H4 | **No test enforces the RLS convention** on tables later phases add (ENABLE+FORCE+policy+grants); no `ALTER DEFAULT PRIVILEGES` | Phase 1 (`pg_class`/`pg_policies` test) | closed by C1 slice (`RlsConventionTests`) |
+| H5 | OpenAPI is an empty skeleton that declares itself **regenerated code-first**, inverting the freeze CLAUDE.md §4.5 defines | Reconcile CLAUDE.md ↔ `api/openapi.yaml` | OPEN |
 
 ### Medium / Low (detail in the review)
-`M1` exception/superseded conflated with `assessed-compliant` · `M2` no honest failure states once
-deploy starts (can't record `unreachable` mid-wave) · `M3` one enum for asset reachability *and*
-finding lifecycle · `M4` audit can't express system-scope actions (breaks Phase 2 KEK rotation) +
-`EfAuditLog` flushes the shared DbContext · `M5` app role can `DELETE` findings and `data_keys` ·
-`M6` no tenant context off the HTTP path (Hangfire jobs silently no-op) · `M7` single-secret
-`ResolvedCredential` (no key+sudo password) and unpinned buffer · `M8` `state`/`kind`/`source` are
-unconstrained `text` · `M9` no uniqueness for idempotent upserts · `L1`–`L7` as listed.
+`M1` exception/superseded conflated with `assessed-compliant` — **Phase-6-entry decision** ·
+`M2` no honest failure states once deploy starts (can't record `unreachable` mid-wave) · `M3` one
+enum for asset reachability *and* finding lifecycle · `M4` audit can't express system-scope actions
+(breaks Phase 2 KEK rotation) + `EfAuditLog` flushes the shared DbContext · `M5` app role can
+`DELETE` findings and `data_keys` · `M6` no tenant context off the HTTP path (Hangfire jobs
+silently no-op) — *partially defused for Phase 5 by ADR 0010: content sync is tenant-neutral* ·
+`M7` single-secret `ResolvedCredential` (no key+sudo password) and unpinned buffer · `M8`
+`state`/`kind`/`source` are unconstrained `text` — *done for the new content tables only; the 8
+existing tables remain* · `M9` no uniqueness for idempotent upserts — *same: new tables only* ·
+`L1`–`L7` as listed.
 
-**Cheap Phase-1 hardening to do first:** H3, H4, M5, M8, M9.
+**Remaining cheap hardening (next slice):** M5, and M8/M9 for the 8 pre-existing tables.
+
+**Note — `audit_log.tenant_id → tenants(id)` is "correct until M4."** The C1 slice adds this FK
+because phantom-tenant writes are the larger risk today (H3 + H1). It is **not settled**: M4's
+system-scope audit (Phase 2's cross-tenant KEK rotation must be auditable) will make the column
+**nullable**, which stays FK-compatible. Phase 2 must not design around it as permanent.
 
 ---
 
@@ -236,26 +257,86 @@ unconstrained `text` · `M9` no uniqueness for idempotent upserts · `L1`–`L7`
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
-### 2026-07-24 (end of session) — STOPPING POINT · resume here
+### 2026-07-24 — C1 slice: scope amended + global content catalogue
+**Outcome:** **C1 resolved** (option b + partial pull-forward). Also closes **H2, H3, H4**.
+Branch `phase-1/c1-content-catalogue`. **Tests 45/45 green** (19 contracts + 26 integration; was 25).
+
+**Amended (the scope contradiction):** `CLAUDE.md` §4.1 (tenancy rule now names one exemption) ·
+`DIFFERENTIATORS.md` (the absolute "every field must exist" gate → a per-differentiator ownership
+table + a rule that deferring needs a named owner) · `phase-1.md` (core tables split into Group A
+delivered / Group B pulled forward / Group C deferred-with-owner).
+
+**Pulled forward — the global content catalogue (5 tables):** `content_sources`, `advisories`,
+`advisory_affects`, `patches`, `patch_supersedence`. **Global: no `tenant_id`, no RLS** (ADR 0010) —
+public vendor content, identical per tenant. Isolation is by **role**, not row: `patchmgmt_app`
+gets SELECT only; a new `patchmgmt_content` role (non-owner, no BYPASSRLS, guarded idempotent
+create) gets SELECT/INSERT/UPDATE and **no DELETE** — content retires via `withdrawn_at`.
+
+**The `advisory_affects` grain (ADR 0011).** The first-draft key `(advisory_id, package_name,
+ecosystem)` was **wrong** and would have needed a dedupe migration: one USN fixes `openssl` at a
+different version on 20.04/22.04/24.04 — same package, same ecosystem. Fixed by adding a
+**`platform`** column (raw as sourced, nullable — NVD CPE records state no platform, and a
+sentinel would fabricate content) and keying **`UNIQUE NULLS NOT DISTINCT (advisory_id,
+package_name, ecosystem, platform)`**. `NULLS NOT DISTINCT` is load-bearing: without it two
+NULL-platform rows both insert and the idempotent upsert silently breaks. `fixed_version` stays
+payload, not key. Threaded through migration + entity + JSON schema + sample + 3 behavioural tests.
+
+**H3 — referential integrity:** 12 FKs. `tenant_id → tenants(id)` on all 7 tenant tables (kills
+phantom tenants); composite `(tenant_id, asset_id) → assets(tenant_id, id)` on findings and
+asset_packages, and `(tenant_id, data_key_id) → data_keys` on credentials (kills cross-tenant
+dangling refs — RLS is only a *read* barrier). Content FKs from `findings` are plain single-column
+per ADR 0010. RI checks bypass RLS, so these are enforced despite FORCE.
+
+**H4 — `RlsConventionTests`:** every tenant table must have `tenant_id` + ENABLE + FORCE + a
+`tenant_isolation` policy with USING *and* WITH CHECK; the global exemption is **asserted**
+(no `tenant_id`, no RLS, exact grants per role); and the set of tables lacking `tenant_id` must
+equal **exactly** the allowlist — so a 6th global table cannot appear silently. **Mutation-checked:**
+a scratch table without `tenant_id` was added to the fixture and both convention tests failed as
+intended, then it was removed. Role posture (`rolsuper`/`rolbypassrls` false) asserted for both roles.
+
+**H2 — schemas:** `advisory.schema.json` opened — `severity: unknown`, structured `cvss`
+(baseScore/vector/version/source), `kev`, `epss`, **required `provenance[]`**, and `sourceMetadata`
+open extension points so Phase 5 can extend *without* a contract change while the known fields stay
+closed against typos. New `schemas/patch.schema.json` + sample. Advisory sample now carries two
+`platform` rows, so the multi-release case is validated rather than described.
+
+**Gotcha for future sessions:** `RlsTests.SeedAsync` used to guard with `if (Tenants.AnyAsync())`.
+The new FK tests create their own tenants in the *shared* fixture DB, so that guard silently
+skipped seeding and three tests asserted against an empty database. Guard is now keyed on its own
+`TenantA` id. Any new test class that writes to the shared fixture must assume others do too.
+
+**Deliberately NOT in this slice** (left open, see the follow-ups section): H1 (auth/RBAC — still
+no owning phase, next decision), H5 (OpenAPI freeze inversion), M1 (exception/superseded conflation
+— a Phase-6-entry decision), M5, and M8/M9 for the 8 pre-existing tables. `audit_log.tenant_id →
+tenants(id)` is recorded as **"correct until M4."**
+
+**Status:** the `complete*` asterisk on Phase 1 and the 2/3/5 fan-out block stay until this slice
+clears a fresh-session review against `docs/reviews/phase-1-review.md`.
+
+**Resume here, in order:**
+1. **Fresh-session review** of this slice against `docs/reviews/phase-1-review.md` — does it
+   actually close C1/H2/H3/H4? Then drop the asterisk and merge to `main`.
+2. **Decide where H1 (authentication/RBAC) lands** — still on no phase, and Phase 12 needs it.
+3. Remaining cheap hardening: **M5**, and **M8/M9** for the 8 pre-existing tables.
+4. **Then** the Phases 2/3/5 parallel fan-out.
+
+**Environment:** Smart App Control must stay **OFF**; `docker compose up -d` (root);
+`dotnet` at `C:\Program Files\dotnet`; apply `db/roles.sql` after `dotnet ef database update` to
+provision the dev password for the **new `patchmgmt_content` role**.
+
+### 2026-07-24 (end of session) — superseded by the C1 slice above
 Phase 1 merged to `main` at **`fb7b4b5`**, 25/25 tests green, pushed. An independent review then
 landed at `docs/reviews/phase-1-review.md` — **1 critical, 5 high, 9 medium, 7 low**.
 
-**Resume tomorrow in this order:**
-1. **Decide C1** (extend Phase 1's schema **vs** formally amend `DIFFERENTIATORS.md`/`phase-1.md`).
-   See "Phase 1 review — follow-ups". **This gates everything else.**
-2. Then the cheap Phase-1 hardening: **H3** (FKs incl. `tenant_id → tenants`), **H4** (a test that
-   every tenant table has ENABLE+FORCE+policy), **M5** (drop `DELETE` on `findings`/`data_keys`),
-   **M8** (CHECK constraints on `state`/`kind`/`source`), **M9** (unique keys for idempotent upserts).
-3. Decide where **H1 (authentication/RBAC)** lands — it is currently on no phase, and Phase 12 needs it.
-4. **Only then** start the Phases 2/3/5 parallel fan-out.
+**The plan recorded at the time** (superseded — C1, H3 and H4 are done; see the entry above):
+1. Decide C1 — **done** (option b + partial pull-forward).
+2. Cheap hardening: **H3 done**, **H4 done**; **M5**, **M8/M9 on pre-existing tables** still open.
+3. Decide where **H1 (authentication/RBAC)** lands — **still open**.
+4. Then the Phases 2/3/5 parallel fan-out.
 
-**Do NOT start the fan-out before C1 is resolved** — parallel sessions would each set part of the
-deferred contract independently.
-
-**Environment prerequisites for the next session:**
+**Environment prerequisites (still current):**
 - **Smart App Control must stay OFF** (re-enabling blocks `dotnet run`/`dotnet test` — see below).
 - Bring infra up: `docker compose up -d` (root) and `docker compose -f lab/docker-compose.yml up -d` (lab).
-- Dev DB was truncated at end of session (schema + RLS intact, no rows). Migrations already applied.
 - `dotnet` lives at `C:\Program Files\dotnet` (may not be on a stale shell's PATH).
 
 ### 2026-07-24 — Phase 1 complete (Contracts)

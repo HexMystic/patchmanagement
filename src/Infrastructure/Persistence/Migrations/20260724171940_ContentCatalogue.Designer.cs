@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using PatchManagement.Persistence;
@@ -11,9 +12,11 @@ using PatchManagement.Persistence;
 namespace PatchManagement.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260724171940_ContentCatalogue")]
+    partial class ContentCatalogue
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -241,9 +244,6 @@ namespace PatchManagement.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_assets");
 
-                    b.HasAlternateKey("TenantId", "Id")
-                        .HasName("ak_assets_tenant_id_id");
-
                     b.HasIndex("TenantId", "Hostname")
                         .HasDatabaseName("ix_assets_tenant_id_hostname");
 
@@ -443,9 +443,6 @@ namespace PatchManagement.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_credentials");
 
-                    b.HasIndex("TenantId", "DataKeyId")
-                        .HasDatabaseName("ix_credentials_tenant_id_data_key_id");
-
                     b.ToTable("credentials", (string)null);
                 });
 
@@ -478,9 +475,6 @@ namespace PatchManagement.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_data_keys");
-
-                    b.HasAlternateKey("TenantId", "Id")
-                        .HasName("ak_data_keys_tenant_id_id");
 
                     b.ToTable("data_keys", (string)null);
                 });
@@ -543,12 +537,6 @@ namespace PatchManagement.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_findings");
-
-                    b.HasIndex("AdvisoryId")
-                        .HasDatabaseName("ix_findings_advisory_id");
-
-                    b.HasIndex("PatchId")
-                        .HasDatabaseName("ix_findings_patch_id");
 
                     b.HasIndex("TenantId", "AssetId")
                         .HasDatabaseName("ix_findings_tenant_id_asset_id");
@@ -737,111 +725,6 @@ namespace PatchManagement.Persistence.Migrations
                         .HasConstraintName("fk_advisory_affects_advisories_advisory_id");
 
                     b.Navigation("Advisory");
-                });
-
-            modelBuilder.Entity("PatchManagement.Persistence.Entities.Asset", b =>
-                {
-                    b.HasOne("PatchManagement.Persistence.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_assets_tenants_tenant_id");
-                });
-
-            modelBuilder.Entity("PatchManagement.Persistence.Entities.AssetPackage", b =>
-                {
-                    b.HasOne("PatchManagement.Persistence.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_asset_packages_tenants_tenant_id");
-
-                    b.HasOne("PatchManagement.Persistence.Entities.Asset", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId", "AssetId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("fk_asset_packages_assets_tenant_id_asset_id");
-                });
-
-            modelBuilder.Entity("PatchManagement.Persistence.Entities.AuditLogEntry", b =>
-                {
-                    b.HasOne("PatchManagement.Persistence.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_audit_log_tenants_tenant_id");
-                });
-
-            modelBuilder.Entity("PatchManagement.Persistence.Entities.Credential", b =>
-                {
-                    b.HasOne("PatchManagement.Persistence.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_credentials_tenants_tenant_id");
-
-                    b.HasOne("PatchManagement.Persistence.Entities.DataKey", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId", "DataKeyId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_credentials_data_keys_tenant_id_data_key_id");
-                });
-
-            modelBuilder.Entity("PatchManagement.Persistence.Entities.DataKey", b =>
-                {
-                    b.HasOne("PatchManagement.Persistence.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_data_keys_tenants_tenant_id");
-                });
-
-            modelBuilder.Entity("PatchManagement.Persistence.Entities.Finding", b =>
-                {
-                    b.HasOne("PatchManagement.Persistence.Entities.Advisory", null)
-                        .WithMany()
-                        .HasForeignKey("AdvisoryId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_findings_advisories_advisory_id");
-
-                    b.HasOne("PatchManagement.Persistence.Entities.Patch", null)
-                        .WithMany()
-                        .HasForeignKey("PatchId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_findings_patches_patch_id");
-
-                    b.HasOne("PatchManagement.Persistence.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_findings_tenants_tenant_id");
-
-                    b.HasOne("PatchManagement.Persistence.Entities.Asset", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId", "AssetId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_findings_assets_tenant_id_asset_id");
-                });
-
-            modelBuilder.Entity("PatchManagement.Persistence.Entities.Operator", b =>
-                {
-                    b.HasOne("PatchManagement.Persistence.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_operators_tenants_tenant_id");
                 });
 
             modelBuilder.Entity("PatchManagement.Persistence.Entities.PatchSupersedence", b =>

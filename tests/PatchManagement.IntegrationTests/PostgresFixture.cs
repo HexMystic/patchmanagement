@@ -22,11 +22,16 @@ public sealed class PostgresFixture : IAsyncLifetime
     private const string OwnerPassword = "patchmgmt";
     private const string AppUser = "patchmgmt_app";
     private const string AppPassword = "patchmgmt_app_dev";
+    private const string ContentUser = "patchmgmt_content";
+    private const string ContentPassword = "patchmgmt_content_dev";
 
     private readonly string _dbName = "patchmgmt_test_" + Guid.NewGuid().ToString("N")[..12];
 
     public string OwnerConnectionString { get; private set; } = string.Empty;
     public string AppConnectionString { get; private set; } = string.Empty;
+
+    /// <summary>The content-ingestion role: writes the global catalogue, no tenant tables (ADR 0010).</summary>
+    public string ContentConnectionString { get; private set; } = string.Empty;
 
     private static string Conn(string database, string user, string password) =>
         $"Host={Host};Port={Port};Database={database};Username={user};Password={password}";
@@ -38,6 +43,7 @@ public sealed class PostgresFixture : IAsyncLifetime
 
         OwnerConnectionString = Conn(_dbName, OwnerUser, OwnerPassword);
         AppConnectionString = Conn(_dbName, AppUser, AppPassword);
+        ContentConnectionString = Conn(_dbName, ContentUser, ContentPassword);
 
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseNpgsql(OwnerConnectionString)
@@ -46,8 +52,25 @@ public sealed class PostgresFixture : IAsyncLifetime
         await using var db = new AppDbContext(options);
         await db.Database.MigrateAsync();
 
-        // Ensure the cluster-global app role has the expected dev password.
-        await ExecAsync(OwnerConnectionString, $"ALTER ROLE {AppUser} WITH LOGIN PASSWORD '{AppPassword}'");
+        // Ensure the cluster-global roles exist with the expected dev passwords. Create-if-missing
+        // rather than bare ALTER so the fixture does not depend on migration ordering to have
+        // created them; guarded because roles outlive this ephemeral database (an unguarded
+        // CREATE ROLE throws 42710 on the second run).
+        await EnsureRoleAsync(AppUser, AppPassword);
+        await EnsureRoleAsync(ContentUser, ContentPassword);
+    }
+
+    private async Task EnsureRoleAsync(string role, string password)
+    {
+        await ExecAsync(OwnerConnectionString, $@"
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
+        CREATE ROLE {role} LOGIN;
+    END IF;
+END
+$$;");
+        await ExecAsync(OwnerConnectionString, $"ALTER ROLE {role} WITH LOGIN PASSWORD '{password}'");
     }
 
     public async Task DisposeAsync()

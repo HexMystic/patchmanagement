@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://patchmanagement.dev/schemas/patch.schema.json",
+  "title": "Patch",
+  "description": "An installable patch/update from a content source (Phase 5) — the thing a deployment actually installs, as distinct from an advisory (why it matters). Global content, NOT tenant-scoped (docs/adr/0010-global-content-catalogue.md). Known fields are closed; per-source extras go in the open 'sourceMetadata'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "vendorId", "title", "reversible", "requiresReboot", "provenance"],
+  "properties": {
+    "source": { "$ref": "#/$defs/source" },
+    "vendorId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The vendor's patch identifier, e.g. KB5034441, USN-6789-1, RHSA-2025:0001. Unique per (source, vendorId)."
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "reversible": {
+      "type": "boolean",
+      "description": "Whether the patch can be uninstalled/rolled back. GATES ROLLBACK (Phases 8/9) — an irreversible patch may reach deploy-failed but never rollback-in-progress. Set at ingestion where known and finalised at assessment; DEFAULT false when unknown, because false is the safe answer (phase-1.md 'Reversible/irreversible flag', DIFFERENTIATORS #1)."
+    },
+    "requiresReboot": {
+      "type": "boolean",
+      "description": "Whether applying this patch requires a reboot. Feeds the blast-radius dry run's reboot count and maintenance-window estimate (DIFFERENTIATORS #3). Default false when unknown."
+    },
+    "classification": {
+      "type": ["string", "null"],
+      "description": "Vendor's own category, raw as sourced (e.g. 'Security Updates', 'Critical Updates', 'Driver'). Not normalized — sources disagree on taxonomy."
+    },
+    "publishedAt": { "type": "string", "format": "date-time" },
+    "withdrawnAt": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Set when the vendor pulls the patch (it happens). Content retires; it is never deleted."
+    },
+    "supersedes": {
+      "type": "array",
+      "description": "Vendor ids of patches this one supersedes. Persisted as edges in patch_supersedence; at assessment each missing patch resolves to its effective head (HARD-PROBLEMS #4). Cycles are detected and broken defensively by Phase 6 — the DB only rejects self-loops.",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "provenance": {
+      "description": "REQUIRED. One entry per contributing source — same shape as advisory.schema.json, so 'which source told us this patch is reversible?' is always answerable.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "retrievedAt"],
+        "properties": {
+          "source": { "$ref": "#/$defs/source" },
+          "sourceRecordId": { "type": ["string", "null"] },
+          "retrievedAt": { "type": "string", "format": "date-time" },
+          "url": { "type": ["string", "null"], "format": "uri" },
+          "contentHash": { "type": ["string", "null"] },
+          "sourceMetadata": { "$ref": "#/$defs/sourceMetadata" }
+        }
+      }
+    },
+    "sourceMetadata": { "$ref": "#/$defs/sourceMetadata" }
+  },
+  "$defs": {
+    "source": {
+      "type": "string",
+      "enum": ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2"]
+    },
+    "sourceMetadata": {
+      "description": "Open extension point — per-source fields that do not belong in the normalized contract (e.g. wsusscn2 applicability rules, MSRC product ids), carried without a frozen-contract change.",
+      "type": ["object", "null"],
+      "additionalProperties": true
+    }
+  }
+}

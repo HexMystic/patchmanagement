@@ -35,9 +35,17 @@ the database) is the scaling wall at our 10,000-endpoint target.
 
 ## 4. Architecture rules
 
-1. **Multi-tenant from day one.** Every table carries `tenant_id`. PostgreSQL
-   **row-level security (RLS)** is enforced at the database layer — the app sets
-   the tenant context per request; the DB refuses cross-tenant reads/writes.
+1. **Multi-tenant from day one.** Every **tenant-scoped** table carries `tenant_id`.
+   PostgreSQL **row-level security (RLS)** is enforced at the database layer — the app
+   sets the tenant context per request; the DB refuses cross-tenant reads/writes.
+   **One named exemption — the global content catalogue.** `content_sources`,
+   `advisories`, `advisory_affects`, `patches`, and `patch_supersedence` hold public
+   vendor content that is identical for every tenant. They carry **no `tenant_id`** and
+   have **no RLS**; they are **read-only** to `patchmgmt_app` and written only by
+   `patchmgmt_content`. The exemption list is **asserted by test**
+   (`RlsConventionTests`), so a sixth global table cannot appear silently — adding one
+   means editing that list and is a frozen-contract change under NEVER #6.
+   See `docs/adr/0010-global-content-catalogue.md`.
 2. **Clean Architecture layering.** Domain → Application → Infrastructure → API.
    Dependencies point inward. Domain has no framework/IO dependencies.
 3. **CQRS with an in-house mediator.** Commands and queries are separate. We use

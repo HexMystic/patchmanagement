@@ -54,6 +54,24 @@ them.
 
 ---
 
-**Cross-cutting rule.** None of these are bolt-ons. The Phase 1 contract review must
-confirm every field above exists before Phase 1 is marked complete — otherwise the
-differentiators become expensive retrofits.
+**Cross-cutting rule (amended 2026-07-24 — C1 resolution).** None of these are
+bolt-ons: every field a *later* phase cannot cheaply add must exist in the contract
+before that phase starts. The original wording required **all** fields above to exist
+before Phase 1 was marked complete. That gate was unachievable at Phase 1's agreed
+foundational scope and contradicted the delivery, so it is replaced by the ownership
+table below: the contract holds everything that **crosses module boundaries** (and so
+would otherwise be designed twice by parallel phases), and each remaining field names
+the single phase that owns it.
+
+| # | Differentiator | In the contract now | Deferred to (owner) |
+|---|---|---|---|
+| 1 | Health-probe auto-rollback | state machine (`rollback-in-progress`, `rolled-back`, `verified → rollback-in-progress`), `findings.reversible`, **`patches.reversible`** | `health_probes` → **Phase 9** |
+| 2 | Unmanaged-asset discovery | `assets.managed`, `assets.source` | provenance/evidence linkage (explainable unmanaged flag) → **Phase 4** |
+| 3 | Blast-radius dry run | **`patches.requires_reboot`**, `patch_supersedence` DAG, reversibility | `deployments`/`waves`/`deployment_targets` → **Phase 8** (traversed read-only by Phase 10); `schedules` + freeze calendar → **Phase 11** |
+| 4 | Explainable risk scoring | `findings.risk_score`, `findings.risk_explanation`, **advisory CVSS/KEV/EPSS + required `provenance`** | scoring weights & `IVersionComparator`-style explanation shape → **Phase 7** |
+
+**The gate that replaces it.** Before a phase in the "Deferred to" column starts, its
+row must be re-read: if the field it owns is consumed by *more than one* later phase, it
+is a contract-shaped change and must be frozen at that phase's start, not evolved
+piecemeal (this is exactly what `exceptions` requires of Phase 6 — see
+`docs/ROADMAP.md`). Deferring is allowed; deferring **without a named owner** is not.
