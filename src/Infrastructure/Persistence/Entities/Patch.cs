@@ -11,7 +11,11 @@ public sealed class Patch
 {
     public Guid Id { get; set; }
 
-    /// <summary>nvd / kev / epss / usn / rhsa / msrc / wsusscn2. Unique with <see cref="VendorId"/>.</summary>
+    /// <summary>
+    /// The source that PUBLISHES the installable update: usn / rhsa / msrc / wsusscn2. Unique with
+    /// <see cref="VendorId"/>. Excludes <c>nvd</c> (describes vulnerabilities, not updates) and
+    /// <c>kev</c>/<c>epss</c> (scoring overlays) — none of them ship a patch.
+    /// </summary>
     public string Source { get; set; } = string.Empty;
 
     /// <summary>The vendor's patch id: KB5034441, USN-6789-1, RHSA-2025:0001.</summary>
@@ -41,10 +45,17 @@ public sealed class Patch
     public DateTimeOffset? WithdrawnAt { get; set; }
 
     /// <summary>
-    /// jsonb ARRAY (never null, never empty) — same shape as <see cref="Advisory.Provenance"/>, so
-    /// "which source told us this patch is reversible?" is always answerable. MUST be valid JSON.
+    /// jsonb ARRAY — same shape as <see cref="Advisory.Provenance"/>, so "which source told us
+    /// this patch is reversible?" is always answerable. A CHECK enforces at least one element
+    /// (NOT NULL alone would accept <c>'[]'</c>). MUST be valid JSON.
     /// </summary>
     public string Provenance { get; set; } = "[]";
+
+    /// <summary>
+    /// Open extension point (jsonb) — e.g. wsusscn2 applicability rules, MSRC product ids.
+    /// Mirrors <c>sourceMetadata</c> in the JSON schema.
+    /// </summary>
+    public string? SourceMetadata { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }

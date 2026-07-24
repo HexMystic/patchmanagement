@@ -50,12 +50,17 @@ review clears.
 ## Phase 1 — Contracts  · solo · Status: complete
 - **Goal:** Freeze the foundational contracts everything else depends on.
 - **Dependencies:** Phase 0.
-- **Exit criteria:** PostgreSQL schema with `tenant_id` on every table + **RLS
-  policies**; EF Core model + migrations; OpenAPI spec; JSON schemas for content &
+- **Exit criteria** *(amended 2026-07-24, C1)*: PostgreSQL schema with `tenant_id` +
+  **RLS policies** on every **tenant-scoped** table, and the **global content catalogue**
+  (`content_sources`, `advisories`, `advisory_affects`, `patches`, `patch_supersedence`)
+  carrying no `tenant_id` and no RLS, isolated by role instead and **asserted by test**
+  (ADR 0010, CLAUDE.md §4.1); EF Core model + migrations; **referential integrity**
+  (composite tenant-consistent FKs); OpenAPI spec; JSON schemas for content &
   assessment records; the **honest endpoint state machine** (states + legal
   transitions) encoded and documented; reversible/irreversible patch flag present;
   the **append-only audit interface (`IAuditLog`) + `audit_log` table** defined here
-  (see cross-cutting note below).
+  (see cross-cutting note below). Tables outside the frozen scope are deferred **with a
+  named owning phase** — see `phase-1.md` Group C.
 - **Cross-cutting — audit logging:** audit is a cross-cutting concern, not just the
   Phase 13 module. The **append-only `IAuditLog` interface + `audit_log` table must be
   defined in these Phase 1 contracts** so that **Phase 2's vault can log every
@@ -257,9 +262,66 @@ system-scope audit (Phase 2's cross-tenant KEK rotation must be auditable) will 
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
+### 2026-07-24 — C1 slice, round 2: remediation after the fresh-session review
+The first commit (`37502b3`) **did not clear** its fresh-session review. Findings and fixes:
+
+**C1 was still literally open.** The first pass amended section *bodies* and missed the
+load-bearing sentences: `ROADMAP.md` Phase 1 **exit criteria** still demanded `tenant_id` on every
+table (so the phase was graded against a criterion the slice violates), `phase-1.md` **Deliverable
+1** contradicted its own Group B, **ADR 0006** still said "every table carries `tenant_id`" with no
+amendment note, and `DIFFERENTIATORS.md`'s header and items #1/#3 still said "(Phase 1)" 30 lines
+above the new ownership table. All five fixed; ADR 0010 now lists every document it amends, and
+ADR 0006 carries an explicit amendment banner.
+
+**Honesty defects in the DDL** (H2 was closed in JSON and reopened in the schema):
+- `kev_listed` was `NOT NULL`, collapsing "KEV never synced" into "evaluated, not listed" — the
+  exact dishonesty `severity: unknown` was added to fix. **Now nullable and 3-valued.**
+- `provenance jsonb NOT NULL` accepts `'[]'`; every test helper was inserting exactly that. **Now
+  CHECK-constrained to a non-empty array** — JSON-schema `minItems` can't help, since Phase 5
+  writes through EF, not the validator.
+
+**Gaps that would have forced Phase 5 to amend these tables on day one** — which is what pulling
+them forward was meant to prevent:
+- `content_sources UNIQUE (kind)` capped the deployment at 7 feeds ever. Real feeds are per-stream
+  (RHSA per RHEL major, USN per release). **Now `(kind, instance)`**, plus an `endpoint` column so
+  an air-gapped mirror has somewhere to live.
+- `advisories`/`patches` accepted `kev`/`epss` as publishers. They are **overlays**: one CVE could
+  have existed as three rows with divergent scores under `UNIQUE (source, external_id)`, while the
+  provenance design assumes one merged row. **Source vocabularies are now split** — advisories
+  `nvd/usn/rhsa/msrc`, patches `usn/rhsa/msrc/wsusscn2` — with all seven still valid as provenance.
+- Schema fields with nowhere to persist: **added `kev_due_date` (BOD 22-01 deadline),
+  `kev_known_ransomware_use`, `cvss_source`, `source_metadata`** — the last being the extension
+  point H2's closure rests on.
+
+**The H4 test had a real hole:** it asserted a policy *named* `tenant_isolation` exists but never
+counted policies, so `CREATE POLICY debug ON assets USING (true)` — permissive policies OR
+together, a total leak — passed. **Now asserts exactly one policy per tenant table**, and
+mutation-checked: the `USING (true)` probe fails the test, having passed before. Also added the
+missing grant assertions (requirement (b)), which the docs had claimed were covered.
+
+**Tightened:** `content_sources` is no longer readable by `patchmgmt_app` — its `cursor`/
+`last_error` are diagnostics that embed internal URLs, and with no RLS every tenant would read
+them. `ContentCatalogue.Down()` no longer drops the **cluster-global** `patchmgmt_content` role.
+`format` assertion enabled in schema tests (it is annotation-only by default, so every
+`date-time`/`uri` was decorative).
+
+**Recorded, not changed:** `RESTRICT` means a tenant with audit rows and an asset with findings
+can never be deleted — correct for a compliance product, but Phase 4 and any SaaS offboarding
+story must build explicit retire/purge flows. `advisory_affects` holds **fix statements from
+applicability sources**; NVD's affected-version *ranges* are out of scope (HARD-PROBLEMS #2
+rejects them as an applicability basis) and belong to a Phase-5-owned `advisory_ranges` table —
+ADR 0011's original NULL-platform justification wrongly cited NVD and has been corrected. Known
+limits now written down: `package_name` on Windows rows, no `arch`, upsert loses prior raw strings.
+
+**Cross-consumer set widened** beyond `exceptions`: `health_probes` (Phase 9, read by 10) and
+`schedules` (Phase 11, read by 10) are each owned by a `parallel` phase and read by another
+`parallel` phase — the same C1 failure mode. Both must freeze at their owner's start.
+
+**Tests 51/51 green** (19 contracts + 32 integration).
+
 ### 2026-07-24 — C1 slice: scope amended + global content catalogue
 **Outcome:** **C1 resolved** (option b + partial pull-forward). Also closes **H2, H3, H4**.
-Branch `phase-1/c1-content-catalogue`. **Tests 45/45 green** (19 contracts + 26 integration; was 25).
+Branch `phase-1/c1-content-catalogue`. **Tests 45/45 green** at first commit; see round 2 above.
 
 **Amended (the scope contradiction):** `CLAUDE.md` §4.1 (tenancy rule now names one exemption) ·
 `DIFFERENTIATORS.md` (the absolute "every field must exist" gate → a per-differentiator ownership

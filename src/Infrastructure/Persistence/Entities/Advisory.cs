@@ -14,7 +14,14 @@ public sealed class Advisory
 {
     public Guid Id { get; set; }
 
-    /// <summary>nvd / kev / epss / usn / rhsa / msrc / wsusscn2. Unique with <see cref="ExternalId"/>.</summary>
+    /// <summary>
+    /// The PUBLISHER of the advisory: nvd / usn / rhsa / msrc. Unique with <see cref="ExternalId"/>.
+    ///
+    /// Deliberately excludes <c>kev</c> and <c>epss</c>: those are OVERLAYS that enrich an
+    /// existing advisory, not publishers of one. Admitting them here would let a single CVE exist
+    /// as three rows with divergent scores under <c>UNIQUE (source, external_id)</c>, while
+    /// <see cref="Provenance"/> is designed for ONE merged row carrying several entries.
+    /// </summary>
     public string Source { get; set; } = string.Empty;
 
     /// <summary>The source's own id: CVE-2025-12345, USN-1234-1, RHSA-2025:0001.</summary>
@@ -41,10 +48,26 @@ public sealed class Advisory
     /// <summary>2.0 / 3.0 / 3.1 / 4.0 — a base score is meaningless without it.</summary>
     public string? CvssVersion { get; set; }
 
-    /// <summary>CISA KEV membership. False also covers "evaluated, not listed".</summary>
-    public bool KevListed { get; set; }
+    /// <summary>Which source supplied the score — NVD and a vendor routinely disagree.</summary>
+    public string? CvssSource { get; set; }
+
+    /// <summary>
+    /// CISA KEV membership. NULLABLE ON PURPOSE and three-valued:
+    /// <c>null</c> = not evaluated (the KEV feed has not been synced for this advisory),
+    /// <c>false</c> = evaluated, not on the list, <c>true</c> = listed.
+    ///
+    /// Collapsing "not evaluated" into <c>false</c> would let Phase 7 weight a never-run sync
+    /// identically to a confirmed absence — the same dishonesty <see cref="Severity"/>'s
+    /// <c>unknown</c> exists to prevent (HARD-PROBLEMS #8).
+    /// </summary>
+    public bool? KevListed { get; set; }
 
     public DateOnly? KevDateAdded { get; set; }
+
+    /// <summary>The CISA BOD 22-01 remediation deadline. A compliance reporting field.</summary>
+    public DateOnly? KevDueDate { get; set; }
+
+    public bool? KevKnownRansomwareUse { get; set; }
 
     /// <summary>EPSS exploit probability in [0,1] — a probability, not a percentage.</summary>
     public double? EpssScore { get; set; }
@@ -54,12 +77,23 @@ public sealed class Advisory
     public DateTimeOffset? EpssScoredAt { get; set; }
 
     /// <summary>
-    /// jsonb ARRAY (never null, never empty): one entry per contributing source — who said this,
-    /// when, from what URL, with what content hash. An advisory assembled from NVD + KEV + EPSS
-    /// carries three entries. MUST be valid JSON; the <c>jsonb</c> column rejects anything else
-    /// with Postgres <c>22P02</c>.
+    /// jsonb ARRAY: one entry per contributing source — who said this, when, from what URL, with
+    /// what content hash. An advisory assembled from NVD + KEV + EPSS carries three entries.
+    ///
+    /// A CHECK constraint enforces "is an array AND has at least one element", because
+    /// <c>NOT NULL</c> alone accepts <c>'[]'</c> — and an empty array is an unattributable score,
+    /// which is exactly what DIFFERENTIATORS #4 forbids. MUST be valid JSON; the <c>jsonb</c>
+    /// column rejects anything else with Postgres <c>22P02</c>.
     /// </summary>
     public string Provenance { get; set; } = "[]";
+
+    /// <summary>
+    /// Open extension point (jsonb): per-source fields that do not belong in the normalized
+    /// columns. Mirrors <c>sourceMetadata</c> in the JSON schema — without this column that
+    /// extension point could validate but not persist, which would make the schema's openness
+    /// hollow (review H2).
+    /// </summary>
+    public string? SourceMetadata { get; set; }
 
     /// <summary>Pointer to the retained raw payload (path/URI) — not the payload itself.</summary>
     public string? RawRef { get; set; }

@@ -53,11 +53,33 @@ three comparators HARD-PROBLEMS #3 defines.
 **Interpretation is owned entirely by Phase 6's `IVersionComparator`** and its
 conformance corpus. Phase 5 (ingestion) transcribes; Phase 6 compares.
 
+### Scope: this table holds FIX STATEMENTS, not vulnerability ranges
+
+`advisory_affects` answers *"which version fixes this, on which release?"*. It is fed by the
+**applicability sources** — USN, RHSA/OVAL, Debian DSA, MSRC/wsusscn2 — which is exactly what
+HARD-PROBLEMS #2 requires, and which explicitly **rejects** "CPE/NVD version ranges alone" as an
+applicability basis because they are blind to backports.
+
+**NVD's affected-version ranges are therefore out of scope for this table.** NVD does not publish
+"fixed in V"; it publishes ranges (`versionStartIncluding` / `versionEndExcluding`), routinely
+several per product per CVE — e.g. OpenSSL affected at `1.1.1 ≤ v < 1.1.1t` *and*
+`3.0 ≤ v < 3.0.8`. This table has no range columns and cannot represent that, by design: NVD is
+the **CVE overlay** (severity, CVSS, KEV/EPSS linkage — all of which live on `advisories`), not
+the applicability engine (ADR 0008 makes the same split for Windows).
+
+If Phase 5 later needs to persist NVD ranges — for a CPE-based fallback where no distro advisory
+exists — that is an **additive `advisory_ranges` table owned by Phase 5**, with its own grain
+(`introduced`/`fixed` bounds). It is not a change to this one, and it must not be smuggled in by
+overloading `fixed_version`.
+
 Both columns are **nullable, with no sentinel value**:
-- `fixed_version` is NULL when the source states no fix is available yet.
-- `platform` is NULL when the source states no release scope — NVD CPE-range records
-  genuinely do not. Inventing `'unspecified'` would fabricate content, which is the
-  dishonesty HARD-PROBLEMS #8 exists to prevent, applied to the content layer.
+- `fixed_version` is NULL when the source states no fix is available yet (an advisory published
+  before a fix ships — common for RHSA embargo windows and MSRC "no update available" entries).
+- `platform` is NULL when the source states no release scope. This happens with **vendor-generic
+  advisories** that name a product without enumerating releases, and with MSRC entries that map a
+  CVE to a package without a per-build breakdown. Inventing `'unspecified'` would fabricate
+  content, which is the dishonesty HARD-PROBLEMS #8 exists to prevent, applied to the content
+  layer.
 
 Because `platform` is nullable *and* part of the row's identity, the uniqueness
 constraint must treat NULLs as equal:
@@ -76,9 +98,13 @@ surface, not something to store twice.
 
 ## Consequences
 
-- **The raw string is the auditable provenance artifact.** "What did USN-6789-1 actually
-  say?" is answerable from the row forever. Under a normalizing design the answer is
-  "whatever our parser made of it in 2026," which is unfalsifiable and unrecoverable.
+- **The raw string is the auditable provenance artifact** — as last written. "What does
+  USN-6789-1 say?" is answerable from the row verbatim, rather than "whatever our parser made of
+  it in 2026," which would be unfalsifiable and unrecoverable. **Limit, stated honestly:** this
+  table is upserted, so an in-place `fixed_version` correction overwrites the previous string and
+  the row keeps no history. If Phase 5 or Phase 13 needs "what did it say *last month*", that is a
+  retained raw payload (`advisories.raw_ref`) or an append-only content-history table — not an
+  inference from this row.
 - **A parser bug is recoverable.** Comparison happens at assessment time from the raw
   value, so fixing the comparator re-fixes every historical finding on the next
   assessment run. Under normalize-at-ingest, a wrong split silently corrupts stored data
@@ -93,6 +119,20 @@ surface, not something to store twice.
   and `Ubuntu 22.04 LTS` from two sources will not match. Phase 6 owns mapping platform
   strings to host facts as part of correlation; if that mapping needs a lookup table, it
   is a Phase 6 table keyed on the raw value, not a rewrite of this column.
+
+### Known limits of this grain, recorded rather than discovered later
+
+- **`package_name` on Windows rows.** The column is `NOT NULL`, but Windows advisories name a
+  *product/component*, not a package. Windows applicability comes from `wsusscn2` → `patches`
+  (ADR 0008), so windows-ecosystem rows here are the exception rather than the rule; where they
+  occur, `package_name` carries the product/component string as sourced. If that proves
+  insufficient, the fix is a Phase 5 discriminator column, not overloading `platform`.
+- **No `arch`.** Where a source states a different fixed version per architecture (rare for RHSA,
+  which normally publishes one NEVR per release), those rows would collide on this key. Deferred:
+  **Phase 5** owns adding `arch` to the grain if a real feed requires it. Recorded so the collision
+  is recognised rather than debugged.
+- **`ecosystem` is CHECK-constrained to `deb`/`rpm`/`windows`.** A fourth ecosystem needs a
+  comparator (HARD-PROBLEMS #3) before it needs a row, so the constraint is the correct gate.
 
 ## Rejected
 

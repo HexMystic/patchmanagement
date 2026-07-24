@@ -25,9 +25,30 @@ namespace PatchManagement.Persistence;
 /// </summary>
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
-    /// <summary>Content sources permitted in <c>source</c>/<c>kind</c> columns; mirrors the JSON schemas.</summary>
+    /// <summary>
+    /// Every feed we ingest. Valid for <c>content_sources.kind</c> and for provenance entries —
+    /// KEV and EPSS ARE legitimate provenance, they are just not advisory/patch publishers.
+    /// </summary>
     private static readonly string[] ContentSourceKinds =
         ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2"];
+
+    /// <summary>
+    /// Sources that PUBLISH advisories. Excludes kev/epss (scoring overlays that enrich an
+    /// existing advisory) and wsusscn2 (an applicability catalogue of updates, i.e. patches —
+    /// ADR 0008 pairs it with MSRC CSAF, which is the advisory side).
+    /// </summary>
+    private static readonly string[] AdvisorySources = ["nvd", "usn", "rhsa", "msrc"];
+
+    /// <summary>Sources that publish installable updates. NVD describes vulnerabilities, not fixes.</summary>
+    private static readonly string[] PatchSources = ["usn", "rhsa", "msrc", "wsusscn2"];
+
+    /// <summary>
+    /// NOT NULL on a jsonb column still accepts '[]', and an empty provenance array is an
+    /// unattributable score — precisely what DIFFERENTIATORS #4 forbids. JSON-schema validation
+    /// cannot cover this: Phase 5 writes through EF, not through the validator.
+    /// </summary>
+    private static string NonEmptyJsonArray(string column) =>
+        $"jsonb_typeof({column}) = 'array' AND jsonb_array_length({column}) >= 1";
 
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<Operator> Operators => Set<Operator>();
@@ -219,18 +240,27 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             });
             e.HasKey(x => x.Id);
             e.Property(x => x.Kind).IsRequired();
+            e.Property(x => x.Instance).IsRequired();
             e.Property(x => x.LastStatus).IsRequired();
-            e.HasIndex(x => x.Kind).IsUnique(); // one row per feed — the upsert key
+
+            // (kind, instance), NOT kind alone: one feed per stream, because RHSA/USN/DSA are
+            // published per release. Keying on kind would cap the deployment at 7 feeds forever.
+            e.HasIndex(x => new { x.Kind, x.Instance }).IsUnique();
         });
 
         b.Entity<Advisory>(e =>
         {
             e.ToTable("advisories", t =>
             {
-                t.HasCheckConstraint("ck_advisories_source", InList("source", ContentSourceKinds));
+                t.HasCheckConstraint("ck_advisories_source", InList("source", AdvisorySources));
                 t.HasCheckConstraint(
                     "ck_advisories_severity",
                     InList("severity", ["none", "low", "medium", "high", "critical", "unknown"]));
+                t.HasCheckConstraint(
+                    "ck_advisories_provenance_non_empty", NonEmptyJsonArray("provenance"));
+                t.HasCheckConstraint(
+                    "ck_advisories_cvss_source",
+                    $"cvss_source IS NULL OR {InList("cvss_source", ContentSourceKinds)}");
                 t.HasCheckConstraint(
                     "ck_advisories_cvss_version",
                     "cvss_version IS NULL OR cvss_version IN ('2.0', '3.0', '3.1', '4.0')");
@@ -252,6 +282,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(x => x.Title).IsRequired();
             e.Property(x => x.Severity).IsRequired();
             e.Property(x => x.Provenance).HasColumnType("jsonb").IsRequired();
+            e.Property(x => x.SourceMetadata).HasColumnType("jsonb");
             e.HasIndex(x => new { x.Source, x.ExternalId }).IsUnique(); // the upsert key
         });
 
@@ -289,12 +320,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
         b.Entity<Patch>(e =>
         {
             e.ToTable("patches", t =>
-                t.HasCheckConstraint("ck_patches_source", InList("source", ContentSourceKinds)));
+            {
+                t.HasCheckConstraint("ck_patches_source", InList("source", PatchSources));
+                t.HasCheckConstraint(
+                    "ck_patches_provenance_non_empty", NonEmptyJsonArray("provenance"));
+            });
             e.HasKey(x => x.Id);
             e.Property(x => x.Source).IsRequired();
             e.Property(x => x.VendorId).IsRequired();
             e.Property(x => x.Title).IsRequired();
             e.Property(x => x.Provenance).HasColumnType("jsonb").IsRequired();
+            e.Property(x => x.SourceMetadata).HasColumnType("jsonb");
             e.HasIndex(x => new { x.Source, x.VendorId }).IsUnique(); // the upsert key
         });
 

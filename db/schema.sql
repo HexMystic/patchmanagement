@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict ZtWyYkMUQXyD5V1Os16bRZ1K0utn3nnARD2xWF42dv9ey3hyWV8HpL2116d8uii
+\restrict aYe6U0sfIj866WgTVImAvgHXN8IwUXwDmGxZKQqJwBH5IwkwIb0v3LhOsJ5BX7I
 
 -- Dumped from database version 16.14
 -- Dumped by pg_dump version 16.14
@@ -47,21 +47,27 @@ CREATE TABLE public.advisories (
     cvss_base_score double precision,
     cvss_vector text,
     cvss_version text,
-    kev_listed boolean NOT NULL,
+    cvss_source text,
+    kev_listed boolean,
     kev_date_added date,
+    kev_due_date date,
+    kev_known_ransomware_use boolean,
     epss_score double precision,
     epss_percentile double precision,
     epss_scored_at timestamp with time zone,
     provenance jsonb NOT NULL,
+    source_metadata jsonb,
     raw_ref text,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_advisories_cvss_base_score CHECK (((cvss_base_score IS NULL) OR ((cvss_base_score >= (0)::double precision) AND (cvss_base_score <= (10)::double precision)))),
+    CONSTRAINT ck_advisories_cvss_source CHECK (((cvss_source IS NULL) OR (cvss_source = ANY (ARRAY['nvd'::text, 'kev'::text, 'epss'::text, 'usn'::text, 'rhsa'::text, 'msrc'::text, 'wsusscn2'::text])))),
     CONSTRAINT ck_advisories_cvss_version CHECK (((cvss_version IS NULL) OR (cvss_version = ANY (ARRAY['2.0'::text, '3.0'::text, '3.1'::text, '4.0'::text])))),
     CONSTRAINT ck_advisories_epss_percentile CHECK (((epss_percentile IS NULL) OR ((epss_percentile >= (0)::double precision) AND (epss_percentile <= (1)::double precision)))),
     CONSTRAINT ck_advisories_epss_score CHECK (((epss_score IS NULL) OR ((epss_score >= (0)::double precision) AND (epss_score <= (1)::double precision)))),
+    CONSTRAINT ck_advisories_provenance_non_empty CHECK (((jsonb_typeof(provenance) = 'array'::text) AND (jsonb_array_length(provenance) >= 1))),
     CONSTRAINT ck_advisories_severity CHECK ((severity = ANY (ARRAY['none'::text, 'low'::text, 'medium'::text, 'high'::text, 'critical'::text, 'unknown'::text]))),
-    CONSTRAINT ck_advisories_source CHECK ((source = ANY (ARRAY['nvd'::text, 'kev'::text, 'epss'::text, 'usn'::text, 'rhsa'::text, 'msrc'::text, 'wsusscn2'::text])))
+    CONSTRAINT ck_advisories_source CHECK ((source = ANY (ARRAY['nvd'::text, 'usn'::text, 'rhsa'::text, 'msrc'::text])))
 );
 
 
@@ -147,6 +153,8 @@ ALTER TABLE ONLY public.audit_log FORCE ROW LEVEL SECURITY;
 CREATE TABLE public.content_sources (
     id uuid NOT NULL,
     kind text NOT NULL,
+    instance text NOT NULL,
+    endpoint text,
     enabled boolean NOT NULL,
     last_sync_at timestamp with time zone,
     cursor text,
@@ -261,9 +269,11 @@ CREATE TABLE public.patches (
     published_at timestamp with time zone,
     withdrawn_at timestamp with time zone,
     provenance jsonb NOT NULL,
+    source_metadata jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_patches_source CHECK ((source = ANY (ARRAY['nvd'::text, 'kev'::text, 'epss'::text, 'usn'::text, 'rhsa'::text, 'msrc'::text, 'wsusscn2'::text])))
+    CONSTRAINT ck_patches_provenance_non_empty CHECK (((jsonb_typeof(provenance) = 'array'::text) AND (jsonb_array_length(provenance) >= 1))),
+    CONSTRAINT ck_patches_source CHECK ((source = ANY (ARRAY['usn'::text, 'rhsa'::text, 'msrc'::text, 'wsusscn2'::text])))
 );
 
 
@@ -451,10 +461,10 @@ CREATE INDEX ix_audit_log_tenant_id_at ON public.audit_log USING btree (tenant_i
 
 
 --
--- Name: ix_content_sources_kind; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_content_sources_kind_instance; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX ix_content_sources_kind ON public.content_sources USING btree (kind);
+CREATE UNIQUE INDEX ix_content_sources_kind_instance ON public.content_sources USING btree (kind, instance);
 
 
 --
@@ -773,7 +783,6 @@ GRANT SELECT,INSERT ON TABLE public.audit_log TO patchmgmt_app;
 -- Name: TABLE content_sources; Type: ACL; Schema: public; Owner: -
 --
 
-GRANT SELECT ON TABLE public.content_sources TO patchmgmt_app;
 GRANT SELECT,INSERT,UPDATE ON TABLE public.content_sources TO patchmgmt_content;
 
 
@@ -832,5 +841,5 @@ GRANT SELECT ON TABLE public.tenants TO patchmgmt_app;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict ZtWyYkMUQXyD5V1Os16bRZ1K0utn3nnARD2xWF42dv9ey3hyWV8HpL2116d8uii
+\unrestrict aYe6U0sfIj866WgTVImAvgHXN8IwUXwDmGxZKQqJwBH5IwkwIb0v3LhOsJ5BX7I
 

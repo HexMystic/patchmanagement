@@ -15,6 +15,15 @@ public class SchemaValidationTests
     private static JsonSchema LoadSchema(string schemaFile) =>
         SchemaCache.GetOrAdd(schemaFile, f => JsonSchema.FromFile(Path.Combine(SchemasDir(), f)));
 
+    /// <summary>
+    /// JSON Schema treats <c>format</c> as an ANNOTATION by default, so every <c>date-time</c> and
+    /// <c>uri</c> in our schemas would be decorative unless assertion is turned on explicitly.
+    /// </summary>
+    private static readonly EvaluationOptions Options = new() { RequireFormatValidation = true };
+
+    private static EvaluationResults Evaluate(JsonSchema schema, JsonDocument doc) =>
+        schema.Evaluate(doc.RootElement, Options);
+
     [Theory]
     [InlineData("advisory.schema.json", "advisory.sample.json")]
     [InlineData("finding.schema.json", "finding.sample.json")]
@@ -24,7 +33,7 @@ public class SchemaValidationTests
         var schema = LoadSchema(schemaFile);
         using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(SchemasDir(), "samples", sampleFile)));
 
-        var result = schema.Evaluate(doc.RootElement);
+        var result = Evaluate(schema, doc);
 
         Assert.True(result.IsValid, $"{sampleFile} should validate against {schemaFile}");
     }
@@ -46,7 +55,7 @@ public class SchemaValidationTests
         }
         """);
 
-        var result = schema.Evaluate(doc.RootElement);
+        var result = Evaluate(schema, doc);
 
         Assert.False(result.IsValid);
     }
@@ -61,19 +70,43 @@ public class SchemaValidationTests
         var schema = LoadSchema("advisory.schema.json");
         using var doc = JsonDocument.Parse("""
         {
-          "source": "wsusscn2",
-          "externalId": "KB5034441",
-          "title": "Cumulative update",
+          "source": "msrc",
+          "externalId": "CVE-2026-30001",
+          "title": "Windows kernel elevation of privilege",
           "severity": "unknown",
           "provenance": [
-            { "source": "wsusscn2", "retrievedAt": "2026-06-11T03:40:00Z" }
+            { "source": "msrc", "retrievedAt": "2026-06-11T03:40:00Z" },
+            { "source": "wsusscn2", "retrievedAt": "2026-06-11T03:41:00Z" }
           ]
         }
         """);
 
-        var result = schema.Evaluate(doc.RootElement);
+        var result = Evaluate(schema, doc);
 
         Assert.True(result.IsValid, "severity 'unknown' must be representable");
+    }
+
+    /// <summary>
+    /// KEV and EPSS enrich advisories; they do not publish them. They must stay valid as
+    /// PROVENANCE, though — the sample above relies on that asymmetry.
+    /// </summary>
+    [Fact]
+    public void A_scoring_overlay_is_not_a_valid_advisory_publisher()
+    {
+        var schema = LoadSchema("advisory.schema.json");
+        using var doc = JsonDocument.Parse("""
+        {
+          "source": "kev",
+          "externalId": "CVE-2026-1234",
+          "title": "t",
+          "severity": "high",
+          "provenance": [ { "source": "kev", "retrievedAt": "2026-06-01T00:00:00Z" } ]
+        }
+        """);
+
+        var result = Evaluate(schema, doc);
+
+        Assert.False(result.IsValid, "'kev' is an overlay, not an advisory publisher");
     }
 
     /// <summary>
@@ -96,7 +129,7 @@ public class SchemaValidationTests
           "sourceMetadata": { "anythingPhase5Needs": [1, 2, 3] }
         }
         """);
-        Assert.True(schema.Evaluate(extensible.RootElement).IsValid);
+        Assert.True(Evaluate(schema, extensible).IsValid);
 
         using var typo = JsonDocument.Parse("""
         {
@@ -108,7 +141,7 @@ public class SchemaValidationTests
           "serverity": "high"
         }
         """);
-        Assert.False(schema.Evaluate(typo.RootElement).IsValid, "a misspelled top-level field must fail");
+        Assert.False(Evaluate(schema, typo).IsValid, "a misspelled top-level field must fail");
     }
 
     [Fact]
@@ -124,7 +157,7 @@ public class SchemaValidationTests
         }
         """);
 
-        var result = schema.Evaluate(doc.RootElement);
+        var result = Evaluate(schema, doc);
 
         Assert.False(result.IsValid);
     }

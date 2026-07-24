@@ -22,9 +22,13 @@ namespace PatchManagement.Persistence.Migrations
     /// PostgreSQL runs referential-integrity checks with row security BYPASSED, so these FKs are
     /// enforced despite FORCE ROW LEVEL SECURITY on both sides.
     ///
-    /// Delete behaviour is deliberate: CASCADE only for asset_packages (inventory belongs to its
-    /// asset); RESTRICT everywhere else, because findings and audit rows are evidence and must not
-    /// be erasable as a side effect of deleting something else.
+    /// DELETE BEHAVIOUR IS DELIBERATE, and has a consequence worth stating plainly: CASCADE only
+    /// for asset_packages (inventory belongs to its asset); RESTRICT everywhere else, because
+    /// findings and audit rows are EVIDENCE and must not be erasable as a side effect of deleting
+    /// something else. The consequence is that a tenant with any audit row cannot be deleted, and
+    /// an asset with any finding cannot be deleted. That is the correct default for a compliance
+    /// product — decommissioning is a lifecycle STATE, not a DELETE — but it means Phase 4 (asset
+    /// lifecycle) and any SaaS offboarding story must provide retire/purge flows explicitly.
     ///
     /// findings -> advisories/patches are PLAIN single-column FKs: content is global and has no
     /// tenant component to keep consistent (ADR 0010).

@@ -38,6 +38,7 @@ the database) is the scaling wall at our 10,000-endpoint target.
 1. **Multi-tenant from day one.** Every **tenant-scoped** table carries `tenant_id`.
    PostgreSQL **row-level security (RLS)** is enforced at the database layer — the app
    sets the tenant context per request; the DB refuses cross-tenant reads/writes.
+   (`tenants` is the root registry: no `tenant_id`, app-role SELECT only.)
    **One named exemption — the global content catalogue.** `content_sources`,
    `advisories`, `advisory_affects`, `patches`, and `patch_supersedence` hold public
    vendor content that is identical for every tenant. They carry **no `tenant_id`** and

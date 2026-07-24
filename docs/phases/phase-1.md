@@ -10,8 +10,11 @@ Produce the multi-tenant data contract and the state model. **No business logic*
 beyond what the contract needs (migrations, RLS, enums, schema validation).
 
 ## Deliverables
-1. PostgreSQL schema (SQL migrations under `db/migrations/`) — every table carries
-   `tenant_id uuid not null` and an RLS policy.
+1. PostgreSQL schema (SQL migrations under `db/migrations/`) — every **tenant-scoped**
+   table carries `tenant_id uuid not null` and an RLS policy; the **global content
+   catalogue** (Group B below) carries neither and is isolated by role instead
+   (ADR 0010). Plus **referential integrity**: composite `(tenant_id, id)` FKs so a
+   cross-tenant reference is a constraint violation, not merely unreadable.
 2. EF Core model + initial migration mirroring the SQL (`src/Infrastructure/Persistence`).
 3. `api/openapi.yaml` — API surface skeleton (paths, schemas, error envelope).
 4. `schemas/*.json` — JSON Schemas for content records and assessment findings.
@@ -76,13 +79,21 @@ each design part of the same contract.
 
 | Table | Key columns |
 |-------|------|
-| `content_sources` | kind(nvd/kev/epss/usn/rhsa/msrc/wsusscn2) **unique**, enabled, last_sync_at, cursor, last_status, last_error |
-| `advisories` | source, external_id(CVE/USN/RHSA/…) **unique together**, title, severity(incl. `unknown`), published_at, cvss_base_score/vector/version, kev_listed, kev_date_added, epss_score/percentile, **provenance(jsonb)**, raw_ref, withdrawn_at |
-| `advisory_affects` | advisory_id, package_name, ecosystem(deb/rpm/windows), **platform**, fixed_version *(both raw-as-sourced — ADR 0011)*, backported(bool) |
-| `patches` | source, vendor_id(KB/USN/…) **unique together**, title, **reversible**(bool), requires_reboot(bool), classification, **provenance(jsonb)**, withdrawn_at |
+| `content_sources` | kind(nvd/kev/epss/usn/rhsa/msrc/wsusscn2), **instance**, **unique (kind, instance)** — feeds are per-stream (RHSA per RHEL major, USN per release); endpoint *(location, never a secret)*, enabled, last_sync_at, cursor, last_status, last_error |
+| `advisories` | **source (publishers only: nvd/usn/rhsa/msrc)**, external_id(CVE/USN/RHSA/…) **unique together**, title, severity(incl. `unknown`), published_at, cvss_base_score/vector/version/source, **kev_listed(nullable — 3-valued)**, kev_date_added, kev_due_date, kev_known_ransomware_use, epss_score/percentile, **provenance(jsonb, CHECK non-empty array)**, source_metadata(jsonb), raw_ref, withdrawn_at |
+| `advisory_affects` | advisory_id, package_name, ecosystem(deb/rpm/windows), **platform**, fixed_version *(both raw-as-sourced — ADR 0011)*, backported(bool); **unique NULLS NOT DISTINCT (advisory_id, package_name, ecosystem, platform)** |
+| `patches` | **source (usn/rhsa/msrc/wsusscn2)**, vendor_id(KB/USN/…) **unique together**, title, **reversible**(bool), requires_reboot(bool), classification, **provenance(jsonb, CHECK non-empty array)**, source_metadata(jsonb), withdrawn_at |
 | `patch_supersedence` | patch_id, superseded_by_patch_id *(PK on the pair; self-loop CHECK; deep-cycle detection is Phase 6)* |
 
 Content **retires rather than vanishes** (`withdrawn_at`) — no role holds DELETE.
+
+Three honesty rules are enforced at the **database**, not just in C#: `severity` admits
+`unknown`; `kev_listed` is **nullable** so "the KEV feed has not been synced" is distinguishable
+from "evaluated, not listed"; and `provenance` must be a non-empty array, because `NOT NULL` alone
+accepts `'[]'` — an unattributable score, which DIFFERENTIATORS #4 forbids. `kev`/`epss` are
+rejected as advisory/patch **publishers** (they are overlays) while remaining valid **provenance**
+sources. `advisory_affects` holds **fix statements from applicability sources**; NVD's
+affected-version *ranges* are out of scope and belong to a Phase-5-owned additive table (ADR 0011).
 
 ### Group C — deferred, each with a named owner
 | Table | Owner | Note |
@@ -93,6 +104,8 @@ Content **retires rather than vanishes** (`withdrawn_at`) — no role holds DELE
 | `exceptions` (scope, reason, approved_by, expires_at) | **Phase 6 — cross-consumer** | read by Phases 7/8/13; **must be frozen at Phase 6's start**, not evolved by its consumers. See ROADMAP. |
 | asset provenance/evidence (unmanaged-flag explainability) | **Phase 4** | DIFFERENTIATORS #2 |
 | `advisory_patches` (CVE→KB join, HARD-PROBLEMS #1) | **Phase 5** | not in the original 18; `findings` carries `advisory_id` + `patch_id`, so the correlation is expressible per finding until then |
+| `advisory_ranges` (NVD CPE affected-version ranges) | **Phase 5** | only if a CPE-based fallback is needed where no distro advisory exists; additive, with its own `introduced`/`fixed` grain — never by overloading `advisory_affects.fixed_version` (ADR 0011) |
+| `arch` on `advisory_affects` | **Phase 5** | add to the grain only if a real feed states per-architecture fixed versions |
 
 Tables a later phase adds must follow the frozen conventions — `tenant_id`, GRANT to
 `patchmgmt_app`, ENABLE + FORCE RLS, `tenant_isolation` policy — which

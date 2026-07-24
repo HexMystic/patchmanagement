@@ -90,6 +90,80 @@ public sealed class ContentCatalogueTests(PostgresFixture fx)
         Assert.Equal("23514", ex.SqlState); // check_violation
     }
 
+    /// <summary>
+    /// The three-valued KEV contract. NOT NULL would collapse "the KEV feed has not been synced"
+    /// into "evaluated, not listed" — letting Phase 7 weight a never-run sync as a confirmed
+    /// absence. Same dishonesty severity:'unknown' exists to prevent (HARD-PROBLEMS #8).
+    /// </summary>
+    [Fact]
+    public async Task Kev_membership_distinguishes_not_evaluated_from_evaluated_and_absent()
+    {
+        await using var conn = await OpenContentAsync();
+
+        var notEvaluated = await InsertAdvisoryAsync(conn, "nvd", $"CVE-{Guid.NewGuid():N}");
+        var evaluated = await InsertAdvisoryAsync(conn, "nvd", $"CVE-{Guid.NewGuid():N}");
+        await ExecAsync(conn, $"UPDATE advisories SET kev_listed = false WHERE id = '{evaluated}'");
+
+        Assert.Null(await ScalarAsync(conn, $"SELECT kev_listed FROM advisories WHERE id = '{notEvaluated}'"));
+        Assert.Equal(false, await ScalarAsync(conn, $"SELECT kev_listed FROM advisories WHERE id = '{evaluated}'"));
+    }
+
+    /// <summary>
+    /// NOT NULL on jsonb accepts '[]'. An empty provenance array is an unattributable score, which
+    /// DIFFERENTIATORS #4 forbids — and JSON-schema validation cannot catch it, because Phase 5
+    /// writes through EF rather than through the validator.
+    /// </summary>
+    [Fact]
+    public async Task An_advisory_with_empty_provenance_is_rejected()
+    {
+        await using var conn = await OpenContentAsync();
+
+        var ex = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertAdvisoryAsync(conn, "nvd", $"CVE-{Guid.NewGuid():N}", provenance: "'[]'::jsonb"));
+
+        Assert.Equal("23514", ex.SqlState);
+    }
+
+    /// <summary>
+    /// KEV and EPSS enrich an advisory; they do not publish one. Admitting them as `source` would
+    /// let one CVE exist as three rows with divergent scores under UNIQUE (source, external_id),
+    /// while the provenance design assumes ONE merged row carrying several entries.
+    /// </summary>
+    [Fact]
+    public async Task Scoring_overlays_are_not_valid_advisory_publishers()
+    {
+        await using var conn = await OpenContentAsync();
+
+        foreach (var overlay in new[] { "kev", "epss" })
+        {
+            var ex = await Assert.ThrowsAsync<PostgresException>(() =>
+                InsertAdvisoryAsync(conn, overlay, $"CVE-{Guid.NewGuid():N}"));
+
+            Assert.Equal("23514", ex.SqlState);
+        }
+    }
+
+    /// <summary>
+    /// Real feeds are per-stream: Red Hat publishes OVAL per major version, Ubuntu per release,
+    /// Debian per suite. Keying content_sources on `kind` alone would cap the whole deployment at
+    /// seven feeds forever.
+    /// </summary>
+    [Fact]
+    public async Task Several_feeds_of_the_same_kind_can_be_registered()
+    {
+        await using var conn = await OpenContentAsync();
+        var kind = "rhsa";
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+
+        await InsertContentSourceAsync(conn, kind, $"rhel-8-{suffix}");
+        await InsertContentSourceAsync(conn, kind, $"rhel-9-{suffix}");
+
+        var ex = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertContentSourceAsync(conn, kind, $"rhel-9-{suffix}"));
+
+        Assert.Equal("23505", ex.SqlState); // same (kind, instance) is still the upsert key
+    }
+
     [Fact]
     public async Task A_patch_cannot_supersede_itself()
     {
@@ -186,16 +260,21 @@ public sealed class ContentCatalogueTests(PostgresFixture fx)
         return conn;
     }
 
+    /// <summary>Valid provenance — the CHECK constraint rejects an empty array.</summary>
+    private const string Provenance =
+        """'[{"source":"usn","retrievedAt":"2026-06-01T00:00:00Z"}]'::jsonb""";
+
     private static async Task<Guid> InsertAdvisoryAsync(
-        NpgsqlConnection conn, string source, string externalId, string severity = "high")
+        NpgsqlConnection conn, string source, string externalId, string severity = "high",
+        string provenance = Provenance)
     {
         var id = Guid.NewGuid();
         await ExecAsync(
             conn,
-            "INSERT INTO advisories (id, source, external_id, title, severity, kev_listed, "
+            "INSERT INTO advisories (id, source, external_id, title, severity, "
             + "provenance, created_at, updated_at) "
-            + $"VALUES ('{id}', '{source}', '{externalId}', 'test advisory', '{severity}', false, "
-            + "'[]'::jsonb, now(), now())");
+            + $"VALUES ('{id}', '{source}', '{externalId}', 'test advisory', '{severity}', "
+            + $"{provenance}, now(), now())");
         return id;
     }
 
@@ -216,7 +295,8 @@ public sealed class ContentCatalogueTests(PostgresFixture fx)
             conn,
             "INSERT INTO patches (id, source, vendor_id, title, reversible, requires_reboot, "
             + "provenance, created_at, updated_at) "
-            + $"VALUES ('{id}', 'msrc', '{vendorId}', 'test patch', false, true, '[]'::jsonb, now(), now())");
+            + $"VALUES ('{id}', 'msrc', '{vendorId}', 'test patch', false, true, "
+            + $"{Provenance}, now(), now())");
         return id;
     }
 
@@ -239,6 +319,20 @@ public sealed class ContentCatalogueTests(PostgresFixture fx)
             + $"VALUES ('{id}', '{tenantId}', 'host-{id:N}', true, 'discovery', 'assessed-missing', "
             + "now(), now())");
         return id;
+    }
+
+    private static Task InsertContentSourceAsync(NpgsqlConnection conn, string kind, string instance) =>
+        ExecAsync(
+            conn,
+            "INSERT INTO content_sources (id, kind, instance, enabled, last_status, created_at, updated_at) "
+            + $"VALUES (gen_random_uuid(), '{kind}', '{instance}', true, 'never-run', now(), now())");
+
+    private static async Task<object?> ScalarAsync(NpgsqlConnection conn, string sql)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        var value = await cmd.ExecuteScalarAsync();
+        return value is DBNull ? null : value;
     }
 
     private static async Task<int> CountAffectsAsync(NpgsqlConnection conn, Guid advisoryId)

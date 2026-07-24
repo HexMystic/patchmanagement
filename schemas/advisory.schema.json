@@ -7,7 +7,11 @@
   "additionalProperties": false,
   "required": ["source", "externalId", "title", "severity", "provenance"],
   "properties": {
-    "source": { "$ref": "#/$defs/source" },
+    "source": {
+      "type": "string",
+      "description": "The PUBLISHER of the advisory. Deliberately excludes 'kev' and 'epss' — those are scoring overlays that enrich an existing advisory, not publishers of one; admitting them would let one CVE exist as several rows with divergent scores. They remain valid values inside 'provenance'. Also excludes 'wsusscn2', which is an applicability catalogue of updates (patches), paired with MSRC CSAF as the advisory side (ADR 0008).",
+      "enum": ["nvd", "usn", "rhsa", "msrc"]
+    },
     "externalId": {
       "type": "string",
       "minLength": 1,
@@ -38,20 +42,24 @@
         },
         "version": { "type": "string", "enum": ["2.0", "3.0", "3.1", "4.0"] },
         "source": {
-          "$ref": "#/$defs/source",
-          "description": "Which content source supplied this score (NVD and a vendor may disagree)."
+          "$ref": "#/$defs/feed",
+          "description": "Which content source supplied this score (NVD and a vendor may disagree). Persisted as advisories.cvss_source."
         }
       }
     },
     "kev": {
-      "description": "CISA Known Exploited Vulnerabilities membership. Absent/null means 'not evaluated'; listed:false means 'evaluated, not on the list'.",
+      "description": "CISA Known Exploited Vulnerabilities membership. Absent/null means 'not evaluated' (the KEV feed has not been synced for this advisory); listed:false means 'evaluated, not on the list'. The database column is nullable so it can hold all three states — collapsing 'not evaluated' into false would let Phase 7 weight a never-run sync identically to a confirmed absence (HARD-PROBLEMS #8).",
       "type": ["object", "null"],
       "additionalProperties": false,
       "required": ["listed"],
       "properties": {
         "listed": { "type": "boolean" },
         "dateAdded": { "type": ["string", "null"], "format": "date" },
-        "dueDate": { "type": ["string", "null"], "format": "date" },
+        "dueDate": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "The CISA BOD 22-01 remediation deadline — a compliance reporting field, persisted as advisories.kev_due_date."
+        },
         "knownRansomwareUse": { "type": ["boolean", "null"] }
       }
     },
@@ -75,7 +83,7 @@
         "additionalProperties": false,
         "required": ["source", "retrievedAt"],
         "properties": {
-          "source": { "$ref": "#/$defs/source" },
+          "source": { "$ref": "#/$defs/feed" },
           "sourceRecordId": {
             "type": ["string", "null"],
             "description": "The record's id within that source, when it differs from externalId."
@@ -126,7 +134,8 @@
     }
   },
   "$defs": {
-    "source": {
+    "feed": {
+      "description": "Any feed we ingest. Broader than the advisory 'source' enum: KEV and EPSS are legitimate PROVENANCE (they contributed data) even though they publish no advisories.",
       "type": "string",
       "enum": ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2"]
     },

@@ -37,6 +37,10 @@ namespace PatchManagement.Persistence.Migrations
                         .HasColumnType("double precision")
                         .HasColumnName("cvss_base_score");
 
+                    b.Property<string>("CvssSource")
+                        .HasColumnType("text")
+                        .HasColumnName("cvss_source");
+
                     b.Property<string>("CvssVector")
                         .HasColumnType("text")
                         .HasColumnName("cvss_vector");
@@ -66,7 +70,15 @@ namespace PatchManagement.Persistence.Migrations
                         .HasColumnType("date")
                         .HasColumnName("kev_date_added");
 
-                    b.Property<bool>("KevListed")
+                    b.Property<DateOnly?>("KevDueDate")
+                        .HasColumnType("date")
+                        .HasColumnName("kev_due_date");
+
+                    b.Property<bool?>("KevKnownRansomwareUse")
+                        .HasColumnType("boolean")
+                        .HasColumnName("kev_known_ransomware_use");
+
+                    b.Property<bool?>("KevListed")
                         .HasColumnType("boolean")
                         .HasColumnName("kev_listed");
 
@@ -93,6 +105,10 @@ namespace PatchManagement.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("source");
 
+                    b.Property<string>("SourceMetadata")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("source_metadata");
+
                     b.Property<string>("Title")
                         .IsRequired()
                         .HasColumnType("text")
@@ -117,15 +133,19 @@ namespace PatchManagement.Persistence.Migrations
                         {
                             t.HasCheckConstraint("ck_advisories_cvss_base_score", "cvss_base_score IS NULL OR (cvss_base_score >= 0 AND cvss_base_score <= 10)");
 
+                            t.HasCheckConstraint("ck_advisories_cvss_source", "cvss_source IS NULL OR cvss_source IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2')");
+
                             t.HasCheckConstraint("ck_advisories_cvss_version", "cvss_version IS NULL OR cvss_version IN ('2.0', '3.0', '3.1', '4.0')");
 
                             t.HasCheckConstraint("ck_advisories_epss_percentile", "epss_percentile IS NULL OR (epss_percentile >= 0 AND epss_percentile <= 1)");
 
                             t.HasCheckConstraint("ck_advisories_epss_score", "epss_score IS NULL OR (epss_score >= 0 AND epss_score <= 1)");
 
+                            t.HasCheckConstraint("ck_advisories_provenance_non_empty", "jsonb_typeof(provenance) = 'array' AND jsonb_array_length(provenance) >= 1");
+
                             t.HasCheckConstraint("ck_advisories_severity", "severity IN ('none', 'low', 'medium', 'high', 'critical', 'unknown')");
 
-                            t.HasCheckConstraint("ck_advisories_source", "source IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2')");
+                            t.HasCheckConstraint("ck_advisories_source", "source IN ('nvd', 'usn', 'rhsa', 'msrc')");
                         });
                 });
 
@@ -362,6 +382,15 @@ namespace PatchManagement.Persistence.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("enabled");
 
+                    b.Property<string>("Endpoint")
+                        .HasColumnType("text")
+                        .HasColumnName("endpoint");
+
+                    b.Property<string>("Instance")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("instance");
+
                     b.Property<string>("Kind")
                         .IsRequired()
                         .HasColumnType("text")
@@ -387,9 +416,9 @@ namespace PatchManagement.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_content_sources");
 
-                    b.HasIndex("Kind")
+                    b.HasIndex("Kind", "Instance")
                         .IsUnique()
-                        .HasDatabaseName("ix_content_sources_kind");
+                        .HasDatabaseName("ix_content_sources_kind_instance");
 
                     b.ToTable("content_sources", null, t =>
                         {
@@ -639,6 +668,10 @@ namespace PatchManagement.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("source");
 
+                    b.Property<string>("SourceMetadata")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("source_metadata");
+
                     b.Property<string>("Title")
                         .IsRequired()
                         .HasColumnType("text")
@@ -666,7 +699,9 @@ namespace PatchManagement.Persistence.Migrations
 
                     b.ToTable("patches", null, t =>
                         {
-                            t.HasCheckConstraint("ck_patches_source", "source IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2')");
+                            t.HasCheckConstraint("ck_patches_provenance_non_empty", "jsonb_typeof(provenance) = 'array' AND jsonb_array_length(provenance) >= 1");
+
+                            t.HasCheckConstraint("ck_patches_source", "source IN ('usn', 'rhsa', 'msrc', 'wsusscn2')");
                         });
                 });
 

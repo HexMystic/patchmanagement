@@ -13,10 +13,14 @@ namespace PatchManagement.Persistence.Migrations
     /// and have NO RLS, because they hold public vendor content that is identical for every
     /// tenant. Isolation here is by ROLE, not by row:
     ///
-    ///   patchmgmt_app     -> SELECT only. A request-path bug must not be able to rewrite the
-    ///                        content catalogue for every tenant at once.
-    ///   patchmgmt_content -> SELECT, INSERT, UPDATE. No DELETE: content RETIRES via withdrawn_at
-    ///                        (same posture as data_keys.retired_at), it never vanishes.
+    ///   patchmgmt_app     -> SELECT on the four tables the request path actually reads.
+    ///                        NOT content_sources: its cursor/last_error columns are operational
+    ///                        diagnostics that routinely embed internal URLs, and with no RLS
+    ///                        every tenant would read them. Phase 5/11 can expose sync status via
+    ///                        a projection instead.
+    ///   patchmgmt_content -> SELECT, INSERT, UPDATE on all five. No DELETE: content RETIRES via
+    ///                        withdrawn_at (same posture as data_keys.retired_at), it never
+    ///                        vanishes.
     ///
     /// The exemption is asserted by RlsConventionTests — including that the set of tables lacking
     /// tenant_id is EXACTLY {tenants, __EFMigrationsHistory} + these five — so a sixth global
@@ -30,6 +34,12 @@ namespace PatchManagement.Persistence.Migrations
         private static readonly string[] ContentTables =
         {
             "content_sources", "advisories", "advisory_affects", "patches", "patch_supersedence",
+        };
+
+        /// <summary>What the request path may read. Excludes content_sources — see the class summary.</summary>
+        private static readonly string[] AppReadableTables =
+        {
+            "advisories", "advisory_affects", "patches", "patch_supersedence",
         };
 
         /// <inheritdoc />
@@ -49,12 +59,16 @@ namespace PatchManagement.Persistence.Migrations
                     cvss_base_score = table.Column<double>(type: "double precision", nullable: true),
                     cvss_vector = table.Column<string>(type: "text", nullable: true),
                     cvss_version = table.Column<string>(type: "text", nullable: true),
-                    kev_listed = table.Column<bool>(type: "boolean", nullable: false),
+                    cvss_source = table.Column<string>(type: "text", nullable: true),
+                    kev_listed = table.Column<bool>(type: "boolean", nullable: true),
                     kev_date_added = table.Column<DateOnly>(type: "date", nullable: true),
+                    kev_due_date = table.Column<DateOnly>(type: "date", nullable: true),
+                    kev_known_ransomware_use = table.Column<bool>(type: "boolean", nullable: true),
                     epss_score = table.Column<double>(type: "double precision", nullable: true),
                     epss_percentile = table.Column<double>(type: "double precision", nullable: true),
                     epss_scored_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     provenance = table.Column<string>(type: "jsonb", nullable: false),
+                    source_metadata = table.Column<string>(type: "jsonb", nullable: true),
                     raw_ref = table.Column<string>(type: "text", nullable: true),
                     created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     updated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
@@ -63,11 +77,13 @@ namespace PatchManagement.Persistence.Migrations
                 {
                     table.PrimaryKey("pk_advisories", x => x.id);
                     table.CheckConstraint("ck_advisories_cvss_base_score", "cvss_base_score IS NULL OR (cvss_base_score >= 0 AND cvss_base_score <= 10)");
+                    table.CheckConstraint("ck_advisories_cvss_source", "cvss_source IS NULL OR cvss_source IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2')");
                     table.CheckConstraint("ck_advisories_cvss_version", "cvss_version IS NULL OR cvss_version IN ('2.0', '3.0', '3.1', '4.0')");
                     table.CheckConstraint("ck_advisories_epss_percentile", "epss_percentile IS NULL OR (epss_percentile >= 0 AND epss_percentile <= 1)");
                     table.CheckConstraint("ck_advisories_epss_score", "epss_score IS NULL OR (epss_score >= 0 AND epss_score <= 1)");
+                    table.CheckConstraint("ck_advisories_provenance_non_empty", "jsonb_typeof(provenance) = 'array' AND jsonb_array_length(provenance) >= 1");
                     table.CheckConstraint("ck_advisories_severity", "severity IN ('none', 'low', 'medium', 'high', 'critical', 'unknown')");
-                    table.CheckConstraint("ck_advisories_source", "source IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2')");
+                    table.CheckConstraint("ck_advisories_source", "source IN ('nvd', 'usn', 'rhsa', 'msrc')");
                 });
 
             migrationBuilder.CreateTable(
@@ -76,6 +92,8 @@ namespace PatchManagement.Persistence.Migrations
                 {
                     id = table.Column<Guid>(type: "uuid", nullable: false),
                     kind = table.Column<string>(type: "text", nullable: false),
+                    instance = table.Column<string>(type: "text", nullable: false),
+                    endpoint = table.Column<string>(type: "text", nullable: true),
                     enabled = table.Column<bool>(type: "boolean", nullable: false),
                     last_sync_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     cursor = table.Column<string>(type: "text", nullable: true),
@@ -105,13 +123,15 @@ namespace PatchManagement.Persistence.Migrations
                     published_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     withdrawn_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     provenance = table.Column<string>(type: "jsonb", nullable: false),
+                    source_metadata = table.Column<string>(type: "jsonb", nullable: true),
                     created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     updated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {
                     table.PrimaryKey("pk_patches", x => x.id);
-                    table.CheckConstraint("ck_patches_source", "source IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2')");
+                    table.CheckConstraint("ck_patches_provenance_non_empty", "jsonb_typeof(provenance) = 'array' AND jsonb_array_length(provenance) >= 1");
+                    table.CheckConstraint("ck_patches_source", "source IN ('usn', 'rhsa', 'msrc', 'wsusscn2')");
                 });
 
             migrationBuilder.CreateTable(
@@ -184,9 +204,9 @@ namespace PatchManagement.Persistence.Migrations
                 columns: new[] { "package_name", "ecosystem" });
 
             migrationBuilder.CreateIndex(
-                name: "ix_content_sources_kind",
+                name: "ix_content_sources_kind_instance",
                 table: "content_sources",
-                column: "kind",
+                columns: new[] { "kind", "instance" },
                 unique: true);
 
             migrationBuilder.CreateIndex(
@@ -216,9 +236,13 @@ END
 $$;");
             migrationBuilder.Sql($"GRANT USAGE ON SCHEMA public TO {ContentRole};");
 
-            foreach (var t in ContentTables)
+            foreach (var t in AppReadableTables)
             {
                 migrationBuilder.Sql($"GRANT SELECT ON public.{t} TO {AppRole};");
+            }
+
+            foreach (var t in ContentTables)
+            {
                 migrationBuilder.Sql($"GRANT SELECT, INSERT, UPDATE ON public.{t} TO {ContentRole};");
             }
         }
@@ -233,7 +257,11 @@ $$;");
             }
 
             migrationBuilder.Sql($"REVOKE USAGE ON SCHEMA public FROM {ContentRole};");
-            migrationBuilder.Sql($"DROP ROLE IF EXISTS {ContentRole};");
+
+            // Deliberately NOT "DROP ROLE patchmgmt_content": roles are CLUSTER-GLOBAL, so
+            // reverting THIS database would delete the role out from under every other database in
+            // the cluster (including the dev database during a test run). Revoking its grants
+            // leaves it harmless; dropping it is a cluster-admin action, not a migration's.
 
             migrationBuilder.DropTable(
                 name: "advisory_affects");

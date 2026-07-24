@@ -2,7 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-24
-- **Amends:** CLAUDE.md §4.1, `docs/phases/phase-1.md` (Multi-tenancy & Core tables)
+- **Amends:** CLAUDE.md §4.1 · [ADR 0006](0006-multitenancy-rls.md) ("every table carries
+  `tenant_id`") · `docs/phases/phase-1.md` (Multi-tenancy, Deliverable 1, Core tables) ·
+  `docs/ROADMAP.md` (Phase 1 exit criteria) · `docs/DIFFERENTIATORS.md` (the cross-cutting gate)
 - **Context:** the C1 resolution (`docs/ROADMAP.md`, `docs/reviews/phase-1-review.md`)
 
 ## Context
@@ -41,7 +43,7 @@ Access is split by role rather than by row:
 
 | Role | Content catalogue | Rationale |
 |------|-------------------|-----------|
-| `patchmgmt_app` (request path) | **SELECT only** | a request-path bug must not be able to rewrite content for every tenant at once |
+| `patchmgmt_app` (request path) | **SELECT on `advisories`, `advisory_affects`, `patches`, `patch_supersedence`. No access to `content_sources`.** | a request-path bug must not be able to rewrite content for every tenant at once — and `content_sources.cursor`/`last_error` are operational diagnostics that routinely embed internal URLs. With no RLS, granting SELECT there would let every tenant read every other tenant's infrastructure detail. Phase 5/11 can surface sync status via a projection. |
 | `patchmgmt_content` (Phase 5 ingestion) | SELECT, INSERT, UPDATE — **no DELETE** | content **retires** via `withdrawn_at`, it does not vanish |
 | `patchmgmt` (owner/migrations) | DDL | unchanged |
 
@@ -77,6 +79,27 @@ frozen-contract change under NEVER #6.
 - **The read barrier for content is role-based, not row-based.** Anyone connecting as
   `patchmgmt_content` can write all content. That role belongs only to the ingestion
   worker; it is not the request-path role.
+
+### Deletion semantics this creates — stated, because they are load-bearing
+
+The referential-integrity work in the same slice uses `RESTRICT` everywhere except
+`asset_packages`. Two consequences follow that nothing else in the docs states:
+
+- **A tenant with any audit row can never be deleted.** `audit_log` is append-only and never
+  purged, so `audit_log.tenant_id → tenants(id) RESTRICT` makes tenant deletion impossible in
+  practice.
+- **An asset with any finding can never be deleted** (`findings → assets RESTRICT`).
+
+Both are the correct default for a compliance product — decommissioning is a lifecycle **state**,
+not a `DELETE`, and evidence must not vanish as a side effect. But they are *requirements on later
+phases*: **Phase 4** (asset lifecycle) needs an explicit retire/decommission path, and any SaaS
+offboarding story needs a deliberate purge flow with its own audit trail. Neither gets one for
+free.
+
+Within the content catalogue the FKs are `CASCADE` (`advisory_affects → advisories`,
+`patch_supersedence → patches`). That is consistent, not contradictory: those children are
+*dependent detail* of their parent, not independent evidence — and since no role holds DELETE on
+content, only the owner role can trigger a cascade at all.
 
 ### Related, and deliberately recorded as unsettled
 

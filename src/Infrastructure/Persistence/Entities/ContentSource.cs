@@ -11,8 +11,24 @@ public sealed class ContentSource
 {
     public Guid Id { get; set; }
 
-    /// <summary>nvd / kev / epss / usn / rhsa / msrc / wsusscn2. Unique — one row per feed.</summary>
+    /// <summary>nvd / kev / epss / usn / rhsa / msrc / wsusscn2.</summary>
     public string Kind { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Distinguishes MULTIPLE feeds of the same kind, which is the normal case rather than the
+    /// exception: Red Hat publishes OVAL per major version (<c>rhel-8</c>, <c>rhel-9</c>), Ubuntu
+    /// per release, Debian per suite. Keying on <see cref="Kind"/> alone would cap the whole
+    /// deployment at seven feeds ever. Free-form and source-defined; <c>default</c> for feeds that
+    /// genuinely have one stream (NVD, KEV, EPSS).
+    /// </summary>
+    public string Instance { get; set; } = "default";
+
+    /// <summary>
+    /// Where to fetch from. Present so an air-gapped or on-prem install can point at an internal
+    /// mirror (e.g. a locally hosted <c>wsusscn2.cab</c>) without a schema change. Credentials are
+    /// NEVER stored here — this is a location, not a secret (CLAUDE.md NEVER #1).
+    /// </summary>
+    public string? Endpoint { get; set; }
 
     public bool Enabled { get; set; } = true;
 

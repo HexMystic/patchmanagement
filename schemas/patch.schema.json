@@ -7,7 +7,11 @@
   "additionalProperties": false,
   "required": ["source", "vendorId", "title", "reversible", "requiresReboot", "provenance"],
   "properties": {
-    "source": { "$ref": "#/$defs/source" },
+    "source": {
+      "type": "string",
+      "description": "The source that PUBLISHES the installable update. Excludes 'nvd' (describes vulnerabilities, not fixes) and 'kev'/'epss' (scoring overlays) — none of them ship a patch. All three remain valid inside 'provenance'.",
+      "enum": ["usn", "rhsa", "msrc", "wsusscn2"]
+    },
     "vendorId": {
       "type": "string",
       "minLength": 1,
@@ -46,7 +50,7 @@
         "additionalProperties": false,
         "required": ["source", "retrievedAt"],
         "properties": {
-          "source": { "$ref": "#/$defs/source" },
+          "source": { "$ref": "#/$defs/feed" },
           "sourceRecordId": { "type": ["string", "null"] },
           "retrievedAt": { "type": "string", "format": "date-time" },
           "url": { "type": ["string", "null"], "format": "uri" },
@@ -58,7 +62,8 @@
     "sourceMetadata": { "$ref": "#/$defs/sourceMetadata" }
   },
   "$defs": {
-    "source": {
+    "feed": {
+      "description": "Any feed we ingest — broader than the patch 'source' enum, because a source can contribute provenance without publishing the update itself.",
       "type": "string",
       "enum": ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2"]
     },
