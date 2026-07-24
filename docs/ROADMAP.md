@@ -18,10 +18,10 @@ separate worktrees. **Phase 8 is solo.**
 |---|-------|------|-----------|--------|
 | 0 | Environment & design | solo | — | **complete** |
 | 1 | Contracts | solo | 0 | **complete** |
-| 2 | Credential vault | parallel | 1 | **ready** |
-| 3 | Endpoint connector | parallel | 1 | **ready** |
+| 2 | Credential vault | parallel | 1 | **in-progress** |
+| 3 | Endpoint connector | parallel | 1 | **in-progress** |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
-| 5 | Content ingestion | parallel | 1 | **ready** |
+| 5 | Content ingestion | parallel | 1 | **in-progress** |
 | 6 | Assessment | solo | 4, 5 | not-started |
 | 7 | Risk scoring | parallel | 6 | not-started |
 | 8 | Deployment engine | **SOLO** | 6 | not-started |
@@ -85,7 +85,7 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
   `db/migrations`, `docs/phases/phase-1.md`, `api/openapi.yaml`, `schemas/`.
 - **Detail:** `docs/phases/phase-1.md`.
 
-## Phase 2 — Credential vault  · parallel · Status: not-started
+## Phase 2 — Credential vault  · parallel · Status: in-progress
 - **Goal:** Envelope-encrypted credential store; the highest-value asset.
 - **Dependencies:** Phase 1.
 - **Exit criteria:** `IKeyProvider` with **software default** + opt-in Azure Key
@@ -97,7 +97,7 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
 - **Owned paths:** `src/Modules/Vault`.
 - **Detail:** `docs/phases/phase-2.md`. See `docs/THREAT-MODEL.md`.
 
-## Phase 3 — Endpoint connector  · parallel · Status: not-started
+## Phase 3 — Endpoint connector  · parallel · Status: in-progress
 - **Goal:** `IEndpointConnector` with WinRM and SSH implementations.
 - **Dependencies:** Phase 1.
 - **Exit criteria:** Provider-neutral connector (bastion vs direct is config, not
@@ -116,7 +116,7 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
 - **Owned paths:** `src/Modules/Discovery`.
 - **Detail:** `docs/phases/phase-4.md`. See `docs/DIFFERENTIATORS.md` (unmanaged assets).
 
-## Phase 5 — Content ingestion  · parallel · Status: not-started
+## Phase 5 — Content ingestion  · parallel · Status: in-progress
 - **Goal:** Ingest authoritative vuln/patch content.
 - **Dependencies:** Phase 1.
 - **Exit criteria:** Connectors for NVD, CISA KEV, EPSS, Ubuntu USN, **Debian DSA**, RHSA,
@@ -316,6 +316,22 @@ system-scope audit (Phase 2's cross-tenant KEK rotation must be auditable) will 
 
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
+
+### 2026-07-24 — Merged to main · H1 placed · 2/3/5 fan-out launched
+The C1 slice merged to `main` (`d69f0c3`, `--no-ff`), **53/53 green on main**, pushed
+(`9ae5be0..d69f0c3`). **H1 placed** as **Phase 14 — Identity & access** (`da711ce`): parallel,
+depends on 1, prerequisite of Phase 12; the number is a label, build-order is the *Depends on*
+column.
+
+**First parallel fan-out launched** — Phases **2 (Vault)**, **3 (Connector)**, **5 (Content)** set
+to `in-progress` and dispatched as **worktree-isolated background agents** (WORKFLOW.md §2 level-3),
+each on its own branch (`phase/2-vault`, `phase/3-connector`, `phase/5-content`), briefed to its
+exit criteria + CLAUDE.md constraints, told to run tests and **NOT merge**. Lab fleet is up
+(2201–2205) for Phase 3's SSH tests. **Integration is one-at-a-time on `main` per WORKFLOW.md §4**,
+with review of each before merge — Phase 2's crypto and credential-safety invariants especially.
+Agents were told **not to amend the frozen content vocabulary** (it was swept for exactly this) and
+**not to run `ef database update` against the dev DB** (tests use ephemeral DBs, so parallel runs
+don't collide).
 
 ### 2026-07-24 — C1 CLOSED · Phase 1 complete · 2/3/5 unblocked
 Round 3 (`a8aaa0e`) cleared its fresh-session review with **no CRITICAL/HIGH/MEDIUM findings** and
