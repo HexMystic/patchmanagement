@@ -144,6 +144,28 @@ public sealed class ContentCatalogueTests(PostgresFixture fx)
     }
 
     /// <summary>
+    /// Debian is an independent distro — no USN/RHSA covers it — so `dsa` must be a valid advisory
+    /// source, or Phase 5 hits ck_advisories_source on first ingest against the lab's Debian 12
+    /// box (HARD-PROBLEMS #2/#3). A full DSA row (advisory + fix statement) must insert cleanly.
+    /// </summary>
+    [Fact]
+    public async Task A_debian_dsa_advisory_and_its_fix_statement_insert_cleanly()
+    {
+        await using var conn = await OpenContentAsync();
+
+        var advisoryId = await InsertAdvisoryAsync(
+            conn, "dsa", $"DSA-{Random.Shared.Next(1000, 9999)}-1",
+            provenance: """'[{"source":"dsa","retrievedAt":"2026-06-03T00:00:00Z"}]'::jsonb""");
+        await InsertAffectsAsync(conn, advisoryId, "openssl", "deb", "debian:12", "3.0.11-1~deb12u2");
+
+        Assert.Equal(1, await CountAffectsAsync(conn, advisoryId));
+
+        // dsa is a patch source too (mirrors usn) — Debian remediation is "upgrade to this version".
+        var patchId = await InsertDsaPatchAsync(conn, $"DSA-{Random.Shared.Next(1000, 9999)}-1");
+        Assert.NotEqual(Guid.Empty, patchId);
+    }
+
+    /// <summary>
     /// Real feeds are per-stream: Red Hat publishes OVAL per major version, Ubuntu per release,
     /// Debian per suite. Keying content_sources on `kind` alone would cap the whole deployment at
     /// seven feeds forever.
@@ -318,6 +340,18 @@ public sealed class ContentCatalogueTests(PostgresFixture fx)
             "INSERT INTO assets (id, tenant_id, hostname, managed, source, state, created_at, updated_at) "
             + $"VALUES ('{id}', '{tenantId}', 'host-{id:N}', true, 'discovery', 'assessed-missing', "
             + "now(), now())");
+        return id;
+    }
+
+    private static async Task<Guid> InsertDsaPatchAsync(NpgsqlConnection conn, string vendorId)
+    {
+        var id = Guid.NewGuid();
+        await ExecAsync(
+            conn,
+            "INSERT INTO patches (id, source, vendor_id, title, reversible, requires_reboot, "
+            + "provenance, created_at, updated_at) "
+            + $"VALUES ('{id}', 'dsa', '{vendorId}', 'openssl security update', false, false, "
+            + $"{Provenance}, now(), now())");
         return id;
     }
 

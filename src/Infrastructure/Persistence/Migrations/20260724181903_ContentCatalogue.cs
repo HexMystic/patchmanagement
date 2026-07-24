@@ -77,13 +77,13 @@ namespace PatchManagement.Persistence.Migrations
                 {
                     table.PrimaryKey("pk_advisories", x => x.id);
                     table.CheckConstraint("ck_advisories_cvss_base_score", "cvss_base_score IS NULL OR (cvss_base_score >= 0 AND cvss_base_score <= 10)");
-                    table.CheckConstraint("ck_advisories_cvss_source", "cvss_source IS NULL OR cvss_source IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2')");
+                    table.CheckConstraint("ck_advisories_cvss_source", "cvss_source IS NULL OR cvss_source IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2', 'dsa')");
                     table.CheckConstraint("ck_advisories_cvss_version", "cvss_version IS NULL OR cvss_version IN ('2.0', '3.0', '3.1', '4.0')");
                     table.CheckConstraint("ck_advisories_epss_percentile", "epss_percentile IS NULL OR (epss_percentile >= 0 AND epss_percentile <= 1)");
                     table.CheckConstraint("ck_advisories_epss_score", "epss_score IS NULL OR (epss_score >= 0 AND epss_score <= 1)");
                     table.CheckConstraint("ck_advisories_provenance_non_empty", "jsonb_typeof(provenance) = 'array' AND jsonb_array_length(provenance) >= 1");
                     table.CheckConstraint("ck_advisories_severity", "severity IN ('none', 'low', 'medium', 'high', 'critical', 'unknown')");
-                    table.CheckConstraint("ck_advisories_source", "source IN ('nvd', 'usn', 'rhsa', 'msrc')");
+                    table.CheckConstraint("ck_advisories_source", "source IN ('nvd', 'usn', 'rhsa', 'msrc', 'dsa')");
                 });
 
             migrationBuilder.CreateTable(
@@ -105,7 +105,7 @@ namespace PatchManagement.Persistence.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("pk_content_sources", x => x.id);
-                    table.CheckConstraint("ck_content_sources_kind", "kind IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2')");
+                    table.CheckConstraint("ck_content_sources_kind", "kind IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2', 'dsa')");
                     table.CheckConstraint("ck_content_sources_last_status", "last_status IN ('ok', 'failed', 'never-run')");
                 });
 
@@ -131,7 +131,7 @@ namespace PatchManagement.Persistence.Migrations
                 {
                     table.PrimaryKey("pk_patches", x => x.id);
                     table.CheckConstraint("ck_patches_provenance_non_empty", "jsonb_typeof(provenance) = 'array' AND jsonb_array_length(provenance) >= 1");
-                    table.CheckConstraint("ck_patches_source", "source IN ('usn', 'rhsa', 'msrc', 'wsusscn2')");
+                    table.CheckConstraint("ck_patches_source", "source IN ('usn', 'rhsa', 'msrc', 'wsusscn2', 'dsa')");
                 });
 
             migrationBuilder.CreateTable(

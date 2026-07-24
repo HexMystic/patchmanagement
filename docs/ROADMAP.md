@@ -106,11 +106,18 @@ review clears.
 ## Phase 5 — Content ingestion  · parallel · Status: not-started
 - **Goal:** Ingest authoritative vuln/patch content.
 - **Dependencies:** Phase 1.
-- **Exit criteria:** Connectors for NVD, CISA KEV, EPSS, Ubuntu USN, RHSA, MSRC,
-  and `wsusscn2.cab`; normalized into the Phase-1 content schema; incremental &
+- **Exit criteria:** Connectors for NVD, CISA KEV, EPSS, Ubuntu USN, **Debian DSA**, RHSA,
+  MSRC, and `wsusscn2.cab`; normalized into the Phase-1 content schema; incremental &
   idempotent refresh; provenance recorded per record.
 - **Owned paths:** `src/Modules/Content`.
-- **See:** `docs/HARD-PROBLEMS.md` (wsusscn2.cab vs MSRC CSAF).
+- **See:** `docs/HARD-PROBLEMS.md` (wsusscn2.cab vs MSRC CSAF; #2/#3 require Debian DSA).
+- **Content vocabulary is frozen in Phase 1** (`advisories.source`, `patches.source`,
+  `content_sources.kind`, `ecosystem`) and covers every feed above plus the lab fleet
+  (Ubuntu→USN, Debian→DSA, Rocky/Alma→RHSA, Windows→MSRC+wsusscn2). Two deferred, both
+  Phase-5-owned and **additive** (never a change to the frozen five): NVD affected-version
+  *ranges* (`advisory_ranges`), and native Rocky/Alma errata (**RLSA/ALSA**) *if* per-rebuild
+  version precision proves necessary — until then Rocky/Alma are assessed against `rhsa`, which
+  is the RHEL content they rebuild (see `phase-1.md` Group B note).
 
 ## Phase 6 — Assessment  · solo · Status: not-started
 - **Goal:** Correlate inventory ↔ content into findings, and govern which findings are
@@ -261,6 +268,31 @@ system-scope audit (Phase 2's cross-tenant KEK rotation must be auditable) will 
 
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
+
+### 2026-07-24 — C1 slice, round 3: Debian DSA + full vocabulary sweep
+A fresh-session review of the round-2 delta confirmed **no day-one amend for the seven named
+Phase-5 feeds**, but flagged one HIGH self-contradiction: round 2 narrowed `advisories.source` to
+`(nvd, usn, rhsa, msrc)` while the same commit's ADR 0011 named **Debian DSA** as an applicability
+source — and the lab fleet has a Debian 12 box. A Debian advisory had no representable source, so
+Phase 5 would hit `ck_advisories_source` on first ingest.
+
+**Fixed:** `dsa` added to `advisories.source`, `patches.source` (mirrors usn), `content_sources.kind`,
+`cvss_source`, and both JSON-schema `feed`/source enums. New validated `advisory-dsa.sample.json`
+(a real DSA with a `debian:12` fix statement), a DB test that a full DSA advisory + fix statement
+inserts cleanly, and `ROADMAP:109`'s Phase 5 connector list now includes Debian DSA so the spec
+matches the enum and HARD-PROBLEMS #2/#3.
+
+**Full vocabulary sweep (every Phase-5 feed × every lab distro), so a fourth review finds nothing:**
+- Debian 12 → **dsa** (the fix above).
+- Rocky 9 / Alma 9 → **decision recorded**: assessed via `rhsa` (the RHEL content they rebuild).
+  Native RLSA/ALSA is an *additive* Phase-5/6 option if per-rebuild precision is needed — **not**
+  a change to the frozen vocabulary, so no day-one amend either way. (phase-1.md Group B note.)
+- `cvss_source`: kept broad (all feeds) **on purpose** — it records which feed *supplied* a score,
+  i.e. provenance semantics, not a publisher list. The review's LOW is resolved as intentional.
+- Multi-publisher CVE (a `(nvd,CVE-X)` and `(msrc,CVE-X)` row with divergent CVSS): recorded as a
+  **Phase 6 correlation** question (which row a finding resolves to), not a Phase 1 constraint.
+
+Ecosystem enum (`deb/rpm/windows`) already covers the whole fleet — no gap. **Tests 53/53 green.**
 
 ### 2026-07-24 — C1 slice, round 2: remediation after the fresh-session review
 The first commit (`37502b3`) **did not clear** its fresh-session review. Findings and fixes:

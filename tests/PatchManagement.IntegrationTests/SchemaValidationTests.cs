@@ -26,6 +26,7 @@ public class SchemaValidationTests
 
     [Theory]
     [InlineData("advisory.schema.json", "advisory.sample.json")]
+    [InlineData("advisory.schema.json", "advisory-dsa.sample.json")]
     [InlineData("finding.schema.json", "finding.sample.json")]
     [InlineData("patch.schema.json", "patch.sample.json")]
     public void Sample_records_validate_against_their_schema(string schemaFile, string sampleFile)

@@ -26,21 +26,34 @@ namespace PatchManagement.Persistence;
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     /// <summary>
-    /// Every feed we ingest. Valid for <c>content_sources.kind</c> and for provenance entries —
-    /// KEV and EPSS ARE legitimate provenance, they are just not advisory/patch publishers.
+    /// Every feed we ingest. Valid for <c>content_sources.kind</c>, for <c>cvss_source</c> (which
+    /// records which feed SUPPLIED a score — provenance semantics, so the full feed list is
+    /// correct, not the narrower publisher list), and for provenance entries — KEV and EPSS ARE
+    /// legitimate provenance, they are just not advisory/patch publishers.
+    /// <c>dsa</c> = Debian Security Advisory: required by HARD-PROBLEMS #2/#3 and by the Debian 12
+    /// member of the lab fleet.
     /// </summary>
     private static readonly string[] ContentSourceKinds =
-        ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2"];
+        ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2", "dsa"];
 
     /// <summary>
     /// Sources that PUBLISH advisories. Excludes kev/epss (scoring overlays that enrich an
     /// existing advisory) and wsusscn2 (an applicability catalogue of updates, i.e. patches —
     /// ADR 0008 pairs it with MSRC CSAF, which is the advisory side).
+    /// Includes <c>dsa</c>: Debian is an independent distro (no USN/RHSA covers it), so without it
+    /// a Debian advisory has no representable source and Phase 5 would hit this CHECK on first
+    /// ingest against the lab's Debian 12 box. Rocky/Alma are RHEL rebuilds assessed via
+    /// <c>rhsa</c> (see phase-1.md); native RLSA/ALSA is a deferred Phase-5/6 precision decision.
     /// </summary>
-    private static readonly string[] AdvisorySources = ["nvd", "usn", "rhsa", "msrc"];
+    private static readonly string[] AdvisorySources = ["nvd", "usn", "rhsa", "msrc", "dsa"];
 
-    /// <summary>Sources that publish installable updates. NVD describes vulnerabilities, not fixes.</summary>
-    private static readonly string[] PatchSources = ["usn", "rhsa", "msrc", "wsusscn2"];
+    /// <summary>
+    /// Sources that publish installable updates. NVD describes vulnerabilities, not fixes.
+    /// <c>dsa</c> mirrors <c>usn</c>: a Debian fix, like an Ubuntu one, is "upgrade to the stated
+    /// package version", so if Phase 5 models USN updates as patches it models DSA the same way —
+    /// permitting the value here avoids a day-one amend.
+    /// </summary>
+    private static readonly string[] PatchSources = ["usn", "rhsa", "msrc", "wsusscn2", "dsa"];
 
     /// <summary>
     /// NOT NULL on a jsonb column still accepts '[]', and an empty provenance array is an

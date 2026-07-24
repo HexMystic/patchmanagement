@@ -80,9 +80,9 @@ each design part of the same contract.
 | Table | Key columns |
 |-------|------|
 | `content_sources` | kind(nvd/kev/epss/usn/rhsa/msrc/wsusscn2), **instance**, **unique (kind, instance)** — feeds are per-stream (RHSA per RHEL major, USN per release); endpoint *(location, never a secret)*, enabled, last_sync_at, cursor, last_status, last_error |
-| `advisories` | **source (publishers only: nvd/usn/rhsa/msrc)**, external_id(CVE/USN/RHSA/…) **unique together**, title, severity(incl. `unknown`), published_at, cvss_base_score/vector/version/source, **kev_listed(nullable — 3-valued)**, kev_date_added, kev_due_date, kev_known_ransomware_use, epss_score/percentile, **provenance(jsonb, CHECK non-empty array)**, source_metadata(jsonb), raw_ref, withdrawn_at |
+| `advisories` | **source (publishers only: nvd/usn/rhsa/msrc/dsa)**, external_id(CVE/USN/RHSA/DSA/…) **unique together**, title, severity(incl. `unknown`), published_at, cvss_base_score/vector/version/source, **kev_listed(nullable — 3-valued)**, kev_date_added, kev_due_date, kev_known_ransomware_use, epss_score/percentile, **provenance(jsonb, CHECK non-empty array)**, source_metadata(jsonb), raw_ref, withdrawn_at |
 | `advisory_affects` | advisory_id, package_name, ecosystem(deb/rpm/windows), **platform**, fixed_version *(both raw-as-sourced — ADR 0011)*, backported(bool); **unique NULLS NOT DISTINCT (advisory_id, package_name, ecosystem, platform)** |
-| `patches` | **source (usn/rhsa/msrc/wsusscn2)**, vendor_id(KB/USN/…) **unique together**, title, **reversible**(bool), requires_reboot(bool), classification, **provenance(jsonb, CHECK non-empty array)**, source_metadata(jsonb), withdrawn_at |
+| `patches` | **source (usn/rhsa/msrc/wsusscn2/dsa)**, vendor_id(KB/USN/DSA/…) **unique together**, title, **reversible**(bool), requires_reboot(bool), classification, **provenance(jsonb, CHECK non-empty array)**, source_metadata(jsonb), withdrawn_at |
 | `patch_supersedence` | patch_id, superseded_by_patch_id *(PK on the pair; self-loop CHECK; deep-cycle detection is Phase 6)* |
 
 Content **retires rather than vanishes** (`withdrawn_at`) — no role holds DELETE.
@@ -94,6 +94,24 @@ accepts `'[]'` — an unattributable score, which DIFFERENTIATORS #4 forbids. `k
 rejected as advisory/patch **publishers** (they are overlays) while remaining valid **provenance**
 sources. `advisory_affects` holds **fix statements from applicability sources**; NVD's
 affected-version *ranges* are out of scope and belong to a Phase-5-owned additive table (ADR 0011).
+
+**The source vocabulary covers every feed and every lab distro** — checked so Phase 5 does not
+amend it on day one:
+
+| Feed / lab distro | source / kind | Note |
+|---|---|---|
+| NVD, CISA KEV, EPSS | nvd / kev / epss | KEV, EPSS are provenance-only overlays, not publishers |
+| Ubuntu 22.04 / 24.04 | usn | |
+| **Debian 12** | **dsa** | independent distro — no USN/RHSA covers it; required by HARD-PROBLEMS #2/#3 |
+| Rocky 9 / Alma 9 | rhsa | **Decision:** RHEL rebuilds are assessed against the `rhsa` content they rebuild. Native RLSA/ALSA is an **additive Phase-5/6** option, taken only if per-rebuild version precision proves necessary — not a change to this frozen vocabulary. |
+| Windows | msrc (advisory) + wsusscn2 (applicability) | ADR 0008 |
+
+**One modeling question is deliberately left to Phase 6, not silently decided here.** The same
+CVE can be published by more than one source — e.g. a `(nvd, CVE-X)` row and a `(msrc, CVE-X)` row
+with different CVSS. The contract permits both that and the merged shape (one row, several
+`provenance` entries); which `advisories` row a `finding` resolves to when a CVE spans publishers
+is **Phase 6 correlation** (the deferred `advisory_patches` work, `phase-1.md` Group C), not a
+constraint Phase 1 should pin prematurely.
 
 ### Group C — deferred, each with a named owner
 | Table | Owner | Note |

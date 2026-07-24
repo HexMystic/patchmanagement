@@ -9,8 +9,8 @@
   "properties": {
     "source": {
       "type": "string",
-      "description": "The PUBLISHER of the advisory. Deliberately excludes 'kev' and 'epss' — those are scoring overlays that enrich an existing advisory, not publishers of one; admitting them would let one CVE exist as several rows with divergent scores. They remain valid values inside 'provenance'. Also excludes 'wsusscn2', which is an applicability catalogue of updates (patches), paired with MSRC CSAF as the advisory side (ADR 0008).",
-      "enum": ["nvd", "usn", "rhsa", "msrc"]
+      "description": "The PUBLISHER of the advisory. 'dsa' = Debian Security Advisory (required by HARD-PROBLEMS #2/#3 and the Debian 12 lab box). Deliberately excludes 'kev' and 'epss' — those are scoring overlays that enrich an existing advisory, not publishers of one; admitting them would let one CVE exist as several rows with divergent scores. They remain valid values inside 'provenance'. Also excludes 'wsusscn2', which is an applicability catalogue of updates (patches), paired with MSRC CSAF as the advisory side (ADR 0008). Rocky/Alma are RHEL rebuilds assessed via 'rhsa'; native RLSA/ALSA is a deferred Phase-5/6 decision.",
+      "enum": ["nvd", "usn", "rhsa", "msrc", "dsa"]
     },
     "externalId": {
       "type": "string",
@@ -137,7 +137,7 @@
     "feed": {
       "description": "Any feed we ingest. Broader than the advisory 'source' enum: KEV and EPSS are legitimate PROVENANCE (they contributed data) even though they publish no advisories.",
       "type": "string",
-      "enum": ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2"]
+      "enum": ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2", "dsa"]
     },
     "sourceMetadata": {
       "description": "Open extension point. Per-source fields that do not belong in the normalized contract live here, so Phase 5 can carry them WITHOUT a frozen-contract change (review H2) while the known fields above stay closed against typos.",

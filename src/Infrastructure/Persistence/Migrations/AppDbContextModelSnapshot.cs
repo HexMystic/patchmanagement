@@ -133,7 +133,7 @@ namespace PatchManagement.Persistence.Migrations
                         {
                             t.HasCheckConstraint("ck_advisories_cvss_base_score", "cvss_base_score IS NULL OR (cvss_base_score >= 0 AND cvss_base_score <= 10)");
 
-                            t.HasCheckConstraint("ck_advisories_cvss_source", "cvss_source IS NULL OR cvss_source IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2')");
+                            t.HasCheckConstraint("ck_advisories_cvss_source", "cvss_source IS NULL OR cvss_source IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2', 'dsa')");
 
                             t.HasCheckConstraint("ck_advisories_cvss_version", "cvss_version IS NULL OR cvss_version IN ('2.0', '3.0', '3.1', '4.0')");
 
@@ -145,7 +145,7 @@ namespace PatchManagement.Persistence.Migrations
 
                             t.HasCheckConstraint("ck_advisories_severity", "severity IN ('none', 'low', 'medium', 'high', 'critical', 'unknown')");
 
-                            t.HasCheckConstraint("ck_advisories_source", "source IN ('nvd', 'usn', 'rhsa', 'msrc')");
+                            t.HasCheckConstraint("ck_advisories_source", "source IN ('nvd', 'usn', 'rhsa', 'msrc', 'dsa')");
                         });
                 });
 
@@ -422,7 +422,7 @@ namespace PatchManagement.Persistence.Migrations
 
                     b.ToTable("content_sources", null, t =>
                         {
-                            t.HasCheckConstraint("ck_content_sources_kind", "kind IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2')");
+                            t.HasCheckConstraint("ck_content_sources_kind", "kind IN ('nvd', 'kev', 'epss', 'usn', 'rhsa', 'msrc', 'wsusscn2', 'dsa')");
 
                             t.HasCheckConstraint("ck_content_sources_last_status", "last_status IN ('ok', 'failed', 'never-run')");
                         });
@@ -701,7 +701,7 @@ namespace PatchManagement.Persistence.Migrations
                         {
                             t.HasCheckConstraint("ck_patches_provenance_non_empty", "jsonb_typeof(provenance) = 'array' AND jsonb_array_length(provenance) >= 1");
 
-                            t.HasCheckConstraint("ck_patches_source", "source IN ('usn', 'rhsa', 'msrc', 'wsusscn2')");
+                            t.HasCheckConstraint("ck_patches_source", "source IN ('usn', 'rhsa', 'msrc', 'wsusscn2', 'dsa')");
                         });
                 });
 
