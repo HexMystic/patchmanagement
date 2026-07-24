@@ -1,0 +1,44 @@
+{
+  "resultsPerPage": 2,
+  "totalResults": 2,
+  "vulnerabilities": [
+    {
+      "cve": {
+        "id": "CVE-2024-0001",
+        "published": "2024-01-15T10:00:00.000",
+        "lastModified": "2024-02-01T12:00:00.000",
+        "vulnStatus": "Analyzed",
+        "descriptions": [
+          { "lang": "en", "value": "A heap buffer overflow in libfoo allows remote code execution." },
+          { "lang": "es", "value": "Un desbordamiento de bufer." }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                "baseScore": 9.8,
+                "baseSeverity": "CRITICAL"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2024-0002",
+        "published": "2024-01-20T08:00:00.000",
+        "lastModified": "2024-01-25T09:30:00.000",
+        "vulnStatus": "Awaiting Analysis",
+        "descriptions": [
+          { "lang": "en", "value": "An unspecified issue in barlib; severity not yet assessed." }
+        ],
+        "metrics": {}
+      }
+    }
+  ]
+}
