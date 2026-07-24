@@ -4,12 +4,55 @@
   "title": "OpenSSL vulnerabilities",
   "severity": "high",
   "publishedAt": "2026-06-01T12:00:00Z",
-  "cvss": 7.5,
+  "cvss": {
+    "baseScore": 7.5,
+    "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "version": "3.1",
+    "source": "nvd"
+  },
+  "kev": {
+    "listed": false
+  },
+  "epss": {
+    "score": 0.00042,
+    "percentile": 0.09731,
+    "scoredAt": "2026-06-02T00:00:00Z"
+  },
+  "provenance": [
+    {
+      "source": "usn",
+      "sourceRecordId": "USN-6789-1",
+      "retrievedAt": "2026-06-01T13:04:22Z",
+      "url": "https://ubuntu.com/security/notices/USN-6789-1",
+      "contentHash": "sha256:9f2c1d7a4b8e3c05f61a9d2b7e4c8a03d5f6b1e9c2a7d4f80b3e6c9a1d5f2b7e"
+    },
+    {
+      "source": "nvd",
+      "sourceRecordId": "CVE-2026-1234",
+      "retrievedAt": "2026-06-02T01:10:00Z",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-1234",
+      "sourceMetadata": { "vulnStatus": "Analyzed" }
+    },
+    {
+      "source": "epss",
+      "retrievedAt": "2026-06-02T01:12:00Z",
+      "sourceMetadata": { "modelVersion": "v2025.03.01" }
+    }
+  ],
+  "rawRef": "content/usn/2026/USN-6789-1.json",
   "affects": [
     {
       "packageName": "openssl",
       "ecosystem": "deb",
+      "platform": "ubuntu:22.04",
       "fixedVersion": "3.0.2-0ubuntu1.16",
+      "backported": true
+    },
+    {
+      "packageName": "openssl",
+      "ecosystem": "deb",
+      "platform": "ubuntu:24.04",
+      "fixedVersion": "3.0.13-0ubuntu3.1",
       "backported": true
     }
   ]

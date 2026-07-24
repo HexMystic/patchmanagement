@@ -1,0 +1,38 @@
+{
+  "source": "dsa",
+  "externalId": "DSA-5678-1",
+  "title": "openssl -- security update",
+  "severity": "high",
+  "publishedAt": "2026-06-03T00:00:00Z",
+  "cvss": {
+    "baseScore": 7.5,
+    "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "version": "3.1",
+    "source": "nvd"
+  },
+  "provenance": [
+    {
+      "source": "dsa",
+      "sourceRecordId": "DSA-5678-1",
+      "retrievedAt": "2026-06-03T09:15:00Z",
+      "url": "https://www.debian.org/security/2026/dsa-5678",
+      "contentHash": "sha256:1a2b3c4d5e6f70819a2b3c4d5e6f70819a2b3c4d5e6f70819a2b3c4d5e6f7081"
+    },
+    {
+      "source": "nvd",
+      "sourceRecordId": "CVE-2026-1234",
+      "retrievedAt": "2026-06-03T10:00:00Z",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-1234"
+    }
+  ],
+  "rawRef": "content/dsa/2026/DSA-5678-1.json",
+  "affects": [
+    {
+      "packageName": "openssl",
+      "ecosystem": "deb",
+      "platform": "debian:12",
+      "fixedVersion": "3.0.11-1~deb12u2",
+      "backported": true
+    }
+  ]
+}

@@ -2,31 +2,107 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://patchmanagement.dev/schemas/advisory.schema.json",
   "title": "Advisory",
-  "description": "A normalized vulnerability/patch advisory record from a content source (Phase 5).",
+  "description": "A normalized vulnerability/patch advisory record from a content source (Phase 5). Global content — advisories are NOT tenant-scoped (see docs/adr/0010-global-content-catalogue.md). Known fields are closed so typos are caught; per-source extras go in the open 'sourceMetadata' objects, so Phase 5 can extend without a frozen-contract change.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["source", "externalId", "title", "severity"],
+  "required": ["source", "externalId", "title", "severity", "provenance"],
   "properties": {
     "source": {
       "type": "string",
-      "enum": ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2"]
+      "description": "The PUBLISHER of the advisory. 'dsa' = Debian Security Advisory (required by HARD-PROBLEMS #2/#3 and the Debian 12 lab box). Deliberately excludes 'kev' and 'epss' — those are scoring overlays that enrich an existing advisory, not publishers of one; admitting them would let one CVE exist as several rows with divergent scores. They remain valid values inside 'provenance'. Also excludes 'wsusscn2', which is an applicability catalogue of updates (patches), paired with MSRC CSAF as the advisory side (ADR 0008). Rocky/Alma are RHEL rebuilds assessed via 'rhsa'; native RLSA/ALSA is a deferred Phase-5/6 decision.",
+      "enum": ["nvd", "usn", "rhsa", "msrc", "dsa"]
     },
     "externalId": {
       "type": "string",
       "minLength": 1,
-      "description": "The source's identifier, e.g. CVE-2025-12345, USN-1234-1, RHSA-2025:0001."
+      "description": "The source's identifier, e.g. CVE-2025-12345, USN-1234-1, RHSA-2025:0001. Unique per (source, externalId)."
     },
     "title": { "type": "string", "minLength": 1 },
     "severity": {
       "type": "string",
-      "enum": ["none", "low", "medium", "high", "critical"]
+      "description": "'unknown' is a first-class value: a source that does not state severity must never be made to fabricate one (HARD-PROBLEMS #8).",
+      "enum": ["none", "low", "medium", "high", "critical", "unknown"]
     },
     "publishedAt": { "type": "string", "format": "date-time" },
-    "cvss": {
-      "type": ["number", "null"],
-      "minimum": 0,
-      "maximum": 10
+    "withdrawnAt": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Set when the source retracts the advisory. Content retires; it is never deleted."
     },
+    "cvss": {
+      "description": "Structured so the score is auditable: a bare number cannot say which version or vector produced it (DIFFERENTIATORS #4).",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["baseScore", "version"],
+      "properties": {
+        "baseScore": { "type": "number", "minimum": 0, "maximum": 10 },
+        "vector": {
+          "type": ["string", "null"],
+          "description": "e.g. CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "version": { "type": "string", "enum": ["2.0", "3.0", "3.1", "4.0"] },
+        "source": {
+          "$ref": "#/$defs/feed",
+          "description": "Which content source supplied this score (NVD and a vendor may disagree). Persisted as advisories.cvss_source."
+        }
+      }
+    },
+    "kev": {
+      "description": "CISA Known Exploited Vulnerabilities membership. Absent/null means 'not evaluated' (the KEV feed has not been synced for this advisory); listed:false means 'evaluated, not on the list'. The database column is nullable so it can hold all three states — collapsing 'not evaluated' into false would let Phase 7 weight a never-run sync identically to a confirmed absence (HARD-PROBLEMS #8).",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["listed"],
+      "properties": {
+        "listed": { "type": "boolean" },
+        "dateAdded": { "type": ["string", "null"], "format": "date" },
+        "dueDate": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "The CISA BOD 22-01 remediation deadline — a compliance reporting field, persisted as advisories.kev_due_date."
+        },
+        "knownRansomwareUse": { "type": ["boolean", "null"] }
+      }
+    },
+    "epss": {
+      "description": "EPSS exploit-prediction scoring. Both values are probabilities in [0,1], not percentages.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["score"],
+      "properties": {
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "percentile": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "scoredAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "provenance": {
+      "description": "REQUIRED. One entry per contributing source, so every input to a risk score is traceable to who said it and when (DIFFERENTIATORS #4, Phase 5 exit criteria). An advisory assembled from NVD + KEV + EPSS carries three entries.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "retrievedAt"],
+        "properties": {
+          "source": { "$ref": "#/$defs/feed" },
+          "sourceRecordId": {
+            "type": ["string", "null"],
+            "description": "The record's id within that source, when it differs from externalId."
+          },
+          "retrievedAt": { "type": "string", "format": "date-time" },
+          "url": { "type": ["string", "null"], "format": "uri" },
+          "contentHash": {
+            "type": ["string", "null"],
+            "description": "Hash of the raw source payload, so a later re-fetch can prove whether the source changed."
+          },
+          "sourceMetadata": { "$ref": "#/$defs/sourceMetadata" }
+        }
+      }
+    },
+    "rawRef": {
+      "type": ["string", "null"],
+      "description": "Pointer to the retained raw source payload (path/URI), not the payload itself."
+    },
+    "sourceMetadata": { "$ref": "#/$defs/sourceMetadata" },
     "affects": {
       "type": "array",
       "items": {
@@ -37,16 +113,36 @@
           "packageName": { "type": "string", "minLength": 1 },
           "ecosystem": {
             "type": "string",
-            "description": "e.g. deb, rpm, windows.",
-            "minLength": 1
+            "description": "Selects the version comparator (HARD-PROBLEMS #3). Constrained to the three implemented comparators — a fourth ecosystem needs a comparator, so widening this is the correct gate.",
+            "enum": ["deb", "rpm", "windows"]
           },
-          "fixedVersion": { "type": ["string", "null"] },
+          "platform": {
+            "type": ["string", "null"],
+            "description": "The release/product this fix statement applies to, RAW as sourced: 'ubuntu:22.04', 'rhel:9', 'debian:12', 'windows:server-2022'. One advisory commonly fixes the same package at DIFFERENT versions per release (one USN covers every supported Ubuntu release), so this is part of the row's identity. NULL when the source states no release scope (e.g. NVD CPE ranges) — never a fabricated sentinel. See docs/adr/0011-fixed-version-raw-as-sourced.md."
+          },
+          "fixedVersion": {
+            "type": ["string", "null"],
+            "description": "RAW as sourced — never parsed, split, or canonicalized at ingest ('3.0.2-0ubuntu1.16', '0:1.2.3-4.el9_3', '10.0.19045.4046'). The Phase 6 per-ecosystem comparator owns interpretation. NULL when no fix is available yet. See docs/adr/0011-fixed-version-raw-as-sourced.md."
+          },
           "backported": {
             "type": "boolean",
-            "description": "True when the distro backported the fix without an upstream version bump."
-          }
+            "description": "True when the distro backported the fix without an upstream version bump (HARD-PROBLEMS #2)."
+          },
+          "sourceMetadata": { "$ref": "#/$defs/sourceMetadata" }
         }
       }
+    }
+  },
+  "$defs": {
+    "feed": {
+      "description": "Any feed we ingest. Broader than the advisory 'source' enum: KEV and EPSS are legitimate PROVENANCE (they contributed data) even though they publish no advisories.",
+      "type": "string",
+      "enum": ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2", "dsa"]
+    },
+    "sourceMetadata": {
+      "description": "Open extension point. Per-source fields that do not belong in the normalized contract live here, so Phase 5 can carry them WITHOUT a frozen-contract change (review H2) while the known fields above stay closed against typos.",
+      "type": ["object", "null"],
+      "additionalProperties": true
     }
   }
 }

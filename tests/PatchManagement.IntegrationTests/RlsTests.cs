@@ -93,7 +93,12 @@ public sealed class RlsTests(PostgresFixture fx)
             .Options;
 
         await using var db = new AppDbContext(options);
-        if (await db.Tenants.AnyAsync()) return; // fixture is shared; seed once
+
+        // Fixture is shared, so seed once — but key the guard on THIS test's own tenant, not on
+        // "any tenant exists". Other classes in the collection (ContentCatalogueTests' FK tests)
+        // create their own tenants, and an AnyAsync() guard would see those and skip this seed,
+        // leaving these tests asserting against an empty database.
+        if (await db.Tenants.AnyAsync(t => t.Id == TenantA)) return;
 
         var now = DateTimeOffset.UtcNow;
         db.Tenants.AddRange(

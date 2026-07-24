@@ -1,0 +1,30 @@
+{
+  "source": "msrc",
+  "vendorId": "KB5034441",
+  "title": "2026-06 Cumulative Update for Windows Server 2022",
+  "reversible": false,
+  "requiresReboot": true,
+  "classification": "Security Updates",
+  "publishedAt": "2026-06-10T18:00:00Z",
+  "supersedes": ["KB5033118", "KB5032190"],
+  "provenance": [
+    {
+      "source": "msrc",
+      "sourceRecordId": "2026-Jun",
+      "retrievedAt": "2026-06-11T02:15:00Z",
+      "url": "https://api.msrc.microsoft.com/cvrf/v3.0/document/2026-Jun",
+      "contentHash": "sha256:4d1e8b7c2a9f0356e8b4d1c7a0f9e2b5c8d3a6f1e4b7c0a9d2f5e8b1c4a7d0f3"
+    },
+    {
+      "source": "wsusscn2",
+      "retrievedAt": "2026-06-11T03:40:00Z",
+      "sourceMetadata": {
+        "updateId": "b8f3c1d2-4e5a-6b7c-8d9e-0f1a2b3c4d5e",
+        "revisionNumber": 201
+      }
+    }
+  ],
+  "sourceMetadata": {
+    "msrcProductIds": ["11923", "11924"]
+  }
+}
