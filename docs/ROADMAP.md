@@ -317,6 +317,53 @@ system-scope audit (Phase 2's cross-tenant KEK rotation must be auditable) will 
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
+### 2026-07-25 — Phase 2 vault green on its branch (unmerged) · one gated change pending · RESUME HERE
+**Phase 2 (Credential vault) is GREEN on `phase/2-vault`**, tip **`7195bee`**, pushed to origin.
+**Not merged** — `main` is still at **`b960ad3`** (the fan-out kickoff) except for this doc entry.
+Test counts on the branch: **Vault 24/24, Contracts 19/19, Integration 34/34**.
+
+Branch history: `17e40a2` (WIP dump from the killed fan-out agent) → `68eb038` (fixed a
+**test-only** KEK/tenant collision — tenants were `static`, so methods sharing a tenant on the
+shared collection-fixture DB read DEKs wrapped under a *different* per-method in-memory KEK keyset →
+`KeyNotFoundException`; fix made tenant ids instance fields, mirroring production's one-stable-KEK /
+many-tenants shape — no crypto change) → `7195bee` (added an error-path NeverLog test: stores a real
+secret, resolves a non-existent id to drive the not-found branch, scans **both** the captured log
+body **and** the thrown exception object for the secret in UTF-8/base64/hex/lowercase-hex; converts
+the error-path guarantee from code-inspection to an assertion). The pre-emptive crypto/KEK review
+found the production code correct as written — no production change was needed to reach green.
+
+**PENDING — one approved-but-NOT-yet-applied change (gated security surface):** scrub the
+**exception object** (not just the formatted message) in `SecretRedactingLoggerProvider`, via a
+`RedactedException` wrapper that overrides `Message`/`StackTrace`/`ToString` to scrubbed forms and
+**deliberately drops `InnerException`/`Data`** so no unscrubbed channel is forwarded to the sink.
+Includes an additive `CapturingLoggerProvider.Exceptions` capture + a new `RedactionLoggerTests`
+case proving a sentinel in an exception message **and** stack is scrubbed. The exact diff was shown
+and approved. **BEFORE applying, confirm no vault error path relies on structured
+`InnerException`/`Data` for diagnosis** (the wrapper preserves the inner-exception *text* inside the
+scrubbed `ToString()`, but not the structured object) — the vault currently logs no exception
+argument, so impact is expected to be nil; verify before landing.
+
+**Resume order for tomorrow:**
+1. Apply the pending exception-scrub change → run to green (Vault becomes **25** → full-suite total
+   **78** = 19 + 25 + 34; note this is one more than the pre-change 77). Commit to `phase/2-vault`, push.
+2. **Merge Phase 2 → `main`** (`--no-ff`), **re-run the full suite on `main`** (expect **77** as of
+   `7195bee`, or **78** if the pending change landed first), fix/revert if red.
+3. **Rebase and resume Phases 3 and 5 one at a time** (WORKFLOW §4). Lighter review than Phase 2 —
+   they are not crypto.
+
+**Phases 3 & 5 remain WIP, committed + pushed, NOT resumed:** `phase/3-connector` at **`67cc648`**
+(module surface — SSH/WinRM/pooling/double-hop — but no tests and not in the `.sln`);
+`phase/5-content` at **`3a24ccd`** (all 8 connectors incl. Debian DSA; test project barely started).
+
+**Still-open carry-forward (unchanged, not blocking):**
+- **H1 → Phase 14 (Identity & access)** is *placed* on the roadmap but **not built**; prerequisite of Phase 12.
+- **Postgres alpine→Debian(glibc) revert** (ADR 0009) before any perf work or prod packaging — musl/glibc collation gap.
+- **A Windows cloud VM is needed before Phase 3 can test WinRM** — the lab fleet is Linux-only (no Windows target); SSH path is lab-testable, WinRM is not.
+
+**Env prereqs unchanged:** SAC off; root stack + lab fleet up (`docker compose up -d` and
+`docker compose -f lab/docker-compose.yml up -d`); `dotnet` at `C:\Program Files\dotnet`; apply
+`db/roles.sql` after `dotnet ef database update` for the `patchmgmt_app` + `patchmgmt_content` dev passwords.
+
 ### 2026-07-24 — Merged to main · H1 placed · 2/3/5 fan-out launched
 The C1 slice merged to `main` (`d69f0c3`, `--no-ff`), **53/53 green on main**, pushed
 (`9ae5be0..d69f0c3`). **H1 placed** as **Phase 14 — Identity & access** (`da711ce`): parallel,
