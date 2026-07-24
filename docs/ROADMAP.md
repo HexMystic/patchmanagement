@@ -5,7 +5,8 @@ means. Each session starts here: pick the next phase whose dependencies are met,
 do the work to its exit criteria, then update its **Status** (see
 `docs/WORKFLOW.md`).
 
-**Status values:** `not-started` · `in-progress` · `blocked` · `complete`
+**Status values:** `not-started` · `ready` (dependencies met, not yet started) · `in-progress` ·
+`blocked` · `complete`
 
 **Parallelism:** `solo` phases must be the only phase in flight (they touch shared
 contracts or are inherently sequential). `parallel` phases can run concurrently in
@@ -16,11 +17,11 @@ separate worktrees. **Phase 8 is solo.**
 | # | Phase | Mode | Depends on | Status |
 |---|-------|------|-----------|--------|
 | 0 | Environment & design | solo | — | **complete** |
-| 1 | Contracts | solo | 0 | **complete\*** |
-| 2 | Credential vault | parallel | 1 | not-started |
-| 3 | Endpoint connector | parallel | 1 | not-started |
+| 1 | Contracts | solo | 0 | **complete** |
+| 2 | Credential vault | parallel | 1 | **ready** |
+| 3 | Endpoint connector | parallel | 1 | **ready** |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
-| 5 | Content ingestion | parallel | 1 | not-started |
+| 5 | Content ingestion | parallel | 1 | **ready** |
 | 6 | Assessment | solo | 4, 5 | not-started |
 | 7 | Risk scoring | parallel | 6 | not-started |
 | 8 | Deployment engine | **SOLO** | 6 | not-started |
@@ -30,11 +31,16 @@ separate worktrees. **Phase 8 is solo.**
 | 12 | UI | parallel | 1 | not-started |
 | 13 | Audit, compliance, evidence | parallel | 6 | not-started |
 
-**\*Phase 1** is complete for the *amended* scope (see C1 below). **C1 is resolved** and the C1
-slice closes **H2/H3/H4** as well; the asterisk stays until that slice clears a fresh-session
-review against `docs/reviews/phase-1-review.md`. **H1 (no auth/RBAC on any phase), H5 (OpenAPI
-freeze inversion), M1–M9 and L1–L7 remain open.** The Phases 2/3/5 fan-out unblocks once the
-review clears.
+**Phase 1 is complete** (amended scope — see C1 below). The C1 slice (`37502b3` → `953a2a5` →
+`a8aaa0e`) **resolved C1 and closed H2, H3, H4**, and cleared three independent fresh-session
+reviews against `docs/reviews/phase-1-review.md` — the last confirming the content vocabulary is
+complete for Phase 5's day-one needs. **Phases 2, 3, and 5 are now unblocked** (the first
+parallel fan-out; see WORKFLOW.md).
+
+**Still open from the review — tracked, none blocking the 2/3/5 fan-out:** **H1** (no auth/RBAC on
+any phase — the *next decision*, and a hard prerequisite for Phase 12), **H5** (OpenAPI freeze
+inversion), **M1** (a Phase-6-entry decision), **M5**, and **M8/M9 for the 8 pre-existing tables**.
+The cheap M5/M8/M9 hardening can ride alongside the fan-out or as its own slice.
 
 ---
 
@@ -198,11 +204,15 @@ review clears.
 
 ---
 
-## Phase 1 review — follow-ups (OPEN)
+## Phase 1 review — follow-ups
 
 Source: `docs/reviews/phase-1-review.md`, reviewed at commit `fb7b4b5`.
 Verdict summary: the RLS work, the state machine, and the append-only audit grants hold up;
 the gap is what the frozen contract *didn't* include.
+
+**Status 2026-07-24:** the C1 slice (`37502b3` → `953a2a5` → `a8aaa0e`) closed **C1, H2, H3, H4**
+and cleared three fresh-session reviews. **Open:** H1, H5, M1, M5, M8/M9 (pre-existing tables),
+L1–L7. None blocks the 2/3/5 fan-out; H1 blocks Phase 12.
 
 ### C1 — RESOLVED 2026-07-24 (option b + partial pull-forward)
 **Decision:** formally amend `DIFFERENTIATORS.md` + `phase-1.md` + `CLAUDE.md` §4.1 to the
@@ -268,6 +278,25 @@ system-scope audit (Phase 2's cross-tenant KEK rotation must be auditable) will 
 
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
+
+### 2026-07-24 — C1 CLOSED · Phase 1 complete · 2/3/5 unblocked
+Round 3 (`a8aaa0e`) cleared its fresh-session review with **no CRITICAL/HIGH/MEDIUM findings** and
+an explicit **YES** on the primary question: the content vocabulary is complete for Phase 5's
+day-one needs — every ROADMAP:109 feed and every lab distro has a representable path, all six
+artifacts (entity, migration, snapshot, both schemas, `db/schema.sql`) agree, and no prior-round
+fix regressed. One LOW: Rocky/Alma-via-RHSA carries a per-rebuild-version precision caveat that is
+a **Phase 6 comparator** concern (revisit before assessment ships), not a vocabulary gap.
+
+**Actions taken:** dropped the `complete*` asterisk (Phase 1 → **complete**); marked C1
+**resolved**; set Phases 2/3/5 → **ready** and lifted the fan-out block. The C1 slice is three
+commits on `phase-1/c1-content-catalogue`: `37502b3` (scope + catalogue) → `953a2a5` (round-2
+remediation) → `a8aaa0e` (Debian DSA + sweep). **Not yet merged to `main`, not pushed.**
+
+**Next session:** (1) merge the branch to `main` per WORKFLOW.md §4 and re-run tests on `main`;
+(2) decide where **H1 (auth/RBAC)** lands — still on no phase, and Phase 12 needs it; (3) the cheap
+**M5/M8/M9** hardening for the 8 pre-existing tables; (4) start the **2/3/5 parallel fan-out**
+(level-3 dispatched worktrees, per WORKFLOW.md §2). Env prereqs unchanged (SAC off; `docker compose
+up -d`; apply `db/roles.sql` for the `patchmgmt_content` dev password).
 
 ### 2026-07-24 — C1 slice, round 3: Debian DSA + full vocabulary sweep
 A fresh-session review of the round-2 delta confirmed **no day-one amend for the seven named
