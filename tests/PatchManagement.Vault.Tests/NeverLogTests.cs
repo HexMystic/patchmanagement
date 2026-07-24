@@ -15,7 +15,10 @@ namespace PatchManagement.Vault.Tests;
 [Collection(PostgresCollection.Name)]
 public sealed class NeverLogTests(PostgresFixture fx)
 {
-    private static readonly Guid Tenant = Guid.NewGuid();
+    // Instance (not static) so each method gets its own tenant: with a shared collection-fixture DB
+    // and a fresh per-method KEK keyset, a shared tenant would let one method read a DEK another
+    // wrapped under a different keyset. See VaultRoundTripTests for the detail.
+    private readonly Guid Tenant = Guid.NewGuid();
 
     [Fact]
     public async Task No_secret_material_appears_in_emitted_logs()
@@ -45,5 +48,47 @@ public sealed class NeverLogTests(PostgresFixture fx)
         Assert.DoesNotContain(Convert.ToBase64String(secret), logs);
         Assert.DoesNotContain(Convert.ToHexString(secret), logs);
         Assert.DoesNotContain(Convert.ToHexString(secret).ToLowerInvariant(), logs);
+    }
+
+    /// <summary>
+    /// The ERROR path must leak nothing either (companion to the happy-path scan above). A real
+    /// credential is stored so a genuine secret is in the tenant's vault, then we resolve a
+    /// DIFFERENT, non-existent id to drive the not-found branch — which emits a warning log and
+    /// throws <see cref="KeyNotFoundException"/>. We scan BOTH the captured log body AND the thrown
+    /// exception object (message + stack) for the secret in every encoding. Asserts the invariant on
+    /// the error path rather than resting on code inspection.
+    /// </summary>
+    [Fact]
+    public async Task No_secret_material_leaks_on_the_not_found_error_path()
+    {
+        var harness = new VaultTestHarness(fx);
+        await harness.SeedTenantAsync(Tenant, "T");
+
+        var secret = Encoding.UTF8.GetBytes("NEVERLOG-ERR-" + Guid.NewGuid().ToString("N"));
+        const string username = "domain-admin";
+        using var capturing = new CapturingLoggerProvider();
+
+        await using var db = harness.AppContext(Tenant);
+
+        // A real secret genuinely lives in this tenant's vault (stored via a separate logger, so the
+        // capturing logger below sees ONLY the error path).
+        await harness.Provider(db, Tenant).StoreAsync(
+            new StoreCredentialRequest("present", CredentialKind.WindowsPassword, secret, username),
+            CancellationToken.None);
+
+        // Drive the not-found branch: resolve an id that does not exist for this tenant.
+        var vault = harness.Provider(db, Tenant, capturing.CreateLogger<VaultCredentialProvider>());
+        var missing = new CredentialRef(Guid.NewGuid());
+        var ex = await Assert.ThrowsAsync<KeyNotFoundException>(
+            () => vault.ResolveAsync(missing, CancellationToken.None));
+
+        // Scan the emitted warning AND the exception object (message + stack) together.
+        var errorBody = capturing.AllText + "\n" + ex;
+        Assert.NotEqual(string.Empty, capturing.AllText); // sanity: the error branch DID log (a warning)
+
+        Assert.DoesNotContain(Encoding.UTF8.GetString(secret), errorBody);
+        Assert.DoesNotContain(Convert.ToBase64String(secret), errorBody);
+        Assert.DoesNotContain(Convert.ToHexString(secret), errorBody);
+        Assert.DoesNotContain(Convert.ToHexString(secret).ToLowerInvariant(), errorBody);
     }
 }
