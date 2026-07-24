@@ -28,8 +28,15 @@ separate worktrees. **Phase 8 is solo.**
 | 9 | Health probes & auto-rollback | parallel | 8 | not-started |
 | 10 | Blast-radius dry run | parallel | 6, 8 | not-started |
 | 11 | Scheduling, notifications, reporting | parallel | 6 | not-started |
-| 12 | UI | parallel | 1 | not-started |
+| 12 | UI | parallel | 1, **14** | not-started |
 | 13 | Audit, compliance, evidence | parallel | 6 | not-started |
+| 14 | Identity & access (authN/authZ) | parallel | 1 | not-started |
+
+> **Numbering note.** Phase 14 (identity) is appended to avoid renumber churn, but the number is a
+> label, not a build-order rank — order is set by the *Depends on* column. Identity depends only on
+> Phase 1, so it can run in the **early parallel band** alongside 2/3/5; it **must complete before
+> Phase 12** (the UI cannot ship on a caller-supplied `X-Tenant-Id` header). It resolves review
+> finding **H1**.
 
 **Phase 1 is complete** (amended scope — see C1 below). The C1 slice (`37502b3` → `953a2a5` →
 `a8aaa0e`) **resolved C1 and closed H2, H3, H4**, and cleared three independent fresh-session
@@ -37,10 +44,10 @@ reviews against `docs/reviews/phase-1-review.md` — the last confirming the con
 complete for Phase 5's day-one needs. **Phases 2, 3, and 5 are now unblocked** (the first
 parallel fan-out; see WORKFLOW.md).
 
-**Still open from the review — tracked, none blocking the 2/3/5 fan-out:** **H1** (no auth/RBAC on
-any phase — the *next decision*, and a hard prerequisite for Phase 12), **H5** (OpenAPI freeze
-inversion), **M1** (a Phase-6-entry decision), **M5**, and **M8/M9 for the 8 pre-existing tables**.
-The cheap M5/M8/M9 hardening can ride alongside the fan-out or as its own slice.
+**Still open from the review — tracked, none blocking the 2/3/5 fan-out:** **H1** is now **placed**
+as **Phase 14 (Identity & access)** — a prerequisite of Phase 12, not yet built; **H5** (OpenAPI
+freeze inversion), **M1** (a Phase-6-entry decision), **M5**, and **M8/M9 for the 8 pre-existing
+tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or as its own slice.
 
 ---
 
@@ -185,7 +192,9 @@ The cheap M5/M8/M9 hardening can ride alongside the fan-out or as its own slice.
 ## Phase 12 — UI  · parallel · Status: not-started
 - **Goal:** Operator console.
 - **Dependencies:** Phase 1 (contracts) — builds against OpenAPI; integrates with
-  later modules as they land.
+  later modules as they land. **Phase 14 (identity)** — the console authenticates
+  operators and derives the tenant from their claims, so it cannot start against the
+  dev-only header resolver.
 - **Exit criteria:** React + TS + MUI app; SignalR live updates; explainable risk &
   blast-radius surfaced; never displays raw credentials.
 - **Owned paths:** `/web`.
@@ -201,6 +210,35 @@ The cheap M5/M8/M9 hardening can ride alongside the fan-out or as its own slice.
 - **Exit criteria:** Append-only audit of every privileged action; evidence bundles
   for verified patches; compliance exports; credentials never appear in any record.
 - **Owned paths:** `src/Modules/Audit`.
+
+## Phase 14 — Identity & access (authN/authZ)  · parallel · Status: not-started
+- **Goal:** Replace the dev-only `X-Tenant-Id` header with real authentication: operators
+  log in, receive a session/token, and the **tenant is derived from their claims** — closing
+  review **H1** (today the isolation boundary is "the caller promises who they are").
+- **Dependencies:** Phase 1 (the `operators` table with `role`/`external_auth_ref`, and the
+  tenant-resolution seam already isolated behind `HeaderTenantResolver`, exist). Independent of
+  the Phase 2/3/5 module work — parallel-safe.
+- **Why it's needed / who consumes it:** Phase 12 (UI) hard-depends on it. Every phase benefits:
+  the header resolver is a known dev-only stand-in.
+- **Exit criteria:**
+  - Operator authentication (local credential and/or federated via `operators.external_auth_ref`);
+    sessions/tokens issued and validated; logout/expiry.
+  - A **claims-based tenant resolver** replacing `HeaderTenantResolver` on the request path, wired
+    into the same `TenantContextAccessor` seam the RLS interceptor already reads — so RLS is
+    unchanged, only the *source* of the tenant id moves from a header to a verified claim.
+  - **RBAC** driven by `operators.role`: authorization checks on privileged operations (the
+    endpoints that touch credentials, deployments, exceptions).
+  - Any new tables (sessions, role assignments, refresh tokens) **follow the frozen tenancy
+    convention** — `tenant_id` + ENABLE/FORCE RLS + `tenant_isolation` policy + grants — which
+    `RlsConventionTests` (H4) now enforces automatically. Decide up front whether an operator is
+    tenant-scoped or a cross-tenant admin; the latter needs an explicit, audited system-scope path
+    (see review **M4/M6** — the same "off the HTTP path / system-scope" gap).
+  - **Failed logins are audited** via the Phase-1 `IAuditLog` — which needs the **M4 system-scope
+    audit** fix (no tenant yet at login time), so M4 should land with or before this phase.
+- **Owned paths:** `src/Modules/Identity`, plus the tenant-resolver swap in `src/Host/Api`.
+- **Note — dev posture unchanged until this lands:** `HeaderTenantResolver` stays for local/dev and
+  the lab; this phase supplies the production resolver. The guardrail (`.claude/`) and lab-only
+  constraint are unaffected.
 
 ---
 
@@ -247,7 +285,7 @@ approved decision — the real gap was that `DIFFERENTIATORS.md`'s gate wasn't a
 ### High
 | # | Finding | Where it should land | Status |
 |---|---------|----------------------|--------|
-| H1 | **No authN/authZ anywhere on the roadmap** — tenancy is a caller-supplied `X-Tenant-Id` header; `operators.role`/`external_auth_ref` are never populated | Needs a **new phase** (operator login, tenant claims, RBAC) **before Phase 12** | **OPEN — next decision** |
+| H1 | **No authN/authZ anywhere on the roadmap** — tenancy is a caller-supplied `X-Tenant-Id` header; `operators.role`/`external_auth_ref` are never populated | **PLACED** as **Phase 14 — Identity & access** (parallel; depends on 1; prerequisite of 12). Not yet built. | placed 2026-07-24 |
 | H2 | `advisory.schema.json` is closed (`additionalProperties:false`) and cannot carry KEV/EPSS/CVSS provenance; `severity` has no `unknown`; no **patch** schema at all | Phase 1 amend / Phase 5 | closed by C1 slice |
 | H3 | **Zero foreign keys** — incl. no `tenant_id → tenants(id)`; permits cross-tenant dangling refs and phantom tenants. Wants composite `(tenant_id, id)` FKs + `UNIQUE (tenant_id, id)` parents | Phase 1 (cheap now) | closed by C1 slice |
 | H4 | **No test enforces the RLS convention** on tables later phases add (ENABLE+FORCE+policy+grants); no `ALTER DEFAULT PRIVILEGES` | Phase 1 (`pg_class`/`pg_policies` test) | closed by C1 slice (`RlsConventionTests`) |
