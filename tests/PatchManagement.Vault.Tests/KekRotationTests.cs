@@ -15,8 +15,10 @@ namespace PatchManagement.Vault.Tests;
 [Collection(PostgresCollection.Name)]
 public sealed class KekRotationTests(PostgresFixture fx)
 {
-    private static readonly Guid TenantA = Guid.NewGuid();
-    private static readonly Guid TenantB = Guid.NewGuid();
+    // Instance (not static) — one tenant set per method, so a DEK is never shared across methods
+    // whose harnesses hold different in-memory KEK keysets. See VaultRoundTripTests for the detail.
+    private readonly Guid TenantA = Guid.NewGuid();
+    private readonly Guid TenantB = Guid.NewGuid();
 
     [Fact]
     public async Task Rotation_rewraps_deks_without_reencrypting_credentials()

@@ -15,8 +15,13 @@ namespace PatchManagement.Vault.Tests;
 [Collection(PostgresCollection.Name)]
 public sealed class VaultRoundTripTests(PostgresFixture fx)
 {
-    private static readonly Guid TenantA = Guid.NewGuid();
-    private static readonly Guid TenantB = Guid.NewGuid();
+    // Instance (not static): xUnit builds a fresh test-class instance per method, so each method
+    // gets its OWN tenant. The DB is a shared collection fixture but each method builds its own
+    // harness with a fresh in-memory KEK keyset — a static tenant would let method B read a DEK
+    // method A wrapped under a DIFFERENT keyset, which cannot unwrap. Per-method tenants mirror
+    // production (one stable KEK, many tenants) and keep each round-trip within one keyset.
+    private readonly Guid TenantA = Guid.NewGuid();
+    private readonly Guid TenantB = Guid.NewGuid();
 
     [Fact]
     public async Task Software_provider_round_trips_a_credential()
