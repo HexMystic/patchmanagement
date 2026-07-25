@@ -45,6 +45,16 @@ Selected via `VAULT_KEY_PROVIDER`. See `docs/adr/0002-key-provider.md`.
   updates `dek.key_id`, retires the old version. **No credential row is touched.**
 - DEKs carry `key_id` so unwrap always selects the right KEK version → zero-downtime
   rotation.
+- **Tenancy** — rotation runs off the HTTP path, where nothing sets a tenant. It sweeps
+  tenants one at a time via `ITenantScopeFactory`, each scope under the ordinary
+  restricted role with RLS enforced; there is no maintenance context and no elevated
+  role ([ADR 0014](../adr/0014-system-tenancy-scope.md), review C1).
+- **Isolation** — each DEK re-wraps in its own try/catch, so a corrupt or relocated row
+  fails alone and is reported in `KekRotationResult.Failures` rather than aborting the
+  sweep. Each tenant saves and audits in its own scope, so no transaction spans the estate.
+- **Resumability** — `CompleteRotationAsync` converges stragglers onto the *existing*
+  current version without minting a new one. Retrying `RotateAsync` would mint a key per
+  attempt; use it to start a rotation, `CompleteRotationAsync` to finish a partial one.
 
 ## Invariants (with tests that prove them)
 - **Decryption is in-memory only.** Plaintext lives in a pinned buffer, zeroed after

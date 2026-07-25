@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using PatchManagement.Contracts.Auditing;
@@ -75,8 +77,31 @@ public sealed class VaultTestHarness
             logger ?? NullLogger<VaultCredentialProvider>.Instance);
     }
 
-    /// <summary>Build the cross-tenant rotation service over an owner context.</summary>
-    public KekRotationService Rotation(AppDbContext ownerDb, IAuditLog? audit = null) =>
-        new(ownerDb, KeyProvider, audit ?? new EfAuditLog(ownerDb), new SystemVaultActor(),
-            NullLogger<KekRotationService>.Instance);
+    /// <summary>
+    /// A container wired the way the HOST wires it — app-role connection string, RLS interceptor,
+    /// the real module registrations — sharing this collection's KEK keyset.
+    ///
+    /// <para>Rotation is resolved from here rather than hand-built over an owner context. The old
+    /// harness handed it a superuser context that no production wiring produces, which is exactly
+    /// what hid review C1: the algorithm passed while the shipped service rotated nothing.</para>
+    /// </summary>
+    public ServiceProvider HostLikeContainer()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:App"] = _fx.AppConnectionString,
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPersistence(configuration);
+        services.AddVaultModule(configuration);
+
+        // Share the collection's keyset; otherwise this container mints its own and writes a key file.
+        services.AddSingleton<IKeyProvider>(KeyProvider);
+
+        return services.BuildServiceProvider();
+    }
 }

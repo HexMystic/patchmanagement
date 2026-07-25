@@ -52,7 +52,10 @@ public static class VaultModule
         services.AddScoped<ICredentialProvider>(sp => sp.GetRequiredService<VaultCredentialProvider>());
         services.AddScoped<ICredentialVault>(sp => sp.GetRequiredService<VaultCredentialProvider>());
 
-        services.AddScoped<IKekRotationService, KekRotationService>();
+        // Singleton, not scoped: it runs off the HTTP path and CREATES its own per-tenant scopes via
+        // ITenantScopeFactory, so a background job resolves it from the root with no ceremony. Being
+        // scoped against the request-path context is what made it silently rotate nothing (review C1).
+        services.AddSingleton<IKekRotationService, KekRotationService>();
 
         return services;
     }

@@ -327,7 +327,7 @@ Full detail in [`docs/reviews/phase-2-review.md`](reviews/phase-2-review.md) (re
 ### Critical
 | # | Finding | Where it should land | Status |
 |---|---------|----------------------|--------|
-| C1 | **Rotation runs under RLS in production DI and silently rotates nothing** — registered on the app-role context; off the HTTP path the DEK query returns zero rows and it reports success. Same root as `M6` | Phase 2 — needs the sanctioned off-HTTP tenancy pattern `M6` asks for | OPEN |
+| C1 | **Rotation runs under RLS in production DI and silently rotates nothing** — registered on the app-role context; off the HTTP path the DEK query returns zero rows and it reports success. Same root as `M6` | Phase 2 — sanctioned system tenancy scope ([ADR 0014](adr/0014-system-tenancy-scope.md)) | RESOLVED |
 | C2 | Two processes sharing the KEK file overwrite each other's versions — permanent, unrecoverable data loss | Phase 2 (key custody) | OPEN |
 | C3 | KEK file renamed into place without fsync — a crash can leave a zero-length `kek.json`, losing every credential | Phase 2 (key custody) | OPEN |
 | C4 | A new KEK becomes in-memory `current` before it is durably persisted; no rollback if the save fails | Phase 2 (key custody) | OPEN |
@@ -361,9 +361,11 @@ while `Register()` has no runtime caller).
 the module never loaded in the shipped host — several findings were latent only because of it
 (`a50d9ec`).
 
-**M6 is now load-bearing, not theoretical.** C1 is its first concrete casualty: Phase 2 shipped a
-cross-tenant service straight into the fail-closed hole. The pattern M6 asks for must land with the
-C1 fix, and Phases 8 and 11 should consume it rather than invent their own. Phase 5 stays
+**M6 — RESOLVED for the tenant-scoped flavour.** C1 was its first concrete casualty: Phase 2
+shipped a cross-tenant service straight into the fail-closed hole. The sanctioned pattern now
+exists — `ITenantScopeFactory`, cross-tenant work as a sweep of ordinary per-tenant scopes with
+RLS still enforced and no elevated role ([ADR 0014](adr/0014-system-tenancy-scope.md)). **Phases 8
+(wave execution) and 11 (schedules) should consume it rather than invent their own.** Phase 5 stays
 role-based and tenant-neutral per ADR 0010 and does not need it.
 
 ---

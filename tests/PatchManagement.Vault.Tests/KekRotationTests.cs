@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using PatchManagement.Contracts.Credentials;
 using PatchManagement.Vault.Services;
 using PatchManagement.Vault.Tests.Support;
@@ -42,17 +43,18 @@ public sealed class KekRotationTests(PostgresFixture fx)
         var (envelopesBefore, deksBefore) = await SnapshotAsync(harness);
         var oldKeyId = await harness.KeyProvider.GetCurrentKeyIdAsync(CancellationToken.None);
 
-        // Rotate (cross-tenant, owner context).
+        // Rotate through the real DI container — app role, RLS enforced, no owner context.
         KekRotationResult result;
-        await using (var owner = harness.OwnerContext())
-            result = await harness.Rotation(owner).RotateAsync(CancellationToken.None);
+        using (var provider = harness.HostLikeContainer())
+            result = await provider.GetRequiredService<IKekRotationService>().RotateAsync(CancellationToken.None);
 
         var (envelopesAfter, deksAfter) = await SnapshotAsync(harness);
 
         // 1. A new KEK version, all DEKs re-wrapped, ZERO credentials re-encrypted.
-        Assert.NotEqual(oldKeyId, result.NewKeyId);
+        Assert.NotEqual(oldKeyId, result.KeyId);
         Assert.Equal(0, result.CredentialsReencrypted);
         Assert.True(result.DeksRewrapped >= 2);
+        Assert.True(result.Complete, $"rotation was partial: {string.Join("; ", result.Failures.Select(f => f.Reason))}");
 
         // 2. Credential envelopes are byte-for-byte UNCHANGED.
         foreach (var (id, before) in envelopesBefore)
@@ -61,7 +63,7 @@ public sealed class KekRotationTests(PostgresFixture fx)
         // 3. Every DEK now carries the new key id and different wrapped bytes.
         foreach (var (id, before) in deksBefore)
         {
-            Assert.Equal(result.NewKeyId, deksAfter[id].KeyId);
+            Assert.Equal(result.KeyId, deksAfter[id].KeyId);
             Assert.NotEqual(oldKeyId, deksAfter[id].KeyId);
             Assert.False(before.Wrapped.SequenceEqual(deksAfter[id].Wrapped),
                 "the wrapped DEK bytes must change after a re-wrap");
