@@ -69,7 +69,14 @@ public static class VaultModule
             case "keyfile":
                 var path = configuration["VAULT_SOFTWARE_KEK_FILE"]
                     ?? Path.Combine(AppContext.BaseDirectory, "vault", "kek.json");
-                services.AddSingleton<IKekSource>(_ => new KeyFileKekSource(path));
+
+                // Opt-in, default OFF. An absent key store is far more often a lost mount or a wrong
+                // path than a genuine first boot, and the two are indistinguishable — so initializing
+                // is a deliberate act, once (re-review CR-1, ADR 0015).
+                var allowInitialize =
+                    bool.TryParse(configuration["VAULT_SOFTWARE_KEK_INIT"], out var init) && init;
+
+                services.AddSingleton<IKekSource>(_ => new KeyFileKekSource(path, allowInitialize));
                 break;
             case "operator":
             case "tpm":

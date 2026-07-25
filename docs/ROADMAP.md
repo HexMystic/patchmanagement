@@ -395,6 +395,27 @@ a phase, these are parked as **Phase 2 hardening** — which satisfies `DIFFEREN
 recurs: ADR 0009's glibc production-pinning carry-over has the same problem. Naming an owner for
 logging/telemetry and deployment packaging is a decision someone still has to make.
 
+### Phase 2 re-review (pre-merge gate) — three criticals fixed, the rest OPEN
+
+A fresh-session re-review of the remediated vault at `c557c41` found **2 critical + 9 high**, two of
+them regressions the remediation itself introduced. The three merge-blocking ones are fixed:
+
+| # | Finding | Status |
+|---|---------|--------|
+| CR-1 | **A rotation with the key file absent discarded every KEK version and reported success** — `ReadOrCreateAsync` treated absence as first boot. A regression: removing `SaveAsync` turned the self-healing path into the destruction path | RESOLVED — absence is an error; initialization is opt-in ([ADR 0015](adr/0015-kek-file-durability.md) amendment) |
+| C-A | **`CompleteRotationAsync` read the target from a stale cache**, so a non-rotating process could re-wrap the estate back onto a superseded KEK and report `Complete` | RESOLVED — `RefreshCurrentKeyIdAsync` reads under the lock ([ADR 0014](adr/0014-system-tenancy-scope.md) amendment). Window bounded to one sweep, not eliminated |
+| H-A | **`Complete` ignored tenant-level failures** — C1's "failed but reported success" one layer up | RESOLVED — `KekRotationResult.TenantFailures`; `Complete` requires both lists empty |
+
+**Still OPEN and NOT yet dispositioned** — the remaining re-review findings: H-1 (`KekKeyset` is
+shallow; `Snapshot()` and `Get()` hand out live KEK arrays while the docs claim a copy), H-2
+(`LoadAsync` taking the lock made the read path require write access, breaking a read-only key
+mount), H-3 (a throwing directory fsync reports failure after the rename committed), H-B (audit
+skipped while the re-wrap is committed), H-C (`attempted--` misreports a committed tenant), H-D (the
+"no elevation" claim holds at the database layer but is overstated at the application layer), the
+documentation-accuracy findings, and the medium cluster including **M-1: the concurrency test does
+not actually test concurrency** (`Task.WhenAll` over two synchronously-completing calls) and **M-2:
+nothing tests durability**. A full disposition of the re-review is a separate task.
+
 ### Exit criteria — status at `8dcf349`
 Gates merge (CLAUDE.md §6: no phase is done until its exit criteria are met and its tests pass).
 

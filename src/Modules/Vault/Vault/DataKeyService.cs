@@ -33,7 +33,10 @@ public sealed class DataKeyService(AppDbContext db, IKeyProvider keyProvider, IT
             .FirstOrDefaultAsync(ct);
         if (existing is not null) return existing;
 
-        var keyId = await keyProvider.GetCurrentKeyIdAsync(ct);
+        // Authoritative, not cached: a process that did not perform the last rotation would otherwise
+        // seal this DEK under a superseded KEK version, stranding it after a restart (re-review C-A).
+        // DEK creation is once per tenant, so the extra read is cheap.
+        var keyId = await keyProvider.RefreshCurrentKeyIdAsync(ct);
 
         // The row id is minted BEFORE the wrap so it can be bound into the ciphertext (ADR 0013).
         // Client-generated either way — there is no database default — so this changes nothing else.

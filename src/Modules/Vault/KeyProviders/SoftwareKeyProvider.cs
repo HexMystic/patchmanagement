@@ -29,6 +29,17 @@ public sealed class SoftwareKeyProvider(IKekSource source) : IKeyProvider
         return keyset.CurrentKeyId;
     }
 
+    public async Task<string> RefreshCurrentKeyIdAsync(CancellationToken ct)
+    {
+        // Cold start first, so a genuine first boot still initializes; then re-read the store, which
+        // takes the same exclusive lock the write path uses. Without this a process that did not
+        // rotate would keep answering with the key it happens to remember — and converge the estate
+        // onto a superseded version (re-review C-A).
+        await EnsureLoadedAsync(ct);
+        var fresh = await ReloadAsync(ct);
+        return fresh.CurrentKeyId;
+    }
+
     public async Task<byte[]> WrapAsync(byte[] dek, string keyId, KeyBinding binding, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(dek);
@@ -86,7 +97,10 @@ public sealed class SoftwareKeyProvider(IKekSource source) : IKeyProvider
         await _gate.WaitAsync(ct);
         try
         {
-            var fresh = await source.LoadAsync(ct);
+            // ReadAsync, never LoadOrInitializeAsync: this runs mid-flight, typically while trying to
+            // unwrap existing ciphertext. Initializing here could not possibly produce the key being
+            // sought, and would overwrite the real store on its way to failing (CR-1).
+            var fresh = await source.ReadAsync(ct);
             _keyset = fresh;
             return fresh;
         }
@@ -104,7 +118,8 @@ public sealed class SoftwareKeyProvider(IKekSource source) : IKeyProvider
         await _gate.WaitAsync(ct);
         try
         {
-            return _keyset ??= await source.LoadAsync(ct);
+            // The one place initialization is permissible — and only if the source allows it.
+            return _keyset ??= await source.LoadOrInitializeAsync(ct);
         }
         finally
         {

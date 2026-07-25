@@ -12,7 +12,10 @@ public sealed class InMemoryKekSource : IKekSource
     private readonly SemaphoreSlim _gate = new(1, 1);
     private KekKeyset _keyset = KekKeyset.CreateNew();
 
-    public Task<KekKeyset> LoadAsync(CancellationToken ct) => Task.FromResult(_keyset);
+    /// <summary>Always initialized at construction, so both read paths behave identically here.</summary>
+    public Task<KekKeyset> LoadOrInitializeAsync(CancellationToken ct) => Task.FromResult(_keyset);
+
+    public Task<KekKeyset> ReadAsync(CancellationToken ct) => Task.FromResult(_keyset);
 
     /// <summary>Serialized like the real source, so concurrent callers cannot lose a version.</summary>
     public async Task<KekKeyset> AddVersionAsync(CancellationToken ct)

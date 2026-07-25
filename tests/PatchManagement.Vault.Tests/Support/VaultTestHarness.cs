@@ -21,9 +21,9 @@ namespace PatchManagement.Vault.Tests.Support;
 /// </summary>
 public sealed class VaultTestHarness
 {
-    private readonly PostgresFixture _fx;
+    private readonly IVaultDatabaseFixture _fx;
 
-    public VaultTestHarness(PostgresFixture fx, IKeyProvider? keyProvider = null)
+    public VaultTestHarness(IVaultDatabaseFixture fx, IKeyProvider? keyProvider = null)
     {
         _fx = fx;
         // Defaults to the fixture's collection-wide keyset, not a fresh one: cross-tenant KEK
@@ -85,7 +85,7 @@ public sealed class VaultTestHarness
     /// harness handed it a superuser context that no production wiring produces, which is exactly
     /// what hid review C1: the algorithm passed while the shipped service rotated nothing.</para>
     /// </summary>
-    public ServiceProvider HostLikeContainer()
+    public ServiceProvider HostLikeContainer(IKeyProvider? keyProvider = null)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -99,8 +99,10 @@ public sealed class VaultTestHarness
         services.AddPersistence(configuration);
         services.AddVaultModule(configuration);
 
-        // Share the collection's keyset; otherwise this container mints its own and writes a key file.
-        services.AddSingleton<IKeyProvider>(KeyProvider);
+        // Share the collection's keyset by default; otherwise this container mints its own and writes
+        // a key file. A test may pass its own provider — e.g. one over a real KeyFileKekSource — but
+        // only when its database is isolated, because a sweep visits EVERY tenant in the database.
+        services.AddSingleton<IKeyProvider>(keyProvider ?? KeyProvider);
 
         return services.BuildServiceProvider();
     }

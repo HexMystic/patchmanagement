@@ -15,6 +15,7 @@ public sealed class AwsKmsKeyProvider : IKeyProvider
         "software provider, or implement the KMS Encrypt/Decrypt calls.";
 
     public Task<string> GetCurrentKeyIdAsync(CancellationToken ct) => throw new NotImplementedException(NotImplemented);
+    public Task<string> RefreshCurrentKeyIdAsync(CancellationToken ct) => throw new NotImplementedException(NotImplemented);
     public Task<byte[]> WrapAsync(byte[] dek, string keyId, KeyBinding binding, CancellationToken ct) => throw new NotImplementedException(NotImplemented);
     public Task<byte[]> UnwrapAsync(byte[] wrappedDek, string keyId, KeyBinding binding, CancellationToken ct) => throw new NotImplementedException(NotImplemented);
     public Task<string> RotateMasterKeyAsync(CancellationToken ct) => throw new NotImplementedException(NotImplemented);

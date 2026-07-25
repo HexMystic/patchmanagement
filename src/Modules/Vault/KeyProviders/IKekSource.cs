@@ -22,8 +22,24 @@ namespace PatchManagement.Vault.KeyProviders;
 /// </summary>
 public interface IKekSource
 {
-    /// <summary>Load the KEK keyset, creating an initial one if the store is empty (first boot).</summary>
-    Task<KekKeyset> LoadAsync(CancellationToken ct);
+    /// <summary>
+    /// Cold start ONLY. Reads the keyset, and may INITIALIZE an empty store — but only if the
+    /// implementation is configured to allow it.
+    ///
+    /// <para>Initialization is opt-in because a store that is merely unreachable — an unmounted
+    /// volume, a mistyped path, a changed working directory — is indistinguishable from a genuinely
+    /// empty one. Minting a fresh KEK in that moment silently bifurcates the key hierarchy: every
+    /// pre-existing DEK becomes unopenable while new ones are sealed under a key the estate has
+    /// never seen. Absence must therefore be an error unless an operator has said otherwise
+    /// (re-review CR-1, ADR 0015).</para>
+    /// </summary>
+    Task<KekKeyset> LoadOrInitializeAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Read the existing keyset. Absence is ALWAYS an error here — this never creates, whatever the
+    /// implementation is configured to allow. Use this everywhere except cold start.
+    /// </summary>
+    Task<KekKeyset> ReadAsync(CancellationToken ct);
 
     /// <summary>
     /// Atomically add a freshly generated KEK version, make it current, and return the resulting
@@ -34,6 +50,9 @@ public interface IKekSource
     /// caller treats the returned keyset as authoritative and will immediately wrap data under its
     /// current version, so a version that is live in memory but absent from the store is
     /// unrecoverable data loss (review C4).</para>
+    ///
+    /// <para>An absent store is an ERROR here, never an invitation to initialize: a rotation that
+    /// mints a fresh keyset discards every version it was supposed to carry forward (CR-1).</para>
     /// </summary>
     Task<KekKeyset> AddVersionAsync(CancellationToken ct);
 

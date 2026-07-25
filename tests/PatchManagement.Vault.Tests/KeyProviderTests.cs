@@ -78,7 +78,7 @@ public sealed class KeyProviderTests
         var path = Path.Combine(dir, "kek.json");
         try
         {
-            var provider1 = new SoftwareKeyProvider(new KeyFileKekSource(path));
+            var provider1 = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
             var keyId = await provider1.GetCurrentKeyIdAsync(Ct); // first boot creates the file
             var dek = RandomNumberGenerator.GetBytes(32);
             var binding = Binding();
@@ -87,7 +87,7 @@ public sealed class KeyProviderTests
             Assert.True(File.Exists(path));
 
             // A fresh provider reading the same file (simulating a restart) unwraps what the first wrote.
-            var provider2 = new SoftwareKeyProvider(new KeyFileKekSource(path));
+            var provider2 = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
             Assert.Equal(keyId, await provider2.GetCurrentKeyIdAsync(Ct));
             Assert.Equal(dek, await provider2.UnwrapAsync(wrapped, keyId, binding, Ct));
         }
@@ -104,11 +104,11 @@ public sealed class KeyProviderTests
         var path = Path.Combine(dir, "kek.json");
         try
         {
-            var provider1 = new SoftwareKeyProvider(new KeyFileKekSource(path));
+            var provider1 = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
             await provider1.GetCurrentKeyIdAsync(Ct);
             var newKeyId = await provider1.RotateMasterKeyAsync(Ct);
 
-            var provider2 = new SoftwareKeyProvider(new KeyFileKekSource(path));
+            var provider2 = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
             Assert.Equal(newKeyId, await provider2.GetCurrentKeyIdAsync(Ct));
         }
         finally

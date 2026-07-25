@@ -13,7 +13,7 @@ namespace PatchManagement.Vault.Tests.Support;
 /// connection (bypasses RLS — for seeding + cross-tenant KEK rotation) and the restricted app-role
 /// connection (RLS enforced — for per-tenant store/resolve).
 /// </summary>
-public sealed class PostgresFixture : IAsyncLifetime
+public sealed class PostgresFixture : IAsyncLifetime, IVaultDatabaseFixture
 {
     private const string Host = "localhost";
     private const int Port = 5432;
@@ -38,7 +38,16 @@ public sealed class PostgresFixture : IAsyncLifetime
     /// "No KEK version ... is loaded". A shared keyset makes every DEK in the shared database
     /// unwrappable by any test, which is the only self-consistent arrangement here.</para>
     /// </summary>
-    public IKeyProvider SharedKeyProvider { get; } = new SoftwareKeyProvider(new InMemoryKekSource());
+    public IKeyProvider SharedKeyProvider { get; }
+
+    /// <summary>
+    /// The store behind <see cref="SharedKeyProvider"/>. Exposed so a test can build a SECOND
+    /// provider over the same store — two providers sharing one store is how a stale cache is
+    /// reproduced, and sharing the store keeps every DEK in the database unwrappable by both.
+    /// </summary>
+    public InMemoryKekSource SharedKekSource { get; } = new();
+
+    public PostgresFixture() => SharedKeyProvider = new SoftwareKeyProvider(SharedKekSource);
 
     private static string Conn(string database, string user, string password) =>
         $"Host={Host};Port={Port};Database={database};Username={user};Password={password}";

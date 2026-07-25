@@ -1,6 +1,6 @@
 # 14. Cross-tenant background work is a sweep of per-tenant scopes, not an elevated context
 
-- **Status:** Accepted
+- **Status:** Accepted — **amended 2026-07-25 (re-review C-A, H-A)**, see the amendment below
 - **Date:** 2026-07-25
 - **Amends:** nothing — this fills the gap Phase-1 review **M6** left open
 - **Context:** Phase 2 review **C1**; Phase-1 review **M6**
@@ -72,6 +72,31 @@ incremental if that changes.
 otherwise stay under a compromised KEK, defeating the purpose of a post-breach rotation.
 `tenants.status` has no CHECK constraint (only `'active'` is ever observed), so filtering on
 it would be guesswork as well as unsafe.
+
+## Amendment 2026-07-25 — two defects in the rotation this ADR introduced
+
+**C-A: the convergence target must be read authoritatively.** `CompleteRotationAsync` took its target
+from the cached current key id, refreshed only on a lookup miss. A process that did not perform the
+rotation would therefore converge `WHERE key_id != <remembered>` — which matches every DEK another
+process already moved forward — and re-wrap the estate **backwards** onto the superseded version,
+reporting `Complete = true`. After a breach that silently restores the compromised key.
+
+`IKeyProvider` gains `RefreshCurrentKeyIdAsync`, which re-reads the store under the same exclusive
+lock the write path uses. `CompleteRotationAsync` uses it, and so does
+`DataKeyService.GetOrCreateActiveAsync` — same root cause, since a non-rotating process would
+otherwise seal *new* DEKs under a superseded version until restart.
+
+**Bounded, not eliminated.** The target is authoritative at read time, but the sweep spans many
+transactions afterwards, so a rotation by another process mid-sweep still leaves this one converging
+onto a now-stale target. That is recoverable by re-running. The window shrinks from "the process
+lifetime" to "one sweep"; it is not zero.
+
+**H-A: `Complete` must reflect tenant failures.** `ConvergeAsync` built its result from the per-DEK
+failure list and never read `sweep.Failures`. Anything throwing outside the inner try — the DEK
+query, the save, the audit append — was recorded as a tenant failure, discarded, and the rotation
+reported `Complete = true` with tenants **not rotated at all**. That is the failure this ADR's own C1
+fix existed to remove, reappearing one layer up. `KekRotationResult` now carries `TenantFailures`, and
+`Complete` requires both failure lists empty.
 
 ## Consequences
 

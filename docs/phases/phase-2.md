@@ -57,6 +57,12 @@ Selected via `VAULT_KEY_PROVIDER`. See `docs/adr/0002-key-provider.md`.
   never destructive), then flush-to-disk → atomic rename → directory fsync. It returns only
   once durable, and the in-memory keyset — immutable — is republished by reference swap only
   after that ([ADR 0015](../adr/0015-kek-file-durability.md), review C2/C3/C4).
+- **An absent key store is an error, never first boot.** Only cold start may initialize, and only
+  with `VAULT_SOFTWARE_KEK_INIT=true` — set once at first boot and unset again. Rotation and reload
+  refuse outright: a missing store is usually a lost mount, and minting a KEK there strands every
+  existing credential (re-review CR-1).
+- **The convergence target is read authoritatively**, not from the process cache, so a host that did
+  not perform the rotation cannot converge the estate backwards onto a superseded KEK (re-review C-A).
 - **Resumability** — `CompleteRotationAsync` converges stragglers onto the *existing*
   current version without minting a new one. Retrying `RotateAsync` would mint a key per
   attempt; use it to start a rotation, `CompleteRotationAsync` to finish a partial one.

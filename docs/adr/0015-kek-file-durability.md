@@ -1,6 +1,6 @@
 # 15. The KEK key file is written durably, atomically, and under a cross-process lock
 
-- **Status:** Accepted
+- **Status:** Accepted — **amended 2026-07-25 (re-review CR-1)**, see "Absence is an error" below
 - **Date:** 2026-07-25
 - **Amends:** the `IKekSource` shape (removes `SaveAsync`) and makes `KekKeyset` immutable
 - **Context:** Phase 2 review **C2**, **C3**, **C4** (and, inseparably, **H2** and **H6**)
@@ -72,6 +72,36 @@ material is a poor trade for three calls with no pointer arguments.
 durable. `SoftwareKeyProvider` then swaps its cached reference — a single assignment of an
 immutable value. If the write throws, the cache is untouched, so nothing can be wrapped
 under a version that is not on disk.
+
+### Absence is an error; initialization is opt-in (amendment, re-review CR-1)
+
+The original decision above — "re-read the keyset FROM DISK, never from a cache" — was right about
+staleness and **wrong about absence**. `ReadOrCreateAsync` treated a missing file as first boot, so a
+rotation whose key file had vanished durably replaced the entire keyset with one fresh key and
+reported success, bricking every DEK. Removing `SaveAsync` is what made this unrecoverable: the old
+"load, mutate, save" path rewrote every version from a warm cache, so a vanished file was
+self-healing. **The recovery path became the destruction path.**
+
+Creation was reachable from three call sites, not one. The worst was `ReloadAsync`, which fires on a
+cache miss *while unwrapping existing ciphertext* — it cannot possibly produce the key being sought,
+and it overwrote the real store on its way to failing.
+
+So:
+
+- `IKekSource` splits the intents. `LoadOrInitializeAsync` is cold start only and may create;
+  `ReadAsync` never creates and treats absence as an error; `AddVersionAsync` reads through the
+  absence-is-fatal path.
+- `KeyFileKekSource` takes `allowInitialize` (default **false**), set from `VAULT_SOFTWARE_KEK_INIT`.
+  It gates cold start only — `ReadAsync` and `AddVersionAsync` ignore it entirely.
+- The refusal message is deliberately actionable: it names the resolved path, says how to initialize,
+  and warns that initializing when credentials already exist makes them unrecoverable.
+
+**Why opt-in rather than "create at cold start only".** An absent store is indistinguishable from an
+unreachable one — an unmounted volume, a wrong path, a changed working directory — and after first
+boot the second is far more likely. Minting a KEK in that moment silently bifurcates the key
+hierarchy: pre-existing DEKs become unopenable while new ones are sealed under a key the estate has
+never seen. That cost is unbounded and unrecoverable; the cost of requiring one deliberate act at
+first boot is a documented step.
 
 ### `KekKeyset` becomes immutable
 

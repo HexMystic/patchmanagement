@@ -26,7 +26,7 @@ public sealed class KeyFileDurabilityTests
         try
         {
             var path = Path.Combine(dir, "kek.json");
-            var provider = new SoftwareKeyProvider(new KeyFileKekSource(path));
+            var provider = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
 
             var originalKeyId = await provider.GetCurrentKeyIdAsync(Ct); // first boot writes the file
             var dek = RandomNumberGenerator.GetBytes(32);
@@ -45,7 +45,7 @@ public sealed class KeyFileDurabilityTests
             // C3: the only durable copy of the KEK is untouched, and still yields every version.
             Assert.Equal(fileBefore, await File.ReadAllBytesAsync(path, Ct));
 
-            var restarted = new SoftwareKeyProvider(new KeyFileKekSource(path));
+            var restarted = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
             Assert.Equal(originalKeyId, await restarted.GetCurrentKeyIdAsync(Ct));
             Assert.Equal(dek, await restarted.UnwrapAsync(wrapped, originalKeyId, binding, Ct));
         }
@@ -68,17 +68,17 @@ public sealed class KeyFileDurabilityTests
         try
         {
             var path = Path.Combine(dir, "kek.json");
-            var originalKeyId = await new SoftwareKeyProvider(new KeyFileKekSource(path))
+            var originalKeyId = await new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true))
                 .GetCurrentKeyIdAsync(Ct);
 
-            var a = new SoftwareKeyProvider(new KeyFileKekSource(path));
-            var b = new SoftwareKeyProvider(new KeyFileKekSource(path));
+            var a = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
+            var b = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
 
             var minted = await Task.WhenAll(a.RotateMasterKeyAsync(Ct), b.RotateMasterKeyAsync(Ct));
 
             // Every version — the original and both freshly minted — must still be usable by a
             // process that knows only what is on disk.
-            var restarted = new SoftwareKeyProvider(new KeyFileKekSource(path));
+            var restarted = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
             foreach (var keyId in minted.Append(originalKeyId))
             {
                 var dek = RandomNumberGenerator.GetBytes(32);
@@ -107,8 +107,8 @@ public sealed class KeyFileDurabilityTests
         try
         {
             var path = Path.Combine(dir, "kek.json");
-            var a = new SoftwareKeyProvider(new KeyFileKekSource(path));
-            var b = new SoftwareKeyProvider(new KeyFileKekSource(path));
+            var a = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
+            var b = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
 
             await a.GetCurrentKeyIdAsync(Ct); // A loads and caches the keyset as it stands
 

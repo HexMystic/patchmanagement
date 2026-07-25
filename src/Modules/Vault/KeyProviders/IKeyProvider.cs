@@ -17,8 +17,22 @@ namespace PatchManagement.Vault.KeyProviders;
 /// </summary>
 public interface IKeyProvider
 {
-    /// <summary>The identifier of the current (newest) KEK version — the one new DEKs are wrapped with.</summary>
+    /// <summary>
+    /// The identifier of the current (newest) KEK version — the one new DEKs are wrapped with. May
+    /// be served from a cache; use <see cref="RefreshCurrentKeyIdAsync"/> when a stale answer would
+    /// be harmful.
+    /// </summary>
     Task<string> GetCurrentKeyIdAsync(CancellationToken ct);
+
+    /// <summary>
+    /// The current KEK version, read AUTHORITATIVELY from the underlying store rather than any
+    /// cache.
+    ///
+    /// <para>Required wherever a stale answer causes damage rather than inconvenience: converging a
+    /// rotation onto a remembered-but-superseded version re-wraps the estate BACKWARDS onto it, and
+    /// sealing a new DEK under one strands that DEK when the process restarts (re-review C-A).</para>
+    /// </summary>
+    Task<string> RefreshCurrentKeyIdAsync(CancellationToken ct);
 
     /// <summary>
     /// Wrap (encrypt) a plaintext DEK under the KEK version <paramref name="keyId"/>, bound to

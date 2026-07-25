@@ -57,7 +57,10 @@ public sealed class KekRotationService(
 
     public async Task<KekRotationResult> CompleteRotationAsync(CancellationToken ct)
     {
-        var currentKeyId = await keyProvider.GetCurrentKeyIdAsync(ct);
+        // Authoritative, not cached. Targeting a remembered-but-superseded version would select every
+        // DEK another process already moved forward and re-wrap the estate BACKWARDS onto it — after
+        // a breach, silently restoring the compromised key (re-review C-A).
+        var currentKeyId = await keyProvider.RefreshCurrentKeyIdAsync(ct);
         return await ConvergeAsync(currentKeyId, ct);
     }
 
@@ -135,13 +138,19 @@ public sealed class KekRotationService(
                 token);
         }, ct);
 
+        // sweep.Failures carries tenants whose scope threw OUTSIDE the per-DEK try — a dropped
+        // connection on the query, a failed save, a failed audit append. Dropping them would report
+        // Complete for a rotation that never touched those tenants (re-review H-A).
         var result = new KekRotationResult(
-            targetKeyId, sweep.TenantsTotal, sweep.TenantsAttempted, rewrapped, skipped, failures);
+            targetKeyId, sweep.TenantsTotal, sweep.TenantsAttempted, rewrapped, skipped,
+            failures, sweep.Failures);
 
         logger.LogInformation(
             "Converged on KEK {KeyId}: re-wrapped {DekCount} DEK(s) across {Attempted}/{Total} tenant(s); "
-            + "{Skipped} skipped, {Failed} failed; 0 credentials re-encrypted",
-            targetKeyId, rewrapped, sweep.TenantsAttempted, sweep.TenantsTotal, skipped, failures.Count);
+            + "{Skipped} skipped, {DekFailed} DEK failure(s), {TenantFailed} tenant failure(s); "
+            + "0 credentials re-encrypted",
+            targetKeyId, rewrapped, sweep.TenantsAttempted, sweep.TenantsTotal, skipped,
+            failures.Count, sweep.Failures.Count);
 
         return result;
     }

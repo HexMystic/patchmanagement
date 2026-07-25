@@ -15,6 +15,7 @@ public sealed class HashiCorpVaultKeyProvider : IKeyProvider
         "on-prem software provider, or implement the transit-engine wrap/unwrap calls.";
 
     public Task<string> GetCurrentKeyIdAsync(CancellationToken ct) => throw new NotImplementedException(NotImplemented);
+    public Task<string> RefreshCurrentKeyIdAsync(CancellationToken ct) => throw new NotImplementedException(NotImplemented);
     public Task<byte[]> WrapAsync(byte[] dek, string keyId, KeyBinding binding, CancellationToken ct) => throw new NotImplementedException(NotImplemented);
     public Task<byte[]> UnwrapAsync(byte[] wrappedDek, string keyId, KeyBinding binding, CancellationToken ct) => throw new NotImplementedException(NotImplemented);
     public Task<string> RotateMasterKeyAsync(CancellationToken ct) => throw new NotImplementedException(NotImplemented);

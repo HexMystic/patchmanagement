@@ -29,7 +29,14 @@ namespace PatchManagement.Vault.KeyProviders;
 /// is readable by others (review H2); on Windows the deployment relies on directory ACLs
 /// (documented, not silently assumed).</para>
 /// </summary>
-public sealed class KeyFileKekSource(string path) : IKekSource
+/// <param name="path">Where the key file lives.</param>
+/// <param name="allowInitialize">
+/// Whether an ABSENT store may be initialized with a fresh KEK. Default false, and it must stay
+/// false in any deployment that already holds credentials: absence is far more often a lost mount
+/// or a wrong path than a genuine first boot, and minting a key in that moment strands every
+/// existing DEK (re-review CR-1). It only ever applies to <see cref="LoadOrInitializeAsync"/>.
+/// </param>
+public sealed class KeyFileKekSource(string path, bool allowInitialize = false) : IKekSource
 {
     private const string TempSuffix = ".tmp";
     private const string LockSuffix = ".lock";
@@ -39,10 +46,22 @@ public sealed class KeyFileKekSource(string path) : IKekSource
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    public async Task<KekKeyset> LoadAsync(CancellationToken ct)
+    public async Task<KekKeyset> LoadOrInitializeAsync(CancellationToken ct)
     {
         using var _ = await AcquireLockAsync(ct);
-        return await ReadOrCreateAsync(ct);
+
+        if (File.Exists(path)) return await ReadFileAsync(ct);
+        if (!allowInitialize) throw NotInitialized();
+
+        var fresh = KekKeyset.CreateNew();
+        await WriteDurablyAsync(fresh, ct);
+        return fresh;
+    }
+
+    public async Task<KekKeyset> ReadAsync(CancellationToken ct)
+    {
+        using var _ = await AcquireLockAsync(ct);
+        return await ReadRequiredAsync(ct);
     }
 
     public async Task<KekKeyset> AddVersionAsync(CancellationToken ct)
@@ -50,8 +69,10 @@ public sealed class KeyFileKekSource(string path) : IKekSource
         using var _ = await AcquireLockAsync(ct);
 
         // Read-modify-write under the lock. The keyset we extend is the one on DISK, so a version
-        // another process added since we last loaded is carried forward rather than erased.
-        var onDisk = await ReadOrCreateAsync(ct);
+        // another process added since we last loaded is carried forward rather than erased — and if
+        // the store has vanished we fail rather than mint a replacement, which would discard every
+        // version we were meant to carry forward (CR-1).
+        var onDisk = await ReadRequiredAsync(ct);
         var updated = onDisk.WithNewVersion();
         await WriteDurablyAsync(updated, ct);
         return updated;
@@ -59,15 +80,26 @@ public sealed class KeyFileKekSource(string path) : IKekSource
 
     public string Describe() => $"keyfile:{path}";
 
-    private async Task<KekKeyset> ReadOrCreateAsync(CancellationToken ct)
+    /// <summary>Read the store, treating absence as the error it almost always is. Lock must be held.</summary>
+    private async Task<KekKeyset> ReadRequiredAsync(CancellationToken ct)
     {
-        if (!File.Exists(path))
-        {
-            var fresh = KekKeyset.CreateNew();
-            await WriteDurablyAsync(fresh, ct);
-            return fresh;
-        }
+        if (!File.Exists(path)) throw NotInitialized();
+        return await ReadFileAsync(ct);
+    }
 
+    /// <summary>
+    /// Deliberately actionable: absence is either a genuine first boot or — far more likely once a
+    /// system is running — a lost mount or a wrong path, and the two are indistinguishable from here.
+    /// </summary>
+    private InvalidOperationException NotInitialized() => new(
+        $"The KEK store '{Path.GetFullPath(path)}' does not exist, so no key material can be read. " +
+        "If this is a genuine first boot, set VAULT_SOFTWARE_KEK_INIT=true once to initialize it. " +
+        "If credentials already exist, DO NOT initialize: the store is missing or unreachable (an " +
+        "unmounted volume, a wrong path, a changed working directory), and minting a new KEK would " +
+        "leave every existing credential permanently unrecoverable. Restore the key file instead.");
+
+    private async Task<KekKeyset> ReadFileAsync(CancellationToken ct)
+    {
         await using var stream = File.OpenRead(path);
         var doc = await JsonSerializer.DeserializeAsync<KeyFileDocument>(stream, JsonOptions, ct)
             ?? throw new InvalidOperationException($"KEK key file '{path}' is empty or malformed.");
