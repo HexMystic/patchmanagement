@@ -48,18 +48,24 @@ public sealed class VaultCredentialProvider(
 
         // Assemble the payload (username + secret) in a pinned buffer, seal it, then let the buffer
         // zero itself. The only persisted form is the authenticated ciphertext.
+        // The row id is minted BEFORE the seal so it can be bound into the ciphertext (ADR 0013).
+        // Client-generated either way — there is no database default — so nothing else changes.
+        var credentialId = Guid.NewGuid();
+
         var payloadSize = CredentialPayload.Size(request.Username, request.Secret.Length);
         byte[] envelope;
         using (var payload = new PinnedBuffer(payloadSize))
         {
             var written = CredentialPayload.Write(payload.Span, request.Username, request.Secret);
-            envelope = AesGcmEnvelope.Seal(dekPlain.Span, payload.Span[..written]);
+            envelope = AesGcmEnvelope.Seal(
+                dekPlain.Span, payload.Span[..written],
+                EnvelopeBinding.ForCredential(tenantId, credentialId, dek.Id));
         }
 
         var now = DateTimeOffset.UtcNow;
         var entity = new Credential
         {
-            Id = Guid.NewGuid(),
+            Id = credentialId,
             TenantId = tenantId,
             Name = request.Name,
             Kind = request.Kind,
@@ -102,9 +108,14 @@ public sealed class VaultCredentialProvider(
         // Decrypt into a pinned buffer, copy the secret into the frozen ResolvedCredential's array,
         // then let the pinned plaintext zero itself. The unpinned final copy is the documented M7
         // limitation of the frozen contract.
+        // The binding is rebuilt from the row's OWN stored identity, not the ambient tenant context.
+        // RLS makes the two equal in normal operation; when they differ — an envelope relocated into
+        // another tenant's row — authentication fails instead of decrypting (ADR 0013).
         var plaintextLength = AesGcmEnvelope.PlaintextLength(credential.Envelope);
         using var plaintext = new PinnedBuffer(plaintextLength);
-        var written = AesGcmEnvelope.Open(dekPlain.Span, credential.Envelope, plaintext.Span);
+        var written = AesGcmEnvelope.Open(
+            dekPlain.Span, credential.Envelope, plaintext.Span,
+            EnvelopeBinding.ForCredential(credential.TenantId, credential.Id, credential.DataKeyId.Value));
         var secret = CredentialPayload.Read(plaintext.Span[..written], out var username);
         var secretCopy = secret.ToArray();
 

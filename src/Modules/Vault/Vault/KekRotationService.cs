@@ -45,10 +45,15 @@ public sealed class KekRotationService(
             if (dek.WrappedDek is null || dek.KeyId is null)
                 continue; // never sealed — nothing to re-wrap
 
-            var plaintext = await keyProvider.UnwrapAsync(dek.WrappedDek, dek.KeyId, ct);
+            // Built per row: this loop crosses tenants on an owner context, so the binding must not
+            // be hoisted. Identical for unwrap and re-wrap because key_id is deliberately excluded
+            // from the binding — only the KEK version changes here, not the row's identity (ADR 0013).
+            var binding = new KeyBinding(dek.TenantId, dek.Id);
+
+            var plaintext = await keyProvider.UnwrapAsync(dek.WrappedDek, dek.KeyId, binding, ct);
             try
             {
-                dek.WrappedDek = await keyProvider.WrapAsync(plaintext, newKeyId, ct);
+                dek.WrappedDek = await keyProvider.WrapAsync(plaintext, newKeyId, binding, ct);
                 dek.KeyId = newKeyId;
                 tenants.Add(dek.TenantId);
             }

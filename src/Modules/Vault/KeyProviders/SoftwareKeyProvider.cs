@@ -22,14 +22,14 @@ public sealed class SoftwareKeyProvider(IKekSource source) : IKeyProvider
         return keyset.CurrentKeyId;
     }
 
-    public async Task<byte[]> WrapAsync(byte[] dek, string keyId, CancellationToken ct)
+    public async Task<byte[]> WrapAsync(byte[] dek, string keyId, KeyBinding binding, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(dek);
         var keyset = await EnsureLoadedAsync(ct);
-        return AesGcmEnvelope.Seal(keyset.Get(keyId), dek);
+        return AesGcmEnvelope.Seal(keyset.Get(keyId), dek, AssociatedData(binding));
     }
 
-    public async Task<byte[]> UnwrapAsync(byte[] wrappedDek, string keyId, CancellationToken ct)
+    public async Task<byte[]> UnwrapAsync(byte[] wrappedDek, string keyId, KeyBinding binding, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(wrappedDek);
         var keyset = await EnsureLoadedAsync(ct);
@@ -39,9 +39,14 @@ public sealed class SoftwareKeyProvider(IKekSource source) : IKeyProvider
         // shape returns byte[]; the caller (DataKeyService/KekRotationService) pins and zeroes it.
         var length = AesGcmEnvelope.PlaintextLength(wrappedDek);
         using var plaintext = new PinnedBuffer(length);
-        var written = AesGcmEnvelope.Open(kek, wrappedDek, plaintext.Span);
+        var written = AesGcmEnvelope.Open(kek, wrappedDek, plaintext.Span, AssociatedData(binding));
         return plaintext.Span[..written].ToArray();
     }
+
+    /// <summary>This provider binds by AES-GCM associated data; other backends map the same
+    /// <see cref="KeyBinding"/> onto their own mechanism (ADR 0013).</summary>
+    private static byte[] AssociatedData(KeyBinding binding) =>
+        EnvelopeBinding.ForDataKey(binding.TenantId, binding.DataKeyId);
 
     public async Task<string> RotateMasterKeyAsync(CancellationToken ct)
     {

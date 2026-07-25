@@ -24,7 +24,10 @@ public sealed class VaultTestHarness
     public VaultTestHarness(PostgresFixture fx, IKeyProvider? keyProvider = null)
     {
         _fx = fx;
-        KeyProvider = keyProvider ?? new SoftwareKeyProvider(new InMemoryKekSource());
+        // Defaults to the fixture's collection-wide keyset, not a fresh one: cross-tenant KEK
+        // rotation re-wraps every DEK in the shared database, so a per-harness keyset would leave
+        // rotation unable to unwrap DEKs another test class created. See PostgresFixture.
+        KeyProvider = keyProvider ?? fx.SharedKeyProvider;
     }
 
     public IKeyProvider KeyProvider { get; }

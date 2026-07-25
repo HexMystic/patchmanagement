@@ -20,11 +20,18 @@ public interface IKeyProvider
     /// <summary>The identifier of the current (newest) KEK version — the one new DEKs are wrapped with.</summary>
     Task<string> GetCurrentKeyIdAsync(CancellationToken ct);
 
-    /// <summary>Wrap (encrypt) a plaintext DEK under the KEK version <paramref name="keyId"/>.</summary>
-    Task<byte[]> WrapAsync(byte[] dek, string keyId, CancellationToken ct);
+    /// <summary>
+    /// Wrap (encrypt) a plaintext DEK under the KEK version <paramref name="keyId"/>, bound to
+    /// <paramref name="binding"/> so the ciphertext cannot be moved to another row or tenant
+    /// (ADR 0013).
+    /// </summary>
+    Task<byte[]> WrapAsync(byte[] dek, string keyId, KeyBinding binding, CancellationToken ct);
 
-    /// <summary>Unwrap (decrypt) a wrapped DEK using the KEK version that sealed it.</summary>
-    Task<byte[]> UnwrapAsync(byte[] wrappedDek, string keyId, CancellationToken ct);
+    /// <summary>
+    /// Unwrap (decrypt) a wrapped DEK using the KEK version that sealed it. <paramref name="binding"/>
+    /// must match the one used to wrap, or the unwrap fails authentication.
+    /// </summary>
+    Task<byte[]> UnwrapAsync(byte[] wrappedDek, string keyId, KeyBinding binding, CancellationToken ct);
 
     /// <summary>
     /// Create a new KEK version, make it current, and return its new <c>keyId</c>. The caller

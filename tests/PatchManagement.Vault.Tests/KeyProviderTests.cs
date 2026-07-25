@@ -10,18 +10,39 @@ public sealed class KeyProviderTests
 {
     private static readonly CancellationToken Ct = CancellationToken.None;
 
+    /// <summary>A distinct data-key row binding per call (ADR 0013).</summary>
+    private static KeyBinding Binding() => new(Guid.NewGuid(), Guid.NewGuid());
+
     [Fact]
     public async Task Wrap_then_unwrap_recovers_the_dek()
     {
         var provider = new SoftwareKeyProvider(new InMemoryKekSource());
         var keyId = await provider.GetCurrentKeyIdAsync(Ct);
         var dek = RandomNumberGenerator.GetBytes(32);
+        var binding = Binding();
 
-        var wrapped = await provider.WrapAsync(dek, keyId, Ct);
-        var unwrapped = await provider.UnwrapAsync(wrapped, keyId, Ct);
+        var wrapped = await provider.WrapAsync(dek, keyId, binding, Ct);
+        var unwrapped = await provider.UnwrapAsync(wrapped, keyId, binding, Ct);
 
         Assert.Equal(dek, unwrapped);
         Assert.NotEqual(dek, wrapped); // stored form is ciphertext
+    }
+
+    /// <summary>
+    /// A wrapped DEK copied into a different tenant's row must not unwrap — the KEK-layer half of
+    /// ADR 0013. Same key, same ciphertext, different row identity.
+    /// </summary>
+    [Fact]
+    public async Task Unwrap_with_a_different_row_binding_fails_authentication()
+    {
+        var provider = new SoftwareKeyProvider(new InMemoryKekSource());
+        var keyId = await provider.GetCurrentKeyIdAsync(Ct);
+        var dek = RandomNumberGenerator.GetBytes(32);
+
+        var wrapped = await provider.WrapAsync(dek, keyId, Binding(), Ct);
+
+        await Assert.ThrowsAnyAsync<AuthenticationTagMismatchException>(
+            () => provider.UnwrapAsync(wrapped, keyId, Binding(), Ct));
     }
 
     [Fact]
@@ -30,14 +51,15 @@ public sealed class KeyProviderTests
         var provider = new SoftwareKeyProvider(new InMemoryKekSource());
         var oldKeyId = await provider.GetCurrentKeyIdAsync(Ct);
         var dek = RandomNumberGenerator.GetBytes(32);
-        var wrappedUnderOld = await provider.WrapAsync(dek, oldKeyId, Ct);
+        var binding = Binding();
+        var wrappedUnderOld = await provider.WrapAsync(dek, oldKeyId, binding, Ct);
 
         var newKeyId = await provider.RotateMasterKeyAsync(Ct);
 
         Assert.NotEqual(oldKeyId, newKeyId);
         Assert.Equal(newKeyId, await provider.GetCurrentKeyIdAsync(Ct));
         // Zero-downtime: a DEK wrapped under the retired KEK version still unwraps.
-        Assert.Equal(dek, await provider.UnwrapAsync(wrappedUnderOld, oldKeyId, Ct));
+        Assert.Equal(dek, await provider.UnwrapAsync(wrappedUnderOld, oldKeyId, binding, Ct));
     }
 
     [Fact]
@@ -49,14 +71,15 @@ public sealed class KeyProviderTests
             var provider1 = new SoftwareKeyProvider(new KeyFileKekSource(path));
             var keyId = await provider1.GetCurrentKeyIdAsync(Ct); // first boot creates the file
             var dek = RandomNumberGenerator.GetBytes(32);
-            var wrapped = await provider1.WrapAsync(dek, keyId, Ct);
+            var binding = Binding();
+            var wrapped = await provider1.WrapAsync(dek, keyId, binding, Ct);
 
             Assert.True(File.Exists(path));
 
             // A fresh provider reading the same file (simulating a restart) unwraps what the first wrote.
             var provider2 = new SoftwareKeyProvider(new KeyFileKekSource(path));
             Assert.Equal(keyId, await provider2.GetCurrentKeyIdAsync(Ct));
-            Assert.Equal(dek, await provider2.UnwrapAsync(wrapped, keyId, Ct));
+            Assert.Equal(dek, await provider2.UnwrapAsync(wrapped, keyId, binding, Ct));
         }
         finally
         {

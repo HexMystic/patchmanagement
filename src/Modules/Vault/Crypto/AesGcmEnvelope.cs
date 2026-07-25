@@ -7,7 +7,7 @@ namespace PatchManagement.Vault.Crypto;
 /// AES-256-GCM authenticated encryption, used for BOTH layers of the envelope:
 /// the KEK wrapping a DEK, and a DEK sealing a credential payload.
 ///
-/// Wire format (single self-describing blob, no external metadata needed to decrypt):
+/// Wire format:
 /// <code>
 /// [ version:1 ][ nonce:12 ][ tag:16 ][ ciphertext:n ]
 /// </code>
@@ -15,10 +15,17 @@ namespace PatchManagement.Vault.Crypto;
 /// standard safe construction for GCM. The tag authenticates the ciphertext, so tampering or an
 /// unwrap with the wrong key fails loudly (<see cref="CryptographicException"/>) rather than
 /// returning garbage.
+///
+/// <para><b>The blob is NOT self-describing: decryption also requires the caller's associated
+/// data.</b> Every <see cref="Seal"/>/<see cref="Open"/> pair must supply the identical binding —
+/// see <see cref="EnvelopeBinding"/> — which ties the ciphertext to the row that stores it. Opening
+/// with a different binding fails authentication, so an envelope copied into another tenant's row
+/// cannot be decrypted. This is what version <c>0x02</c> denotes; the unbound <c>0x01</c> format is
+/// rejected outright rather than accepted, so there is no downgrade path (ADR 0013).</para>
 /// </summary>
 internal static class AesGcmEnvelope
 {
-    private const byte Version = 0x01;
+    private const byte Version = 0x02;
     private const int NonceSize = 12; // AesGcm.NonceByteSizes standard
     private const int TagSize = 16;   // AesGcm.TagByteSizes max
     private const int KeySize = 32;   // AES-256
@@ -28,9 +35,14 @@ internal static class AesGcmEnvelope
 
     /// <summary>
     /// Encrypt <paramref name="plaintext"/> under <paramref name="key"/> (32 bytes) into a fresh
-    /// envelope blob. Does not retain or log either input.
+    /// envelope blob, bound to <paramref name="associatedData"/>. Does not retain or log any input.
     /// </summary>
-    public static byte[] Seal(ReadOnlySpan<byte> key, ReadOnlySpan<byte> plaintext)
+    /// <param name="associatedData">
+    /// Authenticated but not encrypted. <see cref="Open"/> must be given the identical value or it
+    /// fails authentication — this is what binds the ciphertext to its row. Build it with
+    /// <see cref="EnvelopeBinding"/>.
+    /// </param>
+    public static byte[] Seal(ReadOnlySpan<byte> key, ReadOnlySpan<byte> plaintext, ReadOnlySpan<byte> associatedData)
     {
         RequireKey(key);
 
@@ -42,16 +54,31 @@ internal static class AesGcmEnvelope
 
         RandomNumberGenerator.Fill(nonce);
         using var gcm = new AesGcm(key, TagSize);
-        gcm.Encrypt(nonce, plaintext, ciphertext, tag);
+        gcm.Encrypt(nonce, plaintext, ciphertext, tag, associatedData);
         return result;
     }
 
     /// <summary>
     /// Decrypt an envelope produced by <see cref="Seal"/> into <paramref name="destination"/>,
     /// which must be at least <see cref="PlaintextLength"/> bytes. Returns the number of bytes
-    /// written. Throws <see cref="CryptographicException"/> if authentication fails.
+    /// written.
     /// </summary>
-    public static int Open(ReadOnlySpan<byte> key, ReadOnlySpan<byte> envelope, Span<byte> destination)
+    /// <param name="associatedData">
+    /// Must be byte-identical to the value passed to <see cref="Seal"/>. A mismatch — the signature
+    /// of an envelope moved to a different row or tenant — raises
+    /// <see cref="AuthenticationTagMismatchException"/>.
+    /// </param>
+    /// <exception cref="AuthenticationTagMismatchException">
+    /// Authentication failed: wrong key, tampered ciphertext, or a binding that does not match the
+    /// one used to seal.
+    /// </exception>
+    /// <exception cref="CryptographicException">
+    /// The blob is structurally invalid — too short, or an unsupported version such as the unbound
+    /// <c>0x01</c> format. Distinct from an authentication failure, deliberately: an operator
+    /// reading the error should be able to tell a format problem from a binding violation.
+    /// </exception>
+    public static int Open(
+        ReadOnlySpan<byte> key, ReadOnlySpan<byte> envelope, Span<byte> destination, ReadOnlySpan<byte> associatedData)
     {
         RequireKey(key);
         if (envelope.Length < HeaderSize)
@@ -66,7 +93,7 @@ internal static class AesGcmEnvelope
             throw new ArgumentException("Destination is too small for the plaintext.", nameof(destination));
 
         using var gcm = new AesGcm(key, TagSize);
-        gcm.Decrypt(nonce, ciphertext, tag, destination[..ciphertext.Length]);
+        gcm.Decrypt(nonce, ciphertext, tag, destination[..ciphertext.Length], associatedData);
         return ciphertext.Length;
     }
 

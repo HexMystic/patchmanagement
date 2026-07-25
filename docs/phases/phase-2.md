@@ -21,11 +21,16 @@ Rotating a DEK re-encrypts that tenant's credentials (rare, explicit).
 ```csharp
 public interface IKeyProvider
 {
-    Task<byte[]> WrapAsync(byte[] dek, string keyId, CancellationToken ct);
-    Task<byte[]> UnwrapAsync(byte[] wrappedDek, string keyId, CancellationToken ct);
+    Task<byte[]> WrapAsync(byte[] dek, string keyId, KeyBinding binding, CancellationToken ct);
+    Task<byte[]> UnwrapAsync(byte[] wrappedDek, string keyId, KeyBinding binding, CancellationToken ct);
     Task<string> RotateMasterKeyAsync(CancellationToken ct); // returns new keyId
 }
 ```
+`KeyBinding(Guid TenantId, Guid DataKeyId)` identifies the row a wrapped DEK belongs to, so a
+relocated `data_keys` row fails to unwrap ([ADR 0013](../adr/0013-envelope-binding.md)). It is typed
+rather than raw associated-data bytes because backends differ: the software provider uses AES-GCM
+associated data, AWS KMS an `EncryptionContext`, HashiCorp Transit a `context` — and Azure Key
+Vault's `wrapKey` has no such parameter at all, a limitation recorded on that provider.
 Implementations:
 - **`SoftwareKeyProvider` (default, on-prem/air-gapped)** — KEK from a cold-start
   source (`keyfile` default | `operator` | `tpm`; see THREAT-MODEL). Zero external

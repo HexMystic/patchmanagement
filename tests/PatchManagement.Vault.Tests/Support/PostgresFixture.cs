@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using PatchManagement.Persistence;
+using PatchManagement.Vault.KeyProviders;
 using Xunit;
 
 namespace PatchManagement.Vault.Tests.Support;
@@ -25,6 +26,19 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     public string OwnerConnectionString { get; private set; } = string.Empty;
     public string AppConnectionString { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// One KEK keyset for every test sharing this database — as in production, where a single KEK
+    /// serves many tenants.
+    ///
+    /// <para>It has to be collection-scoped rather than per-harness because
+    /// <c>KekRotationService.RotateAsync</c> is cross-tenant by design: it re-wraps EVERY non-retired
+    /// DEK in the database. With a keyset per harness, a DEK left behind by one test class is wrapped
+    /// under a keyset the rotation test's provider has never loaded, and rotation fails with
+    /// "No KEK version ... is loaded". A shared keyset makes every DEK in the shared database
+    /// unwrappable by any test, which is the only self-consistent arrangement here.</para>
+    /// </summary>
+    public IKeyProvider SharedKeyProvider { get; } = new SoftwareKeyProvider(new InMemoryKekSource());
 
     private static string Conn(string database, string user, string password) =>
         $"Host={Host};Port={Port};Database={database};Username={user};Password={password}";

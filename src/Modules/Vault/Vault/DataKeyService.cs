@@ -35,15 +35,19 @@ public sealed class DataKeyService(AppDbContext db, IKeyProvider keyProvider, IT
 
         var keyId = await keyProvider.GetCurrentKeyIdAsync(ct);
 
+        // The row id is minted BEFORE the wrap so it can be bound into the ciphertext (ADR 0013).
+        // Client-generated either way — there is no database default — so this changes nothing else.
+        var dataKeyId = Guid.NewGuid();
+
         // Generate the DEK straight into a pinned buffer, wrap it, and never keep the plaintext.
         using var dek = new PinnedBuffer(AesGcmEnvelope.KeySizeBytes);
         RandomNumberGenerator.Fill(dek.Span);
-        var wrapped = await keyProvider.WrapAsync(dek.Bytes, keyId, ct);
+        var wrapped = await keyProvider.WrapAsync(dek.Bytes, keyId, new KeyBinding(tenantId, dataKeyId), ct);
 
         var now = DateTimeOffset.UtcNow;
         var entity = new DataKey
         {
-            Id = Guid.NewGuid(),
+            Id = dataKeyId,
             TenantId = tenantId,
             WrappedDek = wrapped,
             KeyId = keyId,
@@ -63,7 +67,10 @@ public sealed class DataKeyService(AppDbContext db, IKeyProvider keyProvider, IT
         if (dek.WrappedDek is null || dek.KeyId is null)
             throw new InvalidOperationException($"DataKey {dek.Id} has no wrapped material — cannot unwrap.");
 
-        var plaintext = await keyProvider.UnwrapAsync(dek.WrappedDek, dek.KeyId, ct);
+        // The binding is rebuilt from the row's OWN identity, so a wrapped DEK copied into a
+        // different tenant's row fails authentication rather than unwrapping (ADR 0013).
+        var plaintext = await keyProvider.UnwrapAsync(
+            dek.WrappedDek, dek.KeyId, new KeyBinding(dek.TenantId, dek.Id), ct);
         try
         {
             var buffer = new PinnedBuffer(plaintext.Length);

@@ -3,6 +3,10 @@ namespace PatchManagement.Vault.KeyProviders;
 /// <summary>
 /// Opt-in KMS custody: the KEK lives in AWS KMS and never on the app host; wrap/unwrap happen via
 /// KMS (ADR 0002, THREAT-MODEL). STUB — see <see cref="AzureKeyVaultKeyProvider"/> for the rationale.
+///
+/// <para>Binding (ADR 0013): a <see cref="KeyBinding"/> maps onto the KMS <c>EncryptionContext</c>
+/// — e.g. <c>{"tenant": TenantId, "data_key": DataKeyId}</c> — which KMS authenticates on Decrypt,
+/// giving the same row-binding guarantee as the software provider's associated data.</para>
 /// </summary>
 public sealed class AwsKmsKeyProvider : IKeyProvider
 {
@@ -11,7 +15,7 @@ public sealed class AwsKmsKeyProvider : IKeyProvider
         "software provider, or implement the KMS Encrypt/Decrypt calls.";
 
     public Task<string> GetCurrentKeyIdAsync(CancellationToken ct) => throw new NotImplementedException(NotImplemented);
-    public Task<byte[]> WrapAsync(byte[] dek, string keyId, CancellationToken ct) => throw new NotImplementedException(NotImplemented);
-    public Task<byte[]> UnwrapAsync(byte[] wrappedDek, string keyId, CancellationToken ct) => throw new NotImplementedException(NotImplemented);
+    public Task<byte[]> WrapAsync(byte[] dek, string keyId, KeyBinding binding, CancellationToken ct) => throw new NotImplementedException(NotImplemented);
+    public Task<byte[]> UnwrapAsync(byte[] wrappedDek, string keyId, KeyBinding binding, CancellationToken ct) => throw new NotImplementedException(NotImplemented);
     public Task<string> RotateMasterKeyAsync(CancellationToken ct) => throw new NotImplementedException(NotImplemented);
 }
