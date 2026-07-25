@@ -100,6 +100,21 @@ public override string ToString() => $"ResolvedCredential(kind={Kind}, user={Use
 secret-bearing type carries no sentinel, and fails when a new secret-bearing record
 appears uncovered.
 
+**Scope of the scan, corrected 2026-07-26 (re-review H-1).** It detected records by looking for the
+compiler-generated `<Clone>$`, which is emitted for record **classes** only — record *structs* are
+copied by value and get none. Every record struct was therefore invisible to a test this decision
+claimed pinned them; `KeyBinding` is one. Detection now also accepts a value type carrying a
+compiler-generated `PrintMembers`, which covers both record kinds, and the change was
+mutation-checked in both directions: a throwaway `readonly record struct` with a `string` secret
+member **passed** under the old detection and **fails** under the new one.
+
+What this deliberately does **not** widen: ordinary (non-record) classes stay out of scope, because
+they have no compiler-generated `ToString()` — the one leak this decision exists to guard against.
+`KekKeyset` is such a class and carries a hand-written redacted `ToString()`. The test's own comment
+already scopes it correctly as "an enforcement aid, not a completeness proof", and that remains the
+honest reading: it catches the specific accident of a new secret-bearing record, not every way a
+type could render a secret.
+
 ### D. Structured log state is not covered (added 2026-07-25, review H3)
 
 `RedactingLogger.Log` forwards `TState` to the sink **verbatim**. That is the structured

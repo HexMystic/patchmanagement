@@ -43,20 +43,20 @@ public sealed class SoftwareKeyProvider(IKekSource source) : IKeyProvider
     public async Task<byte[]> WrapAsync(byte[] dek, string keyId, KeyBinding binding, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(dek);
-        var kek = await ResolveKeyAsync(keyId, ct);
-        return AesGcmEnvelope.Seal(kek, dek, AssociatedData(binding));
+        using var kek = await ResolveKeyAsync(keyId, ct);
+        return AesGcmEnvelope.Seal(kek.Span, dek, AssociatedData(binding));
     }
 
     public async Task<byte[]> UnwrapAsync(byte[] wrappedDek, string keyId, KeyBinding binding, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(wrappedDek);
-        var kek = await ResolveKeyAsync(keyId, ct);
+        using var kek = await ResolveKeyAsync(keyId, ct);
 
         // Unwrap into a pinned, zeroed buffer, then hand back a right-sized copy. The frozen call
         // shape returns byte[]; the caller (DataKeyService/KekRotationService) pins and zeroes it.
         var length = AesGcmEnvelope.PlaintextLength(wrappedDek);
         using var plaintext = new PinnedBuffer(length);
-        var written = AesGcmEnvelope.Open(kek, wrappedDek, plaintext.Span, AssociatedData(binding));
+        var written = AesGcmEnvelope.Open(kek.Span, wrappedDek, plaintext.Span, AssociatedData(binding));
         return plaintext.Span[..written].ToArray();
     }
 
@@ -79,17 +79,35 @@ public sealed class SoftwareKeyProvider(IKekSource source) : IKeyProvider
     }
 
     /// <summary>
-    /// Resolves a KEK version, reloading once if it is unknown. Another process may have added the
-    /// version since this one last loaded; without the reload that would be a hard failure until
-    /// restart.
+    /// Resolves a KEK version into a pinned, self-zeroing buffer the CALLER owns, reloading once if
+    /// the version is unknown. Another process may have added it since this one last loaded;
+    /// without the reload that would be a hard failure until restart.
+    ///
+    /// <para>The keyset hands out a copy, never the live array (re-review H-1), so every caller
+    /// must dispose what it gets. Returning a <see cref="PinnedBuffer"/> rather than a
+    /// <c>byte[]</c> is what makes that structural: a <c>using</c> zeroes the KEK on every path
+    /// out, including the exception path, instead of relying on the caller to remember.</para>
     /// </summary>
-    private async Task<byte[]> ResolveKeyAsync(string keyId, CancellationToken ct)
+    private async Task<PinnedBuffer> ResolveKeyAsync(string keyId, CancellationToken ct)
     {
         var keyset = await EnsureLoadedAsync(ct);
-        if (keyset.TryGet(keyId, out var key)) return key;
 
-        var reloaded = await ReloadAsync(ct);
-        return reloaded.Get(keyId); // still unknown => genuinely absent, and Get says so loudly
+        // Contains, then copy, both against the SAME immutable snapshot — a rotation republishing
+        // _keyset between the two cannot make the copy miss.
+        if (!keyset.Contains(keyId)) keyset = await ReloadAsync(ct);
+
+        var kek = new PinnedBuffer(AesGcmEnvelope.KeySizeBytes);
+        try
+        {
+            // Still unknown after the reload => genuinely absent, and this says so loudly.
+            keyset.CopyKeyTo(keyId, kek.Span);
+            return kek;
+        }
+        catch
+        {
+            kek.Dispose();
+            throw;
+        }
     }
 
     private async Task<KekKeyset> ReloadAsync(CancellationToken ct)

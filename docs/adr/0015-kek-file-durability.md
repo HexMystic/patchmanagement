@@ -112,6 +112,32 @@ returns a copy instead of the live dictionary. This also closes **H6** — `Get(
 from `Wrap`/`Unwrap` outside the provider's gate, and was racing a `Dictionary` that
 rotation mutated in place.
 
+> **Amendment 2026-07-26 (re-review H-1) — immutability now covers the key material, not just the
+> map.** As originally written this section was true of the *dictionary* and false of its contents.
+> Every accessor — the constructor, `WithNewVersion()`, `Snapshot()`, and `Get()`/`TryGet()` — copied
+> only the map and shared the `byte[]` values, so a caller held a live reference to key material the
+> provider was concurrently wrapping under, and a parent keyset aliased every version of its child.
+> `Snapshot()`'s own doc claimed a holder "cannot observe or affect this keyset", which was not the
+> case. Structural immutability over shared mutable arrays is not immutability.
+>
+> The keyset now **owns** its material: deep-copied in on construction and in `WithNewVersion()`,
+> deep-copied out of `Snapshot()`. `Get`/`TryGet` are replaced by `Contains` (a pure predicate that
+> hands out nothing) plus `CopyKeyTo(keyId, Span<byte>)`, which writes into a caller-supplied buffer
+> — in practice a `PinnedBuffer` — so material travels from the keyset into pinned, self-zeroing
+> storage with no intermediate array. `SoftwareKeyProvider.ResolveKeyAsync` returns that
+> `PinnedBuffer`, making the zeroing structural (a `using` covers the exception path too) rather
+> than something a caller must remember. A wrong-sized destination throws instead of truncating: a
+> silently short KEK would produce ciphertext nothing can open.
+>
+> The consequence worth naming is not tampering but *destruction*. Before this, an ordinary
+> `using` around a resolved KEK would have zeroed the live keyset for every subsequent wrap in the
+> process. `KekKeysetTests` pins that case specifically, alongside the four aliasing paths, each
+> proven red-first against the unmodified code.
+>
+> `KeyFileKekSource.WriteDurablyAsync` now zeroes the arrays `Snapshot()` hands it once they are
+> encoded. The base64 `string`s that replace them remain unzeroable — the recorded KEK
+> memory-hygiene limitation, unchanged.
+
 ### Stale reads reload once
 
 A `Get` miss now reloads from the source before failing, so a version another process minted

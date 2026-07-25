@@ -119,8 +119,26 @@ public sealed class VaultLoggingConventionTests
             $"{what}.ToString() rendered the secret as hex: {rendered}");
     }
 
+    /// <summary>
+    /// Records of BOTH kinds. <c>&lt;Clone&gt;$</c> is emitted for record <i>classes</i> only — record
+    /// structs are copied by value and get none, so detecting on it alone made every record struct
+    /// invisible to this scan while ADR 0012 decision C claimed they were pinned (re-review H-1).
+    /// <c>PrintMembers</c> is compiler-generated for both kinds; the <c>IsValueType</c> guard keeps a
+    /// hand-written <c>PrintMembers</c> on an ordinary class from being mistaken for a record, and
+    /// record classes are already caught by the first clause.
+    ///
+    /// <para>Non-record classes stay out of scope deliberately: they have no compiler-generated
+    /// <c>ToString()</c>, which is the only leak this decision guards against.</para>
+    /// </summary>
     private static bool IsRecord(Type type) =>
-        type.GetMethod("<Clone>$", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null;
+        type.GetMethod("<Clone>$", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null
+        || (type.IsValueType
+            && type.GetMethod(
+                "PrintMembers",
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                types: [typeof(StringBuilder)],
+                modifiers: null) is not null);
 
     private static IEnumerable<MemberInfo> SecretishMembers(Type type, string[] vocabulary) =>
         type.GetMembers(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)

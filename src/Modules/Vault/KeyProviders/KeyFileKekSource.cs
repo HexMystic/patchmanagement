@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -117,11 +118,24 @@ public sealed class KeyFileKekSource(string path, bool allowInitialize = false) 
     /// </summary>
     private async Task WriteDurablyAsync(KekKeyset keyset, CancellationToken ct)
     {
-        var doc = new KeyFileDocument
+        // Snapshot hands back fresh arrays this method owns (re-review H-1), so they are zeroed the
+        // moment they have been encoded rather than left to the GC. The base64 strings that replace
+        // them are immutable and cannot be zeroed — the recorded KEK memory-hygiene limitation,
+        // unchanged here; this only stops a second, avoidable copy of the raw material persisting.
+        var snapshot = keyset.Snapshot();
+        KeyFileDocument doc;
+        try
         {
-            Current = keyset.CurrentKeyId,
-            Keys = keyset.Snapshot().ToDictionary(kv => kv.Key, kv => Convert.ToBase64String(kv.Value)),
-        };
+            doc = new KeyFileDocument
+            {
+                Current = keyset.CurrentKeyId,
+                Keys = snapshot.ToDictionary(kv => kv.Key, kv => Convert.ToBase64String(kv.Value)),
+            };
+        }
+        finally
+        {
+            foreach (var key in snapshot.Values) CryptographicOperations.ZeroMemory(key);
+        }
 
         EnsureDirectory();
         var tempPath = path + TempSuffix;
