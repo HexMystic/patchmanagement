@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using PatchManagement.Contracts.Credentials;
 using PatchManagement.Contracts.Modules;
 using PatchManagement.Vault.KeyProviders;
@@ -76,7 +77,8 @@ public static class VaultModule
                 var allowInitialize =
                     bool.TryParse(configuration["VAULT_SOFTWARE_KEK_INIT"], out var init) && init;
 
-                services.AddSingleton<IKekSource>(_ => new KeyFileKekSource(path, allowInitialize));
+                services.AddSingleton<IKekSource>(sp => new KeyFileKekSource(
+                    path, allowInitialize, sp.GetService<ILogger<KeyFileKekSource>>()));
                 break;
             case "operator":
             case "tpm":

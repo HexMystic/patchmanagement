@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using PatchManagement.Vault.KeyProviders;
+using PatchManagement.Vault.Tests.Support;
 using Xunit;
 
 namespace PatchManagement.Vault.Tests;
@@ -136,12 +137,7 @@ public sealed class KeyFileDurabilityTests
         }
     }
 
-    /// <summary>Per-test scratch directory: the design also produces a lock sidecar, so deleting a
-    /// single file would leak.</summary>
-    private static string NewScratchDirectory()
-    {
-        var dir = Path.Combine(Path.GetTempPath(), "kek-test-" + Guid.NewGuid().ToString("N")[..12]);
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
+    /// <summary>Per-test scratch directory, armed for one initialization (cold review M7): the design
+    /// also produces a lock sidecar, so deleting a single file would leak.</summary>
+    private static string NewScratchDirectory() => KekScratch.NewArmedDirectory();
 }

@@ -48,9 +48,11 @@ public sealed class KeyFileVaultFixture : IAsyncLifetime, IVaultDatabaseFixture
     {
         Directory.CreateDirectory(KeyDirectory);
 
-        // A genuine first boot, so the opt-in is correct here.
-        SharedKeyProvider = new SoftwareKeyProvider(
-            new KeyFileKekSource(Path.Combine(KeyDirectory, "kek.json"), allowInitialize: true));
+        // A genuine first boot, so the opt-in is correct here — and since cold review M7 the opt-in
+        // alone is not enough: initialization also needs the arming sentinel, which it consumes.
+        var keyPath = Path.Combine(KeyDirectory, "kek.json");
+        KekScratch.Arm(keyPath);
+        SharedKeyProvider = new SoftwareKeyProvider(new KeyFileKekSource(keyPath, allowInitialize: true));
 
         await ExecAsync(Conn("patchmgmt", OwnerUser, OwnerPassword), $"CREATE DATABASE \"{_dbName}\"");
 

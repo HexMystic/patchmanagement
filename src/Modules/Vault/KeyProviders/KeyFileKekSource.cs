@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
 
 namespace PatchManagement.Vault.KeyProviders;
 
@@ -37,10 +38,17 @@ namespace PatchManagement.Vault.KeyProviders;
 /// or a wrong path than a genuine first boot, and minting a key in that moment strands every
 /// existing DEK (re-review CR-1). It only ever applies to <see cref="LoadOrInitializeAsync"/>.
 /// </param>
-public sealed class KeyFileKekSource(string path, bool allowInitialize = false) : IKekSource
+public sealed class KeyFileKekSource(
+    string path, bool allowInitialize = false, ILogger<KeyFileKekSource>? logger = null) : IKekSource
 {
     private const string TempSuffix = ".tmp";
     private const string LockSuffix = ".lock";
+
+    /// <summary>
+    /// The arming sentinel. Initialization needs BOTH <c>VAULT_SOFTWARE_KEK_INIT</c> and this file,
+    /// and consumes it on success — see <see cref="LoadOrInitializeAsync"/> (cold review M7).
+    /// </summary>
+    private const string SentinelSuffix = ".init";
 
     /// <summary>How long to wait for another process to finish its read-modify-write.</summary>
     private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(30);
@@ -54,9 +62,40 @@ public sealed class KeyFileKekSource(string path, bool allowInitialize = false) 
         if (File.Exists(path)) return await ReadFileAsync(ct);
         if (!allowInitialize) throw NotInitialized();
 
+        // The env flag alone is not enough. It has no one-shot semantics, so a compose file that
+        // leaves VAULT_SOFTWARE_KEK_INIT set turns EVERY failed volume mount into a silent fresh-KEK
+        // mint — re-arming CR-1 with the very switch added to prevent it. The sentinel closes that:
+        // it lives beside the store, so a lost mount takes it too, and initialization refuses even
+        // with the flag set (cold review M7).
+        var sentinel = path + SentinelSuffix;
+        if (!File.Exists(sentinel)) throw NotArmed(sentinel);
+
         var fresh = KekKeyset.CreateNew();
         await WriteDurablyAsync(fresh, ct);
+
+        // Consume it. This is what makes the mechanism genuinely one-shot rather than advisory: the
+        // next cold start refuses no matter what the environment still says.
+        DisarmSentinel(sentinel);
         return fresh;
+    }
+
+    /// <summary>Deletes the arming sentinel. A failure here must not fail an initialization that has
+    /// already durably written the store — but it leaves the system armed, so it is loud.</summary>
+    private void DisarmSentinel(string sentinel)
+    {
+        try
+        {
+            File.Delete(sentinel);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger?.LogError(
+                ex,
+                "Initialized the KEK store but could not delete the arming sentinel {Sentinel}. "
+                + "The system remains armed: if the store is later lost, the next start will mint a "
+                + "NEW KEK and every existing credential becomes unrecoverable. Delete it by hand now",
+                sentinel);
+        }
     }
 
     public async Task<KekKeyset> ReadAsync(CancellationToken ct)
@@ -94,10 +133,26 @@ public sealed class KeyFileKekSource(string path, bool allowInitialize = false) 
     /// </summary>
     private InvalidOperationException NotInitialized() => new(
         $"The KEK store '{Path.GetFullPath(path)}' does not exist, so no key material can be read. " +
-        "If this is a genuine first boot, set VAULT_SOFTWARE_KEK_INIT=true once to initialize it. " +
         "If credentials already exist, DO NOT initialize: the store is missing or unreachable (an " +
         "unmounted volume, a wrong path, a changed working directory), and minting a new KEK would " +
-        "leave every existing credential permanently unrecoverable. Restore the key file instead.");
+        "leave every existing credential permanently unrecoverable. Restore the key file instead. " +
+        "Only if this is a genuine first boot: set VAULT_SOFTWARE_KEK_INIT=true, create the arming " +
+        $"sentinel '{Path.GetFullPath(path) + SentinelSuffix}', start once, then REMOVE THE VARIABLE " +
+        "AGAIN. Leaving it set is the documented footgun — it turns any later loss of the store into " +
+        "a silent new KEK.");
+
+    /// <summary>
+    /// The flag is set but the store is not armed. Almost always the good outcome: someone left
+    /// <c>VAULT_SOFTWARE_KEK_INIT</c> in a compose file and the volume failed to mount.
+    /// </summary>
+    private InvalidOperationException NotArmed(string sentinel) => new(
+        $"VAULT_SOFTWARE_KEK_INIT is set but the KEK store '{Path.GetFullPath(path)}' is absent AND " +
+        $"unarmed, so initialization was REFUSED. Expected the arming sentinel '{sentinel}'. " +
+        "This is the safe outcome: the sentinel lives beside the store, so if the store was lost " +
+        "with its volume the sentinel went too — minting a new KEK here would leave every existing " +
+        "credential permanently unrecoverable. Restore the key file. Only if this really is a first " +
+        "boot with no credentials anywhere, create the sentinel (an empty file) and start again; it " +
+        "is deleted automatically once the store exists.");
 
     private async Task<KekKeyset> ReadFileAsync(CancellationToken ct)
     {
@@ -245,12 +300,53 @@ public sealed class KeyFileKekSource(string path, bool allowInitialize = false) 
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (string.IsNullOrEmpty(directory)) return;
 
-        const int ORdonly = 0;
-        var fd = Open(Encoding.UTF8.GetBytes(directory + '\0'), ORdonly);
-        if (fd < 0) return;
+        // Best-effort must mean REPORTED, not invisible — and it must not be able to fail the caller.
+        // Neither held before: the return of fsync was discarded, so EIO (the one failure this
+        // function exists to detect) vanished; and with no catch, any throw escaped WriteDurablyAsync
+        // AFTER File.Move had committed, telling the caller a durable rotation had failed. The
+        // provider then declines to publish the new keyset while the disk has already moved on
+        // (cold review M6).
+        try
+        {
+            const int ORdonly = 0;
+            var fd = Open(Encoding.UTF8.GetBytes(directory + '\0'), ORdonly);
+            if (fd < 0)
+            {
+                logger?.LogWarning(
+                    "Could not open the KEK directory {Directory} to fsync it (errno {Errno}); the "
+                    + "key file's CONTENTS are durable but the rename may not survive a power loss",
+                    directory, Marshal.GetLastPInvokeError());
+                return;
+            }
 
-        try { Fsync(fd); }
-        finally { Close(fd); }
+            try
+            {
+                if (Fsync(fd) != 0)
+                {
+                    logger?.LogWarning(
+                        "fsync of the KEK directory {Directory} failed (errno {Errno}); the key "
+                        + "file's CONTENTS are durable but the rename may not survive a power loss",
+                        directory, Marshal.GetLastPInvokeError());
+                }
+            }
+            finally
+            {
+                Close(fd);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Deliberately broad, and deliberately swallowed. By the time this runs the rename has
+            // already committed, so throwing would report failure for a rotation that succeeded and
+            // strand the process on its previous key. Whatever went wrong here — a missing or
+            // differently-named libc, a sandbox denying the syscall — is a durability narrowing, not
+            // a correctness one.
+            logger?.LogWarning(
+                ex,
+                "Could not fsync the KEK directory {Directory}; the key file's CONTENTS are durable "
+                + "but the rename may not survive a power loss",
+                directory);
+        }
     }
 
     private static void TryDelete(string file)

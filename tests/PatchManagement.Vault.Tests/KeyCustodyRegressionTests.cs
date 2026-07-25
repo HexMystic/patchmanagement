@@ -165,10 +165,15 @@ public sealed class KeyCustodyRegressionTests(PostgresFixture fx)
             Assert.Contains("VAULT_SOFTWARE_KEK_INIT", ex.Message, StringComparison.Ordinal);
             Assert.False(File.Exists(path), "a refused cold start still created a key file");
 
-            // With the opt-in, a genuine first boot works.
+            // With the opt-in AND the arming sentinel, a genuine first boot works.
+            Assert.True(KekScratch.IsArmed(path), "the scratch directory should start armed");
             var initializing = new SoftwareKeyProvider(new KeyFileKekSource(path, allowInitialize: true));
             Assert.False(string.IsNullOrWhiteSpace(await initializing.GetCurrentKeyIdAsync(Ct)));
             Assert.True(File.Exists(path));
+
+            // And the arming is CONSUMED — that is what makes it one-shot rather than advisory
+            // (cold review M7).
+            Assert.False(KekScratch.IsArmed(path), "initialization did not consume the arming sentinel");
         }
         finally
         {
@@ -197,10 +202,5 @@ public sealed class KeyCustodyRegressionTests(PostgresFixture fx)
         Assert.All(sweep.Failures, f => Assert.Contains("IOException", f.Reason, StringComparison.Ordinal));
     }
 
-    private static string NewScratchDirectory()
-    {
-        var dir = Path.Combine(Path.GetTempPath(), "kek-test-" + Guid.NewGuid().ToString("N")[..12]);
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
+    private static string NewScratchDirectory() => KekScratch.NewArmedDirectory();
 }

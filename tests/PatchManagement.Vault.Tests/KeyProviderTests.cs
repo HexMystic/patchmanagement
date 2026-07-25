@@ -13,14 +13,9 @@ public sealed class KeyProviderTests
     /// <summary>A distinct data-key row binding per call (ADR 0013).</summary>
     private static KeyBinding Binding() => new(Guid.NewGuid(), Guid.NewGuid());
 
-    /// <summary>Per-test scratch directory: the key file now has a lock sidecar, so deleting a
-    /// single file would leave it behind (ADR 0015).</summary>
-    private static string NewScratchDirectory()
-    {
-        var dir = Path.Combine(Path.GetTempPath(), "kek-test-" + Guid.NewGuid().ToString("N")[..12]);
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
+    /// <summary>Per-test scratch directory, armed for one initialization (cold review M7): the key
+    /// file also has a lock sidecar, so deleting a single file would leave it behind (ADR 0015).</summary>
+    private static string NewScratchDirectory() => KekScratch.NewArmedDirectory();
 
     [Fact]
     public async Task Wrap_then_unwrap_recovers_the_dek()
