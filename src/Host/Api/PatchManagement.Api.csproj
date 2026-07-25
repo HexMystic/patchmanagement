@@ -3,6 +3,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\Persistence\PatchManagement.Persistence.csproj" />
     <ProjectReference Include="..\..\Shared\Contracts\PatchManagement.Contracts.csproj" />
+    <!-- Referenced so the DLL ships alongside the host: CompositionRoot discovers IModuleRegistrar
+         by scanning PatchManagement.*.dll in the output directory, so a module the host never
+         calls directly is still unreachable in production unless it is referenced here. -->
+    <ProjectReference Include="..\..\Modules\Vault\PatchManagement.Vault.csproj" />
   </ItemGroup>
 
   <ItemGroup>
