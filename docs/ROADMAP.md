@@ -446,6 +446,47 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
+### 2026-07-25 — Phase 2 remediated but NOT merge-ready · 8 re-review findings open
+Phase 2 vault sits on **`phase/2-vault`, unmerged, 14 commits ahead of `main`** (code pushed to origin
+at `4a5c955`; this log entry is the 15th). Seven of those are the **remediation arc**: keystone (`a50d9ec`) → H1 envelope binding
+(`ca54bec`) → review record (`d22ce83`) → C1 tenancy scope (`20b721d`) → C2/C3/C4 key custody
+(`e47735f`) → H3 + disposition (`8dcf349`, `c557c41`) → CR-1/C-A/H-A (`4a5c955`). The other seven
+(`17e40a2`…`305cc81`) are the original module build and the redaction-belt work that preceded the
+review. **Vault 54/54, IntegrationTests 36/36, Contracts 19/19.** Host boots, `/health` 200.
+
+**Remediation.** All four original criticals closed, plus H1/H2/H3/H6. A fresh-session re-review of
+the remediated code then found **2 new criticals — both author-introduced by the remediation
+itself** — and H-A; all three are fixed in `4a5c955`, each proven red-first against the unmodified
+code. **C-A is bounded, not eliminated**: the convergence target is authoritative at read time, but a
+rotation by another process mid-sweep still leaves this one on a stale target, recoverable by
+re-running. Recorded in [ADR 0014](adr/0014-system-tenancy-scope.md), not glossed.
+
+**STILL BLOCKING MERGE — 8 of 11 re-review findings are open and undispositioned.** H-1 (`KekKeyset`
+is shallow — `Snapshot()`/`Get()` hand out live KEK arrays while the docs claim a copy) · H-2
+(`LoadAsync` taking the lock made the read path require *write* access, breaking a read-only key
+mount) · H-3 (a throwing directory fsync on musl reports failure after the rename committed) ·
+H-B/H-C (cancellation: audit skipped after a committed re-wrap; a committed tenant reported as not
+attempted) · H-D (the "no elevation" claim holds at the database layer, overstated at the application
+layer) · **H-D1/H-D2 (the ADR 0012 corrections never propagated to `phase-2.md`/ROADMAP — and H-D2 is
+dangerous: `phase-2.md` still says rotation "retires the old version", which the code deliberately
+does not do; implementing the doc would delete superseded versions and strand every unconverged
+DEK)** · mediums **M-1** (the concurrency test runs its two rotations sequentially, so it would pass
+with the lock deleted), **M-2** (nothing tests durability), **M-6** (`key_id` excluded from the DEK
+binding permits retired-KEK replay).
+
+**Two owner decisions before merge.** (1) **The fork** — commit to production multi-process rotation
+now, or declare the vault correct for single-process and defer multi-process with a named owner.
+Several open findings (H-2, H-3, M-1, and C-A's residual window) only matter under the first. (2)
+**Whether to get one cold or human review of key custody** before merging: two of the criticals were
+introduced by the remediation and found only on re-review, and every review so far has been run by
+the same author as the code.
+
+**Carry-forward.** No phase owns the logging pipeline or application deployment (H3/H4/H5 and H7 are
+parked as "Phase 2 hardening" only because Phase 2 accepts them; ADR 0009's glibc carry-over has the
+same problem) · the alpine→Debian Postgres revert is still required before any perf work or
+production packaging · **Phases 3 and 5 remain `in-progress` and were not resumed this session** —
+their branches are untouched since the fan-out.
+
 ### 2026-07-24 — Merged to main · H1 placed · 2/3/5 fan-out launched
 The C1 slice merged to `main` (`d69f0c3`, `--no-ff`), **53/53 green on main**, pushed
 (`9ae5be0..d69f0c3`). **H1 placed** as **Phase 14 — Identity & access** (`da711ce`): parallel,
