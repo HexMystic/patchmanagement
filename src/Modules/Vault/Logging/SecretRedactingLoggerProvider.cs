@@ -13,8 +13,11 @@ namespace PatchManagement.Vault.Logging;
 /// message before it reaches the sink, so a stray future interpolation of a known-sensitive value
 /// is caught rather than written.
 ///
-/// It covers BOTH channels a sink renders: the formatted message, and the exception object — see
-/// <see cref="RedactedException"/> for why the latter is replaced rather than filtered in place.
+/// It covers two of the channels a sink renders: the formatted message, and the exception object
+/// (see <see cref="RedactedException"/> for why the latter is replaced rather than filtered in
+/// place). It does NOT cover the STRUCTURED state a JSON/OTel/EventSource sink reads, nor scope
+/// state — both are forwarded verbatim. Those are recorded, uncovered channels, not oversights;
+/// ADR 0012 states the scope and the reasoning, and tests pin both boundaries.
 ///
 /// It scrubs by explicit registration (<see cref="Register"/>) rather than guessing, because the
 /// only thing that can reliably be recognised as "this exact secret" is a value someone hands us —
@@ -41,6 +44,13 @@ public sealed class SecretRedactingLoggerProvider(ILoggerProvider inner, Func<st
     {
         if (!string.IsNullOrWhiteSpace(secret)) _sentinels.TryAdd(secret, 0);
     }
+
+    /// <summary>
+    /// True once at least one literal is registered. Nothing registers one in production (ADR 0012
+    /// decision A), so the belt is normally unarmed — and an unarmed belt must not degrade what an
+    /// operator sees. See <see cref="RedactedException"/> and ADR 0012 decision E.
+    /// </summary>
+    public bool IsArmed => !_sentinels.IsEmpty;
 
     public string Scrub(string message)
     {
@@ -105,12 +115,17 @@ public sealed class SecretRedactingLoggerProvider(ILoggerProvider inner, Func<st
             LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            // The sink gets the stand-in, never the original. Scrubbing only the formatted message
-            // would leave the exception object — which sinks render via ToString(), and structured
-            // sinks by walking Data and the inner chain — completely unfiltered.
-            var redacted = owner.ScrubException(exception);
+            // Replace the exception ONLY when the belt is armed. Scrubbing the message alone would
+            // leave the exception object unfiltered — sinks render it via ToString(), and structured
+            // sinks walk Data and the inner chain. But with no sentinel registered there is nothing
+            // to redact, and replacing it would cost the operator the inner chain and Data for
+            // nothing. Unarmed, the original passes through untouched (ADR 0012 decision E).
+            var forwarded = owner.IsArmed ? owner.ScrubException(exception) : exception;
 
-            inner.Log(logLevel, eventId, state, redacted,
+            // NOTE: `state` is forwarded verbatim. The structured channel a JSON/OTel/EventSource
+            // sink reads is deliberately NOT covered — see ADR 0012 decision D for why, and
+            // StructuredStateChannelTests, which pins that boundary as an executable fact.
+            inner.Log(logLevel, eventId, state, forwarded,
                 (s, e) => owner.Scrub(formatter(s, e)));
         }
     }
