@@ -24,7 +24,7 @@ namespace PatchManagement.Vault.Services;
 /// single tenant-agnostic "system rotated the KEK" record. We work within the contract by writing
 /// ONE per-tenant audit entry for each tenant whose DEK moved — accurate and attributable — but a
 /// true system-scope entry (and the operator who triggered it, independent of tenant) needs the
-/// M4 change to make <c>AuditEntry.TenantId</c> nullable. See the report.
+/// M4 change to make <c>AuditEntry.TenantId</c> nullable. See docs/reviews/phase-1-review.md (M4).
 /// </summary>
 public sealed class KekRotationService(
     AppDbContext db,

@@ -83,8 +83,8 @@ rather than raw bytes, because the backends express binding differently — see 
   correct binding. The `AesGcmEnvelope` doc comment previously claimed the opposite and was corrected.
 - **A poisoned or relocated `data_keys` row now aborts KEK rotation**, which walks every non-retired
   DEK. Failing loud is right, but one bad row blocking a whole rotation compounds the rotation
-  robustness findings (no batching, no resumability) already recorded against Phase 2. Not addressed
-  here.
+  robustness findings recorded in [the Phase 2 review](../reviews/phase-2-review.md) — one unbounded
+  transaction across all tenants, no batching, no resumability. Not addressed here.
 - No schema migration: every binding component is an existing column.
 
 ## Rejected

@@ -319,6 +319,55 @@ system-scope audit (Phase 2's cross-tenant KEK rotation must be auditable) will 
 
 ---
 
+## Phase 2 review — follow-ups
+
+Full detail in [`docs/reviews/phase-2-review.md`](reviews/phase-2-review.md) (reviewed at
+`305cc81`). IDs below are that document's.
+
+### Critical
+| # | Finding | Where it should land | Status |
+|---|---------|----------------------|--------|
+| C1 | **Rotation runs under RLS in production DI and silently rotates nothing** — registered on the app-role context; off the HTTP path the DEK query returns zero rows and it reports success. Same root as `M6` | Phase 2 — needs the sanctioned off-HTTP tenancy pattern `M6` asks for | OPEN |
+| C2 | Two processes sharing the KEK file overwrite each other's versions — permanent, unrecoverable data loss | Phase 2 (key custody) | OPEN |
+| C3 | KEK file renamed into place without fsync — a crash can leave a zero-length `kek.json`, losing every credential | Phase 2 (key custody) | OPEN |
+| C4 | A new KEK becomes in-memory `current` before it is durably persisted; no rollback if the save fails | Phase 2 (key custody) | OPEN |
+
+### High
+| # | Finding | Where it should land | Status |
+|---|---------|----------------------|--------|
+| H1 | **No AES-GCM associated data** — an envelope is not bound to its row; cross-tenant relocation decrypts | Phase 2 ([ADR 0013](adr/0013-envelope-binding.md)) | RESOLVED |
+| H2 | KEK file created at default permissions, hardened only after writing | Phase 2 (key custody) | OPEN |
+| H3 | **Redaction belt scrubs the formatted string only — structured state is forwarded raw** and is what production sinks render | Phase 2 (amends ADR 0012) | OPEN |
+| H4 | No test can observe the structured channel; the wiring test passes for the wrong reason | Phase 2 (with H3) | OPEN |
+| H5 | The belt is silently removed by `ClearProviders()` and duplicated by a later `AddConsole()` | Phase 2 (with H3) | OPEN |
+| H6 | Resolve concurrent with rotation races on a non-thread-safe `Dictionary` in `KekKeyset` | Phase 2 (key custody) | OPEN |
+| H7 | Default KEK path is container-ephemeral — a rebuild destroys the key while the DB keeps the ciphertext | Phase 2 / deployment | OPEN |
+| H8 | KMS providers fail at first use, not at startup; the app boots green and throws on the first credential operation | Phase 2 | OPEN |
+
+### Medium
+Memory hygiene (orphaned `secretCopy` on the cancel/audit-failure path; plaintext held across DB
+round-trips; `Array.Clear` vs `ZeroMemory`; **KEK material held to a weaker standard than the DEKs
+it protects**; no page-locking so plaintext is swap- and coredump-visible) · audit gaps (failed
+decrypts and `ListAsync` unaudited; audit written after commit outside any transaction; actor is a
+constant) · correctness (no tenant predicate on vault queries; rotation counts over-report; old KEK
+versions never retired despite `phase-2.md:40`; retired DEKs excluded from re-wrap; key file
+unvalidated on read; `NeverReturnContractTests` is one-assembly/`byte[]`-only/properties-only; EF
+`EnableSensitiveDataLogging` unpinned by any test; exceptions escaping the vault logged outside the
+belt's category scope) · ADR 0012 judgements (scope-state exemption under-rated — the guard greps
+one directory but `IExternalScopeProvider` is process-wide; `RedactedException` is net-negative
+while `Register()` has no runtime caller).
+
+**Also fixed during review:** `PatchManagement.Api` did not reference `PatchManagement.Vault`, so
+the module never loaded in the shipped host — several findings were latent only because of it
+(`a50d9ec`).
+
+**M6 is now load-bearing, not theoretical.** C1 is its first concrete casualty: Phase 2 shipped a
+cross-tenant service straight into the fail-closed hole. The pattern M6 asks for must land with the
+C1 fix, and Phases 8 and 11 should consume it rather than invent their own. Phase 5 stays
+role-based and tenant-neutral per ADR 0010 and does not need it.
+
+---
+
 ## Session Log
 
 Running record of what each session accomplished, so a future session has continuity
