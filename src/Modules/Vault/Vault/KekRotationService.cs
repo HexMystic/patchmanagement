@@ -92,7 +92,19 @@ public sealed class KekRotationService(
 
                 if (dek.WrappedDek is null || dek.KeyId is null)
                 {
-                    skipped++; // never sealed — nothing to re-wrap
+                    // NOT benign, and not silent. Every DEK DataKeyService creates is sealed, so a
+                    // LIVE row with no material is corrupt or tampered — and it stays on its old KEK
+                    // version. Counting it and moving on let a DB-write adversary NULL chosen rows,
+                    // collect a Complete=true rotation, then restore the original pair: those
+                    // credentials survive a post-breach rotation, of the attacker's choosing, and the
+                    // operator has been told there is nothing to re-run (cold review H1).
+                    skipped++;
+                    failures.Add(new KekRotationFailure(
+                        dek.TenantId, dek.Id, "Unconvergeable: the row has no wrapped material or no key id."));
+                    logger.LogWarning(
+                        "DEK {DataKeyId} (tenant {TenantId}) has no wrapped material and cannot be "
+                        + "converged; it remains on its previous KEK version",
+                        dek.Id, dek.TenantId);
                     continue;
                 }
 
