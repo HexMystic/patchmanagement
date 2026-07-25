@@ -49,25 +49,78 @@ public sealed class KekRotationService(
     IVaultActor actor,
     ILogger<KekRotationService> logger) : IKekRotationService
 {
-    public async Task<KekRotationResult> RotateAsync(CancellationToken ct)
-    {
-        var newKeyId = await keyProvider.RotateMasterKeyAsync(ct);
-        return await ConvergeAsync(newKeyId, ct);
-    }
+    /// <summary>
+    /// Serialises whole rotations within this process. This service is a singleton, so two callers
+    /// share one instance — and without this they interleave destructively: A mints k1, B mints k2,
+    /// and A's still-running sweep converges the estate onto k1, by then superseded. After a breach
+    /// that silently restores the compromised key, and both callers are told it worked. It also
+    /// protects <see cref="ConvergeAsync"/>'s captured counters, which are only safe because one
+    /// sweep runs at a time (cold review H2).
+    ///
+    /// <para>The gate must span the MINT as well as the sweep. Guarding only the sweep still allows
+    /// both mints to land first, which is the same defect with extra steps.</para>
+    ///
+    /// <para>In-process only, and that limit is real: a second process rotating concurrently is not
+    /// excluded by this and remains open (ADR 0016, Phase 15). What IS excluded here is the case
+    /// ADR 0016 originally — and wrongly — filed as multi-process-only.</para>
+    /// </summary>
+    private readonly SemaphoreSlim _rotationGate = new(1, 1);
 
-    public async Task<KekRotationResult> CompleteRotationAsync(CancellationToken ct)
+    public Task<KekRotationResult> RotateAsync(CancellationToken ct) =>
+        ExclusivelyAsync(async token =>
+        {
+            var newKeyId = await keyProvider.RotateMasterKeyAsync(token);
+            return await ConvergeAsync(newKeyId, token);
+        }, ct);
+
+    public Task<KekRotationResult> CompleteRotationAsync(CancellationToken ct) =>
+        ExclusivelyAsync(async token =>
+        {
+            // Authoritative, not cached. Targeting a remembered-but-superseded version would select
+            // every DEK another process already moved forward and re-wrap the estate BACKWARDS onto
+            // it — after a breach, silently restoring the compromised key (re-review C-A).
+            var currentKeyId = await keyProvider.RefreshCurrentKeyIdAsync(token);
+            return await ConvergeAsync(currentKeyId, token);
+        }, ct);
+
+    /// <summary>
+    /// Runs one rotation at a time. Callers queue rather than being refused: a
+    /// <see cref="CompleteRotationAsync"/> waiting behind a <see cref="RotateAsync"/> is exactly the
+    /// "finish the partial run" case, and two serialised <see cref="RotateAsync"/> calls each mint
+    /// and converge truthfully — the second simply supersedes the first. Waiting honours the
+    /// caller's token, so this cannot become an unbounded block.
+    /// </summary>
+    private async Task<KekRotationResult> ExclusivelyAsync(
+        Func<CancellationToken, Task<KekRotationResult>> rotation, CancellationToken ct)
     {
-        // Authoritative, not cached. Targeting a remembered-but-superseded version would select every
-        // DEK another process already moved forward and re-wrap the estate BACKWARDS onto it — after
-        // a breach, silently restoring the compromised key (re-review C-A).
-        var currentKeyId = await keyProvider.RefreshCurrentKeyIdAsync(ct);
-        return await ConvergeAsync(currentKeyId, ct);
+        if (!await _rotationGate.WaitAsync(0, ct))
+        {
+            logger.LogInformation(
+                "A KEK rotation is already in progress in this process; queuing behind it");
+            await _rotationGate.WaitAsync(ct);
+        }
+
+        try
+        {
+            return await rotation(ct);
+        }
+        finally
+        {
+            _rotationGate.Release();
+        }
     }
 
     /// <summary>Re-wrap every DEK not already on <paramref name="targetKeyId"/>, tenant by tenant.</summary>
     private async Task<KekRotationResult> ConvergeAsync(string targetKeyId, CancellationToken ct)
     {
-        // Mutated only from the sweep body, which runs tenants sequentially.
+        // Mutated only from the sweep body, which runs tenants sequentially, and only one sweep runs
+        // at a time (_rotationGate).
+        //
+        // WARNING FOR THE 10,000-ENDPOINT WORK: parallelising SweepAsync silently corrupts these.
+        // They are plain captured locals with no interlocking, and `failures` is a bare List<T>.
+        // Anyone adding concurrency to the sweep must convert this accounting first — a rotation
+        // that miscounts is a rotation that misreports, and this subsystem has already produced that
+        // defect four times (cold review M5; see KekRotationResult.Complete).
         var rewrapped = 0;
         var skipped = 0;
         var failures = new List<KekRotationFailure>();

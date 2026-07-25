@@ -98,6 +98,26 @@ than throwing — `TenantsAttempted` versus `TenantsTotal` makes that visible.
 > lives in shared infrastructure that Phases 8 and 11 are told to consume, which is why it is fixed
 > rather than deferred: a counter that lies would propagate to every future sweep.
 
+**Only one rotation runs at a time in a process (amendment 2026-07-26, cold review H2).**
+`KekRotationService` is a singleton, so two callers share one instance. Without a guard they
+interleave destructively: A mints `k1`, B mints `k2`, and A's still-running sweep converges the whole
+estate onto `k1` — by then superseded. After a breach that silently restores the compromised key, and
+both callers are told it worked. A `SemaphoreSlim(1,1)` now spans **the mint and the sweep together**;
+guarding only the sweep would still let both mints land first, which is the same defect with extra
+steps. Callers queue rather than being refused, because a `CompleteRotationAsync` waiting behind a
+`RotateAsync` is exactly the finish-the-partial-run case, and two serialised `RotateAsync` calls each
+converge truthfully — the second simply supersedes the first.
+
+This also protects `ConvergeAsync`'s captured counters, which were only ever safe because one sweep
+runs at a time. **That assumption is now load-bearing and is flagged in the code**: parallelising the
+sweep for the 10,000-endpoint target corrupts the accounting unless it is converted first (cold
+review M5).
+
+**In-process only, and the limit is real.** A second *process* rotating concurrently is not excluded
+by this; that remains open and is Phase 15's
+([ADR 0016](0016-single-process-vault.md)). What this closes is the case ADR 0016 originally — and
+wrongly — filed as multi-process-only.
+
 **Rotation is now resumable.** `RotateAsync` mints a version and converges;
 `CompleteRotationAsync` converges onto the **existing current** version without minting.
 A retry after a partial run finishes the remainder instead of minting a key per attempt.
