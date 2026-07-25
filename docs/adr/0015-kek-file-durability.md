@@ -186,19 +186,24 @@ would have meant knowingly reintroducing the hole in fresh code.
   are already durable and the previous keyset is intact. It is a narrowing of the window,
   not an absolute guarantee.
 
-  > **Correction 2026-07-26 (re-review H-3) — "best-effort" is what this ADR intends and not yet
-  > what the code does.** `FsyncDirectory` handles a failing `open` (`fd < 0`) and discards
-  > `fsync`'s return, so a *syscall* failure is indeed swallowed. But the calls are `DllImport("libc")`,
-  > and on a **musl** host — Alpine, which is what ADR 0009 currently pins for dev Postgres and what
-  > any Alpine-based app image would use — resolution itself can throw `DllNotFoundException` or
-  > `EntryPointNotFoundException`. Nothing catches that. It propagates out of `WriteDurablyAsync`
-  > **after `File.Move` has already committed**, so the caller sees a failed rotation for a rotation
-  > that is durable on disk, and `SoftwareKeyProvider` then declines to swap its cache — leaving the
-  > process using the superseded current key while the file says otherwise. Recoverable by restart
-  > or `CompleteRotationAsync`, and a false *failure* rather than a false success, which is the safer
-  > direction. The fix is a try/catch around `FsyncDirectory` making the code match this bullet;
-  > owned by **Phase 15** ([ADR 0016](0016-single-process-vault.md)) with the rest of the key-custody
-  > work rather than patched in isolation here.
+  > **Correction 2026-07-26 (re-review H-3), itself PARTLY RETRACTED the same day (cold review M6).**
+  >
+  > The correction was right that "best-effort" was aspirational: `FsyncDirectory` discarded
+  > `fsync`'s return, so **`EIO` — the exact failure the call exists to detect — was swallowed in
+  > silence**, and with no `try`/`catch` any throw escaped `WriteDurablyAsync` *after* `File.Move`
+  > had committed, reporting a failed rotation for one that was durable and leaving
+  > `SoftwareKeyProvider` on its superseded key.
+  >
+  > **It was wrong about the cause, and the wrong cause became a reason to defer.** It claimed
+  > `DllImport("libc")` can fail to resolve on **musl** and used that to hand a three-line fix to
+  > Phase 15. A cold review **ran it on musl: it resolves fine.** The premise was false and the fix
+  > was never blocked on anything.
+  >
+  > **Now fixed here, not deferred.** The whole body is guarded so nothing can escape past the
+  > committed rename; a failing `open` or `fsync` logs with its errno through an optional
+  > `ILogger`. Best-effort finally means *reported* rather than *invisible*. The lesson is recorded
+  > in [ADR 0016](0016-single-process-vault.md): a deferral resting on an unverified premise reads as
+  > settled and stops being re-examined.
 - **Network filesystems are out of scope.** `flock` over NFS/SMB is unreliable; the lock's
   guarantee is for a local volume. A shared key file on a network mount is not supported.
 - Single-file custody remains a single point of total loss (no escrow, no replication) —

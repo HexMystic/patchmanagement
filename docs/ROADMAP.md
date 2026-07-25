@@ -269,10 +269,12 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
   any rotation/sweep trigger it introduces ([ADR 0014](adr/0014-system-tenancy-scope.md), re-review H-D).
 
 ## Phase 15 — Key custody & KMS providers  · parallel · Status: not-started
-- **Goal:** Production-grade master-key custody. Build the opt-in KMS backends of `IKeyProvider`
-  (ADR 0002) and close the key-custody findings that only bite outside a single process — because
-  **production multi-process arrives via a KMS, not by hardening a shared key file**
-  ([ADR 0016](adr/0016-single-process-vault.md)).
+- **Goal:** Production-grade master-key custody **and rotation correctness**. Build the opt-in KMS
+  backends of `IKeyProvider` (ADR 0002) and close the key-custody findings that only bite outside a
+  single process — because **production multi-process arrives via a KMS, not by hardening a shared
+  key file** ([ADR 0016](adr/0016-single-process-vault.md)). The scope names rotation explicitly
+  because the cold review's M2–M5 land here and Phase 2 is now `complete`, so "Phase 2 hardening" is
+  a weaker owner than it was; anything that changes what a rotation *reports* belongs to a live phase.
 - **Dependencies:** Phase 2 (the `IKeyProvider` seam, `IKekSource`, rotation and convergence exist
   and are exercised).
 - **Why it exists:** Phase 2 ships correct for **one process**. Every finding below is real
@@ -292,8 +294,17 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
   - **H-3** — `FsyncDirectory` cannot fail a rotation that already committed: `DllImport("libc")` can
     throw on **musl**, escaping after `File.Move`, so a durable rotation reports failure and the
     provider keeps its stale cached key. Make the code match ADR 0015's "best-effort" claim.
-  - **M-1** — a concurrency test that genuinely tests concurrency. Today's serialises and would pass
-    with the sidecar lock deleted; needs a real second process.
+  - **M-1 / C-A residual — one problem, not two: cross-process rotation exclusion.** The in-process
+    half is closed (`ConcurrentRotationTests` forces a real interleave and proves the sweep guard);
+    what remains is mutual exclusion **across processes**, which needs a second-process harness this
+    repo does not have. The key-file concurrency test still serialises and would pass with the
+    sidecar lock deleted.
+  - **Rotation correctness (cold review M2–M5):** a 61-byte ceiling on the pre-auth DEK-unwrap
+    allocation (**M2**); `Complete` must not be true for an **empty registry** (**M3**); decide
+    whether **retired DEKs** must converge, which is the retirement-floor question (**M4**); and
+    **convert the sweep accounting before parallelising it** for the 10,000-endpoint target — the
+    counters are plain captured locals and a bare `List<T>`, safe only because one sweep runs at a
+    time (**M5**, flagged in the code and in [ADR 0014](adr/0014-system-tenancy-scope.md)).
   - **M-2** — durability under test: `WriteThrough`, `Flush(flushToDisk:true)`, the directory fsync,
     plus lock contention and timeout. Needs a **Linux CI runner** (fsync is a no-op on the Windows
     dev box) and crash injection.
@@ -524,6 +535,40 @@ mints a tenant's **root DEK with no audit row** (`IAuditLog` is not injected at 
 event with no trail — same class and same M4/`EfAuditLog` constraint as the `Create` gap above.
 **→ Phase 13**, with the rest of the audit cluster.
 
+### Phase 2 cold review (zero-history, key custody) — 2026-07-26
+
+An independent reviewer with no history in this codebase examined the key-custody path and
+**confirmed the core**: cross-process custody, no version loss, absence-fatal initialization, the H-1
+deep copy, envelope relocation failing, no downgrade path, no cross-tenant bypass — verified on
+Windows, glibc **and** musl. It then found two must-fix defects and, more usefully, **disproved two
+premises that ADR 0016's deferrals rested on**.
+
+**Fixed before merge** (`a4fd28c` → `8a073a1` → `347d2f2`):
+
+| # | Finding | Resolution |
+|---|---------|-----------|
+| **H1** | **`Complete` omitted `DeksSkipped`.** `data_keys.wrapped_dek` is nullable, so a DB-write adversary NULLs chosen rows; they are skipped, not converged, and rotation reports `Complete = true`. The operator does not re-run; the adversary restores the rows and **chooses which credentials survive a post-breach rotation** | RESOLVED — every skip is now a named `KekRotationFailure` *and* `Complete` separately requires `DeksSkipped == 0`; each skip logs at Warning. Red-first on the skipped-DEK case specifically |
+| **H2** | **Two concurrent in-process rotations re-pin the estate onto a superseded key**, both reporting success. `KekRotationService` is a **singleton** — so this bites the single-process topology ADR 0016 declared supported. **The "multi-process only" premise was FALSE** | RESOLVED — a rotation gate spanning **mint + sweep** (guarding only the sweep lets both mints land first). Red-first via a forced deterministic interleave, not a timing race ([ADR 0014](adr/0014-system-tenancy-scope.md)) |
+| **M6** | `FsyncDirectory` discarded `fsync`'s return, so **`EIO` — the failure it exists to catch — was silent**; and with no `try`/`catch` a throw escaped *after* `File.Move` committed. **The "DllImport throws on musl" premise was FALSE** — the cold review ran it | RESOLVED — guarded body, errno logged via an optional `ILogger`. The ADR 0015 correction asserting the musl premise is retracted there |
+| **M7** | `VAULT_SOFTWARE_KEK_INIT` had no one-shot semantics and the refusal told operators to *set* it, so a compose file keeping it set turns **every failed volume mount into a silent fresh-KEK mint** — CR-1 re-armed by its own remedy | RESOLVED — initialization needs the flag **and** an arming sentinel beside the store, which it **consumes**. A lost volume takes the sentinel with it, so the refusal fires on exactly the occasion that matters. Mechanism, not advice |
+
+**Tracked with owners — not fixed:**
+
+| # | Finding | Owner |
+|---|---------|-------|
+| **M2** | Unbounded pinned pre-auth allocation — `PlaintextLength` sizes a buffer from attacker-influenced bytes before authentication. A wrapped DEK is always 61 bytes, so a ceiling is cheap | **Phase 15** — the bound belongs on the DEK-unwrap path; the credential layer's length is legitimately variable. Not merge-blocking |
+| **M3** | An **empty registry yields `Complete = true`** — a sweep over zero tenants reports a successful rotation | **Phase 15**. Same family as H1: a success signal that is true only vacuously |
+| **M4** | **Retired DEKs are excluded** from the convergence query and therefore from `Complete` | **Phase 15**. Needs a decision on whether a retired DEK must converge at all, which is the retirement-floor question |
+| **M5** | **Sweep accounting corrupts if the sweep is ever parallelized** — plain captured locals, a bare `List<T>`, safe only because one sweep runs at a time | **Phase 15**, and **flagged loudly in the code** at the mutation site and in [ADR 0014](adr/0014-system-tenancy-scope.md), because the person who breaks this will be doing the 10,000-endpoint work and will be reading the sweep, not this table |
+| **L1/L2/L3** | **Content not available in-session.** | **UNDISPOSITIONED — action required.** The agreed home for the cold review is `docs/reviews/phase-2-cold-review.md`, matching `phase-1-review.md` / `phase-2-review.md`; it has not been added. These three are recorded here so they cannot be lost, but they are **not** dispositioned, and this section is not complete until they are |
+
+**A note the next rotation author should read first:** "reports success while untrue" is this
+subsystem's characteristic failure — **four instances** (C1, H-A, CR-1/C-A, H1), and the H-A fix
+corrected the *numbers* while leaving the dishonesty in `Complete`, where it survived another review.
+Every success signal here is guilty until proven. Tabulated in
+[ADR 0016](adr/0016-single-process-vault.md), "The recurring hazard", and pointed at from
+`KekRotationResult.Complete`.
+
 ### Exit criteria — status at the close of Phase 2 (2026-07-26)
 Gates completion (CLAUDE.md §6: no phase is done until its exit criteria are met and its tests pass).
 The criteria themselves were **amended** on 2026-07-26 — see the Phase 2 section above and
@@ -557,7 +602,45 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
-### 2026-07-26 — Phase 2 closed out · GREEN and pushed · HELD AT THE MERGE GATE · RESUME HERE
+### 2026-07-26 (later) — cold review actioned · GREEN · STILL HELD AT THE MERGE GATE · RESUME HERE
+A **zero-history cold review of the key custody path** — the one the previous entry was holding for —
+came back. It **confirmed the core** (cross-process custody, no version loss, absence-fatal init, the
+H-1 deep copy, envelope relocation failing, no downgrade, no cross-tenant bypass; verified on
+Windows, glibc **and** musl) and found **two must-fix defects plus two false premises**. Commissioning
+it was the right call: the false premises were mine, and both were in ADR 0016.
+
+Four commits: `a4fd28c` (H1) → `8a073a1` (H2) → `347d2f2` (M6/M7) → this one.
+**Tests: Contracts 19/19, IntegrationTests 36/36, Vault 71/71 — 126 total** (was 121).
+
+**The two premises, both disproven by a reviewer who ran the code:**
+- **"Concurrent rotation is multi-process only."** False — `KekRotationService` is a **singleton**, so
+  one process is enough. It bit the single-process topology ADR 0016 had just declared *supported*.
+- **"`DllImport` throws on musl."** False — they ran it. A three-line fix had been handed to Phase 15
+  on a premise nobody verified.
+
+Both fixed rather than re-deferred, and ADR 0016 now says so at the top. The lesson is recorded
+there: **a deferral resting on an unverified premise reads as settled, so nobody re-examines it.**
+
+**H1 is the fourth "reports success while untrue" in this subsystem** (C1 → H-A → CR-1/C-A → H1), and
+the sequence matters more than the bug: the H-A fix corrected the *numbers* and left the dishonesty
+in `Complete`, where it survived another review. Tabulated in ADR 0016 "The recurring hazard" and
+pointed at from `KekRotationResult.Complete`, so the next author meets it where they will be standing.
+
+**Red-first proofs, both mandated and both run.** H1: `"a rotation that skipped 1 live DEK(s)
+reported Complete"`, failing at the `Complete` assertion itself. H2: two DEKs left on the superseded
+`kek-…d81a0912…` while current was `kek-…83480883…`. H2's assertion was corrected after its red run
+(a serialised second rotation legitimately supersedes the first), so the **corrected** test was
+re-proven red against the unguarded code — the proof covers what was committed, not an earlier draft.
+
+**⛔ STILL NOT MERGED.** `main` untouched at `42529db`. Phases 3/5 not rebased.
+
+**One item is genuinely outstanding, not closed:** the cold review's **L1/L2/L3 have no
+disposition** — their content was never in-session. The agreed home is
+`docs/reviews/phase-2-cold-review.md` (matching `phase-1-review.md` / `phase-2-review.md`), and that
+file has not been added. M2–M5 are dispositioned to Phase 15; L1–L3 are recorded so they cannot be
+lost, but the cold-review section is **not complete** until they are read and owned.
+
+### 2026-07-26 — Phase 2 closed out · GREEN and pushed · HELD AT THE MERGE GATE
 **Phase 2 is `complete` and `phase/2-vault` is green — and deliberately NOT merged.** `main` is
 untouched at `42529db`. Three commits landed on top of `c132b25`:
 

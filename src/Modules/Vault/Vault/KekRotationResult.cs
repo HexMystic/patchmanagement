@@ -50,7 +50,8 @@ public sealed record KekRotationResult(
     /// DEKs ignored here). Note that the H-A fix corrected the *numbers* and left the dishonesty in
     /// this property — fixing the counter is not the same as fixing the verdict. Before changing
     /// this expression, ask what an operator does when it returns <c>true</c> — they stop, and do
-    /// not re-run — and who benefits if it is wrong.</para>
+    /// not re-run — and who benefits if it is wrong. The four instances are tabulated in
+    /// <c>docs/adr/0016-single-process-vault.md</c>, "The recurring hazard".</para>
     ///
     /// <para><c>DeksSkipped</c> is checked as well as <c>Failures</c> even though every skip is also
     /// recorded as a failure. That redundancy is deliberate on a signal with this history: it takes
