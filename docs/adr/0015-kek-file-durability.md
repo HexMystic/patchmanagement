@@ -165,17 +165,40 @@ would have meant knowingly reintroducing the hole in fresh code.
 ## Limitations, stated rather than implied
 
 - **The cross-process guarantee is argued, not test-proven.** The tests run two independent
-  source+provider pairs over one file in one process — which does exercise the real OS lock,
-  since `FileShare.None` is per-handle — but not a true process boundary. There is no console
-  project or second-process harness in this repo, and Smart App Control has historically
+  source+provider pairs over one file in one process — but not a true process boundary. There is no
+  console project or second-process harness in this repo, and Smart App Control has historically
   blocked spawning freshly built binaries here. The guarantee rests on documented
-  `FileShare.None` semantics plus that test.
+  `FileShare.None` semantics.
+
+  > **Correction 2026-07-26 (re-review M-1).** This bullet claimed the test "does exercise the real
+  > OS lock, since `FileShare.None` is per-handle". It does not. `Concurrent_rotations_do_not_erase_each_others_key_versions`
+  > **serialises**: the first provider's whole read-modify-write — uncontended lock acquisition, a
+  > small synchronous serialize and flush, release — completes before the second call is even
+  > invoked, so `Task.WhenAll` awaits two already-finished tasks. The retry/backoff path is never
+  > entered, and **the test would still pass with the sidecar lock deleted entirely**, provided the
+  > reload-from-disk in `AddVersionAsync` survives. What it genuinely proves is the additive merge,
+  > which is valuable and is what C2 was about — it proves nothing about mutual exclusion. A real
+  > concurrency test needs a second process; owned by **Phase 15** ([ADR 0016](0016-single-process-vault.md)).
 - **The directory fsync is not exercised on Windows**, where it is a deliberate no-op, and
   the dev/test machine is Windows. The Linux path is reasoned, not run, until CI runs on
   Linux.
 - **The fsync is best-effort**: a failure does not fail the rotation, because the contents
   are already durable and the previous keyset is intact. It is a narrowing of the window,
   not an absolute guarantee.
+
+  > **Correction 2026-07-26 (re-review H-3) — "best-effort" is what this ADR intends and not yet
+  > what the code does.** `FsyncDirectory` handles a failing `open` (`fd < 0`) and discards
+  > `fsync`'s return, so a *syscall* failure is indeed swallowed. But the calls are `DllImport("libc")`,
+  > and on a **musl** host — Alpine, which is what ADR 0009 currently pins for dev Postgres and what
+  > any Alpine-based app image would use — resolution itself can throw `DllNotFoundException` or
+  > `EntryPointNotFoundException`. Nothing catches that. It propagates out of `WriteDurablyAsync`
+  > **after `File.Move` has already committed**, so the caller sees a failed rotation for a rotation
+  > that is durable on disk, and `SoftwareKeyProvider` then declines to swap its cache — leaving the
+  > process using the superseded current key while the file says otherwise. Recoverable by restart
+  > or `CompleteRotationAsync`, and a false *failure* rather than a false success, which is the safer
+  > direction. The fix is a try/catch around `FsyncDirectory` making the code match this bullet;
+  > owned by **Phase 15** ([ADR 0016](0016-single-process-vault.md)) with the rest of the key-custody
+  > work rather than patched in isolation here.
 - **Network filesystems are out of scope.** `flock` over NFS/SMB is unreliable; the lock's
   guarantee is for a local volume. A shared key file on a network mount is not supported.
 - Single-file custody remains a single point of total loss (no escrow, no replication) —

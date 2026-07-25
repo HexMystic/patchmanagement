@@ -50,6 +50,39 @@ containing it would differ between unwrap and re-wrap, and a shared helper calle
 would silently compute the wrong value. `keyId` already selects the KEK version. `retired_at` is
 excluded for the same class of reason: retiring a row must never brick its unwrap.
 
+> **Re-review M-6 — assessed 2026-07-26, exclusion upheld on security grounds, not just
+> convenience.** The finding is that omitting `key_id` lets a retired-KEK `(wrapped_dek, key_id)`
+> pair be replayed onto a current row. The pair is real; adding `key_id` to the binding does not
+> address it, for four independent reasons:
+>
+> 1. **The adversary controls both columns.** Anyone who can write `wrapped_dek` writes `key_id` in
+>    the same row, in the same statement. A binding over `key_id` therefore validates a
+>    *consistently replayed* old pair exactly as it validates the live one. It constrains the
+>    attacker not at all.
+> 2. **The mismatched case already fails.** Pairing a new blob with an old id (or the reverse) does
+>    not authenticate today — the blob will not open under the wrong KEK version. So the binding
+>    would add no detection either; it would restate a property AES-GCM already enforces.
+> 3. **Replay yields no plaintext the attacker lacks.** Rotation re-wraps *the same DEK*, so an old
+>    pair unwraps to a byte-identical key. And an adversary holding the superseded KEK plus a
+>    captured blob already has that DEK offline, without touching the database.
+> 4. **Changing it would cost a frozen contract for nothing.** The `v2` binding strings are fixed by
+>    this ADR (NEVER #6), and a new binding means re-wrapping every DEK in every deployment.
+>
+> **The genuine residual is downgrade persistence**, and it is worth naming: after a post-breach
+> rotation, a row can be pinned back to a superseded version, and because superseded versions are
+> retained forever that version stays usable indefinitely. That dents `THREAT-MODEL.md`'s "rotate
+> fast post-incident" story at the application layer, even though it grants the attacker no
+> capability they did not already hold.
+>
+> **The fix that would close it is a KEK retirement floor** — once `CompleteRotationAsync` reports
+> `Complete`, mark superseded versions retired and refuse to unwrap under them. That is the other
+> end of the trade recorded in `phase-2.md` (re-review H-D2): retention is exactly what makes a
+> half-finished rotation recoverable, so a floor is only safe once convergence is provably complete
+> across every process that could hold an unconverged DEK. It therefore depends on the
+> single-process/multi-process decision and belongs to **Phase 15**
+> ([ADR 0016](0016-single-process-vault.md)). Recording it as "M-6 needs a binding change" would
+> have sent a future session to fix the wrong layer.
+
 **Row ids are minted before sealing.** Both are client-generated `Guid.NewGuid()` with no database
 default, so this is a statement reorder in `VaultCredentialProvider.StoreAsync` and
 `DataKeyService.GetOrCreateActiveAsync` — no behavioural change beyond the binding itself.

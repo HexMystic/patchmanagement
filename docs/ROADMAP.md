@@ -18,7 +18,7 @@ separate worktrees. **Phase 8 is solo.**
 |---|-------|------|-----------|--------|
 | 0 | Environment & design | solo | — | **complete** |
 | 1 | Contracts | solo | 0 | **complete** |
-| 2 | Credential vault | parallel | 1 | **in-progress** |
+| 2 | Credential vault | parallel | 1 | **complete** |
 | 3 | Endpoint connector | parallel | 1 | **in-progress** |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
 | 5 | Content ingestion | parallel | 1 | **in-progress** |
@@ -31,12 +31,14 @@ separate worktrees. **Phase 8 is solo.**
 | 12 | UI | parallel | 1, **14** | not-started |
 | 13 | Audit, compliance, evidence | parallel | 6 | not-started |
 | 14 | Identity & access (authN/authZ) | parallel | 1 | not-started |
+| 15 | Key custody & KMS providers | parallel | 2 | not-started |
 
-> **Numbering note.** Phase 14 (identity) is appended to avoid renumber churn, but the number is a
+> **Numbering note.** Phases 14 and 15 are appended to avoid renumber churn, but the number is a
 > label, not a build-order rank — order is set by the *Depends on* column. Identity depends only on
 > Phase 1, so it can run in the **early parallel band** alongside 2/3/5; it **must complete before
 > Phase 12** (the UI cannot ship on a caller-supplied `X-Tenant-Id` header). It resolves review
-> finding **H1**.
+> finding **H1**. Phase 15 depends on Phase 2 and **must complete before any multi-instance or SaaS
+> deployment** — see [ADR 0016](adr/0016-single-process-vault.md).
 
 **Phase 1 is complete** (amended scope — see C1 below). The C1 slice (`37502b3` → `953a2a5` →
 `a8aaa0e`) **resolved C1 and closed H2, H3, H4**, and cleared three independent fresh-session
@@ -85,23 +87,39 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
   `db/migrations`, `docs/phases/phase-1.md`, `api/openapi.yaml`, `schemas/`.
 - **Detail:** `docs/phases/phase-1.md`.
 
-## Phase 2 — Credential vault  · parallel · Status: in-progress
+## Phase 2 — Credential vault  · parallel · Status: complete
 - **Goal:** Envelope-encrypted credential store; the highest-value asset.
 - **Dependencies:** Phase 1.
-- **Exit criteria:** `IKeyProvider` with **software default** + opt-in Azure Key
-  Vault / AWS KMS / HashiCorp Vault; master-KEK → per-tenant DEK → credential
+- **Exit criteria** *(amended 2026-07-26 — see [ADR 0016](adr/0016-single-process-vault.md))*:
+  `IKeyProvider` with a **software default**; master-KEK → per-tenant DEK → credential
   envelope; **KEK rotation + DEK re-wrap without re-encrypting credentials**;
   decryption in-memory only; enforced never-log / never-return invariants with
   tests proving them; **every credential access logged via the Phase-1 `IAuditLog`
   from day one** (metadata only — never the secret).
+  **Moved out:** the opt-in Azure Key Vault / AWS KMS / HashiCorp Vault backends and
+  "provider swappable via config" now belong to **Phase 15**. The seam is delivered and
+  exercised; the three cloud providers ship as honest stubs that throw. This is a recorded
+  scope amendment in the same shape as C1's amendment to Phase 1, not a lowered bar.
 - **Owned paths:** `src/Modules/Vault`.
-- **Accepted limitations (redaction), recorded not deferred** — [ADR 0012](adr/0012-log-redaction-scope.md):
-  resolve-time secret self-registration is **rejected** (it would retain non-zeroable
-  plaintext for the process lifetime); log **scope state** is not scrubbed; secret-bearing
-  records must not rely on a generated `ToString()`. The latter two are enforced by
-  `VaultLoggingConventionTests`, not just documented. **Residual obligation → Phase 3**
+- **Supported deployment shape:** **single process** for the software provider — one host, one key
+  file. Multi-instance and SaaS require a KMS backend and are **not supported before Phase 15**
+  ([ADR 0016](adr/0016-single-process-vault.md)). ADR 0015's cross-process lock stays as a safety
+  net that bounds the damage; it is not a supported topology.
+- **Accepted limitations (redaction), recorded not deferred** — [ADR 0012](adr/0012-log-redaction-scope.md).
+  The belt covers the **formatted message** and the **exception object when armed**; **four**
+  boundaries are accepted: resolve-time secret self-registration is **rejected** (it would retain
+  non-zeroable plaintext for the process lifetime, so the belt is inert in production by design);
+  **structured log state** is not scrubbed — and it is the channel production sinks actually read;
+  log **scope state** is not scrubbed; secret-bearing records must not rely on a generated
+  `ToString()`. The last three are enforced by test (`VaultLoggingConventionTests`,
+  `StructuredStateChannelTests`), not just documented. **Residual obligation → Phase 3**
   (Connectors): the belt covers vault log categories only, so the NeverLog scan must be
   extended to the connector module.
+- **Two criteria dispositioned rather than silently claimed:** **never-return** is *vacuous by
+  construction* here (no vault endpoints exist to assert against) and must be **re-asserted at
+  Phases 12/14**; **decryption in-memory only** is met in substance — pinned, self-zeroing buffers
+  for plaintext and, since re-review H-1, for KEK material too — with the memory-hygiene residue
+  recorded as Phase 2 hardening.
 - **Detail:** `docs/phases/phase-2.md`. See `docs/THREAT-MODEL.md`.
 
 ## Phase 3 — Endpoint connector  · parallel · Status: in-progress
@@ -246,6 +264,52 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
 - **Note — dev posture unchanged until this lands:** `HeaderTenantResolver` stays for local/dev and
   the lab; this phase supplies the production resolver. The guardrail (`.claude/`) and lab-only
   constraint are unaffected.
+- **Also gates the cross-tenant seam.** `ITenantScopeFactory` is fenced by a convention test
+  (`TenantScopeConventionTests`) rather than by authorization; this phase supplies the real gate on
+  any rotation/sweep trigger it introduces ([ADR 0014](adr/0014-system-tenancy-scope.md), re-review H-D).
+
+## Phase 15 — Key custody & KMS providers  · parallel · Status: not-started
+- **Goal:** Production-grade master-key custody. Build the opt-in KMS backends of `IKeyProvider`
+  (ADR 0002) and close the key-custody findings that only bite outside a single process — because
+  **production multi-process arrives via a KMS, not by hardening a shared key file**
+  ([ADR 0016](adr/0016-single-process-vault.md)).
+- **Dependencies:** Phase 2 (the `IKeyProvider` seam, `IKekSource`, rotation and convergence exist
+  and are exercised).
+- **Why it exists:** Phase 2 ships correct for **one process**. Every finding below is real
+  engineering aimed at a deployment shape the product does not have yet, and each would be answered
+  by a KMS rather than by us. Parking them in the "Phase 2 hardening" bucket would have satisfied
+  `DIFFERENTIATORS.md`'s named-owner rule only nominally — the ROADMAP already calls that bucket a
+  naming dodge. **No multi-instance or SaaS deployment is supported until this phase completes.**
+- **Exit criteria:**
+  - **The three KMS backends implemented** — Azure Key Vault, AWS KMS, HashiCorp Vault — with
+    `KeyBinding` mapped onto each backend's own mechanism (`EncryptionContext`, Transit `context`),
+    and **Azure's missing `wrapKey` binding parameter solved rather than silently dropped**
+    ([ADR 0013](adr/0013-envelope-binding.md)). Inherits Phase 2's **"provider swappable via config
+    with no code change to callers"**, with a test that actually sets `VAULT_KEY_PROVIDER`.
+  - **H8** — a selected provider is validated at **startup**, not on the first credential operation.
+  - **H-2** — the key-file read path works against a **read-only mount** (today every `IKekSource`
+    entry point takes a sidecar lock opened `OpenOrCreate`+`ReadWrite`, so it needs *create* access).
+  - **H-3** — `FsyncDirectory` cannot fail a rotation that already committed: `DllImport("libc")` can
+    throw on **musl**, escaping after `File.Move`, so a durable rotation reports failure and the
+    provider keeps its stale cached key. Make the code match ADR 0015's "best-effort" claim.
+  - **M-1** — a concurrency test that genuinely tests concurrency. Today's serialises and would pass
+    with the sidecar lock deleted; needs a real second process.
+  - **M-2** — durability under test: `WriteThrough`, `Flush(flushToDisk:true)`, the directory fsync,
+    plus lock contention and timeout. Needs a **Linux CI runner** (fsync is a no-op on the Windows
+    dev box) and crash injection.
+  - **C-A residual** — the convergence window: the target is authoritative at read time but the
+    sweep spans many transactions, so another process rotating mid-sweep leaves this one on a stale
+    target ([ADR 0014](adr/0014-system-tenancy-scope.md)).
+  - **H7** — KEK custody that is not a single point of total loss: a non-ephemeral default path
+    (today `AppContext.BaseDirectory/vault/kek.json`), an owned compose volume, and an escrow or
+    replication story.
+  - **KEK retirement floor** — refuse superseded versions once convergence is *provably* complete,
+    so a rotation actually revokes. This is the safe form of what `phase-2.md` wrongly claimed
+    rotation already did (re-review H-D2) and is what closes **M-6**'s downgrade-persistence
+    residual ([ADR 0013](adr/0013-envelope-binding.md)). It must not strand unconverged DEKs.
+- **Owned paths:** `src/Modules/Vault/KeyProviders`, plus the compose/key-volume story for H7.
+- **See:** [ADR 0016](adr/0016-single-process-vault.md), [ADR 0002](adr/0002-key-provider.md),
+  [ADR 0015](adr/0015-kek-file-durability.md), `docs/THREAT-MODEL.md`.
 
 ---
 
@@ -327,8 +391,13 @@ Full detail in [`docs/reviews/phase-2-review.md`](reviews/phase-2-review.md) (re
 **Status 2026-07-25:** the remediation slice (`a50d9ec` → `ca54bec` → `20b721d` → `e47735f` →
 `8dcf349`) closed **C1, C2, C3, C4, H1, H2, H6**, accepted **H3** with the scope corrected and
 fenced, and fixed the module-wiring gap that made several findings latent. **Open — tracked, not
-fixed:** H4, H5, H7, H8 and the medium cluster. None is a live disclosure path. The branch is ready
-for a fresh-session re-review of the whole remediated vault before merge.
+fixed:** H4, H5, H7, H8 and the medium cluster. None is a live disclosure path.
+
+**Status 2026-07-26:** the re-review is fully dispositioned (see the re-review section below) and
+**H7 and H8 have moved to Phase 15** ([ADR 0016](adr/0016-single-process-vault.md)) — they are key
+custody, and Phase 15 owns it. **H4 and H5 remain "Phase 2 hardening"**: they are logging-pipeline
+findings, and moving them into a key-custody phase would launder the ownership gap rather than
+close it.
 
 ### Critical
 | # | Finding | Where it should land | Status |
@@ -347,8 +416,8 @@ for a fresh-session re-review of the whole remediated vault before merge.
 | H4 | No test can observe the structured channel; the wiring test passes for the wrong reason | **Phase 2 hardening, deferred** — `CapturingLoggerProvider` is formatter-shaped; `StructuredCapturingLoggerProvider` now exists to build on | OPEN |
 | H5 | The belt is silently removed by `ClearProviders()` and duplicated by a later `AddConsole()` | **Phase 2 hardening, deferred** — needs an assertion over the real host's provider list | OPEN |
 | H6 | Resolve concurrent with rotation races on a non-thread-safe `Dictionary` in `KekKeyset` | Phase 2 — `KekKeyset` made immutable, closed with [ADR 0015](adr/0015-kek-file-durability.md) | RESOLVED |
-| H7 | Default KEK path is container-ephemeral — a rebuild destroys the key while the DB keeps the ciphertext | **Phase 2 hardening, deferred** for the code default. The compose volume has **no owner** — see the note below | OPEN |
-| H8 | KMS providers fail at first use, not at startup; the app boots green and throws on the first credential operation | **Phase 2 hardening, deferred** — a startup probe of the selected provider | OPEN |
+| H7 | Default KEK path is container-ephemeral — a rebuild destroys the key while the DB keeps the ciphertext | **→ Phase 15** (key custody), which owns the code default *and* the compose volume — the half that previously had no owner at all | OPEN, owned |
+| H8 | KMS providers fail at first use, not at startup; the app boots green and throws on the first credential operation | **→ Phase 15**, which builds the providers; a startup probe ships with them | OPEN, owned |
 
 ### Medium
 Memory hygiene — **Phase 2 hardening, deferred**: orphaned `secretCopy` on the cancel/audit-failure
@@ -383,19 +452,23 @@ record's members (`TenantId`, `DataKeyId`, `Reason`) miss `VaultLoggingConventio
 narrow vocabulary, so a future structural log of a `KekRotationResult` would render a provider
 exception message raw on the uncovered structured channel. **Phase 2 hardening, deferred.**
 
-**Remaining hardening (deferred):** H4/H5 (belt testability and removability), H7 (KEK path — the
-code default plus an unowned compose volume), H8 (startup validation), the memory-hygiene and
+**Remaining hardening (deferred):** H4/H5 (belt testability and removability), the memory-hygiene and
 correctness mediums, and `KekRotationFailure.Reason`. None is a live disclosure path.
+**H7 and H8 moved to Phase 15** on 2026-07-26 — they are key custody, and a phase now owns it.
 
-**Note — no phase owns the logging pipeline or application deployment.** H3/H4/H5 are
-logging-pipeline findings and H7 is a container-volume one, but Phase 8 "Deployment engine" deploys
-*patches to endpoints*, and Phase 0 owns `docker-compose.yml` and is **complete**. Rather than invent
-a phase, these are parked as **Phase 2 hardening** — which satisfies `DIFFERENTIATORS.md`'s rule
-("deferring **without a named owner** is not") only because Phase 2 accepts them. The gap is real and
-recurs: ADR 0009's glibc production-pinning carry-over has the same problem. Naming an owner for
-logging/telemetry and deployment packaging is a decision someone still has to make.
+**Note — no phase owns the logging pipeline or application deployment.** *(Narrowed 2026-07-26: the
+key-custody half of this gap is closed — **Phase 15** now owns H7's code default **and** its compose
+volume. What remains is logging/telemetry and deployment packaging.)* H3/H4/H5 are logging-pipeline
+findings, but Phase 8 "Deployment engine" deploys *patches to endpoints*, and Phase 0 owns
+`docker-compose.yml` and is **complete**. Rather than invent a second phase in one slice, these stay
+parked as **Phase 2 hardening** — which satisfies `DIFFERENTIATORS.md`'s rule ("deferring **without a
+named owner** is not") only because Phase 2 accepts them. Folding them into Phase 15 was considered
+and rejected: a key-custody phase is the wrong owner for a logging belt, and putting them there
+would launder the gap rather than close it. The gap is real and recurs — ADR 0009's glibc
+production-pinning carry-over has the same problem. Naming an owner for logging/telemetry and
+deployment packaging is a decision someone still has to make.
 
-### Phase 2 re-review (pre-merge gate) — three criticals fixed, the rest OPEN
+### Phase 2 re-review (pre-merge gate) — fully dispositioned 2026-07-26
 
 A fresh-session re-review of the remediated vault at `c557c41` found **2 critical + 9 high**, two of
 them regressions the remediation itself introduced. The three merge-blocking ones are fixed:
@@ -406,27 +479,65 @@ them regressions the remediation itself introduced. The three merge-blocking one
 | C-A | **`CompleteRotationAsync` read the target from a stale cache**, so a non-rotating process could re-wrap the estate back onto a superseded KEK and report `Complete` | RESOLVED — `RefreshCurrentKeyIdAsync` reads under the lock ([ADR 0014](adr/0014-system-tenancy-scope.md) amendment). Window bounded to one sweep, not eliminated |
 | H-A | **`Complete` ignored tenant-level failures** — C1's "failed but reported success" one layer up | RESOLVED — `KekRotationResult.TenantFailures`; `Complete` requires both lists empty |
 
-**Still OPEN and NOT yet dispositioned** — the remaining re-review findings: H-1 (`KekKeyset` is
-shallow; `Snapshot()` and `Get()` hand out live KEK arrays while the docs claim a copy), H-2
-(`LoadAsync` taking the lock made the read path require write access, breaking a read-only key
-mount), H-3 (a throwing directory fsync reports failure after the rename committed), H-B (audit
-skipped while the re-wrap is committed), H-C (`attempted--` misreports a committed tenant), H-D (the
-"no elevation" claim holds at the database layer but is overstated at the application layer), the
-documentation-accuracy findings, and the medium cluster including **M-1: the concurrency test does
-not actually test concurrency** (`Task.WhenAll` over two synchronously-completing calls) and **M-2:
-nothing tests durability**. A full disposition of the re-review is a separate task.
+**All eleven re-review findings are now dispositioned (2026-07-26).** The owner decision that
+unblocked them: **ship a correct single-process vault; production multi-process arrives via
+`IKeyProvider` KMS backends (ADR 0002), not shared-file locking** —
+[ADR 0016](adr/0016-single-process-vault.md).
 
-### Exit criteria — status at `8dcf349`
-Gates merge (CLAUDE.md §6: no phase is done until its exit criteria are met and its tests pass).
+**Fixed on this branch** — real regardless of process count:
+
+| # | Finding | Resolution |
+|---|---------|-----------|
+| H-1 | **`KekKeyset` was shallow** — constructor, `WithNewVersion()`, `Snapshot()` and `Get()`/`TryGet()` all copied the map and shared the `byte[]`, so a caller held a live reference to key material and a parent keyset aliased its child. `Snapshot()`'s doc claimed the opposite | RESOLVED — the keyset **owns** its material: deep-copied in and out; `Get`/`TryGet` replaced by `Contains` + `CopyKeyTo(keyId, Span<byte>)` writing into a caller-supplied `PinnedBuffer`, so zeroing is structural. The consequence closed was **destruction**, not tampering: a `using` around a resolved KEK would have wiped it process-wide. Proven red-first on all four paths ([ADR 0015](adr/0015-kek-file-durability.md) amendment) |
+| H-1 (test) | `VaultLoggingConventionTests` detected records via `<Clone>$`, emitted for record **classes** only — every record struct (e.g. `KeyBinding`) was invisible to a scan ADR 0012 decision C claimed pinned it | RESOLVED — detection also accepts a value type with a compiler-generated `PrintMembers`. **Mutation-checked both ways**: a record-struct probe passed under the old detection and fails under the new. Non-record classes stay out of scope deliberately — they have no generated `ToString()` ([ADR 0012](adr/0012-log-redaction-scope.md)) |
+| H-B | **The audit following a committed re-wrap was cancellable.** `EfAuditLog` saves separately, so a cancel between the two writes committed the key change and dropped its only record — no trail exactly when someone is probing the vault | RESOLVED — cancellation checked immediately *before* the save, where stopping is free; the append takes `CancellationToken.None`. Per-DEK cancellation check added (NEVER #5). **Residual:** a *crash* between the writes still loses the row — one transaction needs the M4 `EfAuditLog` change, **→ Phase 13** |
+| H-C | **`attempted--` erased a tenant the sweep could not vouch for**, removing it from *both* `TenantsAttempted` and `Failures` — C1 inverted: did something, reported nothing. In shared infrastructure Phases 8/11 are told to consume | RESOLVED — no decrement; the tenant stays counted and is recorded **by name** with the honest verdict (cancelled mid-flight, committed state unknown), so `Complete` is false and the number is explainable ([ADR 0014](adr/0014-system-tenancy-scope.md) amendment) |
+| H-D | **"No elevation" held at the database layer, was overstated at the application layer** — `ListTenantsAsync` enumerates the whole registry, and `Create(tenantId)` writes no audit row, so "misuse is attributable" was true only of sweeps | RESOLVED for the claim and the fence: ADR 0014 corrected, and `TenantScopeConventionTests` enforces the seam with an explicit allowlist (mutation-checked). Real authorization is **→ Phase 14**; **auditing `Create` is → Phase 13**, gated on M4. Nothing in the shipped host calls it — no vault endpoints, no rotation trigger |
+| H-D1 | `phase-2.md` said "**three** boundaries accepted" and never mentioned the structured-state channel, though ADR 0012 decision D added it — nor decision E (exception replaced only when armed) | RESOLVED — `phase-2.md` and the Phase 2 bullet above now state what the belt covers and list **four** boundaries |
+| H-D2 | **Dangerous:** `phase-2.md` said rotation "retires the old version", which the code deliberately does not do. Implementing the doc as written would delete superseded versions and strand every unconverged DEK | RESOLVED — the doc states retention as deliberate, names what depends on it (`CompleteRotationAsync`, crash recovery), and warns explicitly. The safe form — a retirement floor — is **→ Phase 15** |
+| M-6 | `key_id` excluded from the DEK binding permits retired-KEK replay | **ASSESSED — exclusion upheld, no code change.** An adversary who writes `wrapped_dek` writes `key_id` in the same statement, so binding over it authenticates a consistently replayed pair; the mismatched pair it would catch already fails on tag mismatch; rotation re-wraps the *same* DEK so replay yields no new plaintext; and changing it is a frozen-contract change (NEVER #6) requiring a re-wrap of every DEK. The genuine residual is **downgrade persistence**, whose fix is the retirement floor — **→ Phase 15**, not a binding change ([ADR 0013](adr/0013-envelope-binding.md)) |
+
+**Deferred — multi-process shared-file hardening; production multi-process arrives via KMS
+providers; owner = Phase 15 (Key custody & KMS providers).** Each is recorded with why it is
+multi-process-only in [ADR 0016](adr/0016-single-process-vault.md); exit criteria in the Phase 15
+section above.
+
+| # | Finding | Why deferred |
+|---|---------|-------------|
+| H-2 | Every `IKekSource` entry point takes the sidecar lock (`OpenOrCreate`+`ReadWrite`), so a **read-only key mount cannot boot** — it needs *create* access, not merely write | A read-only mounted secret is an orchestrator pattern; a single host owns its key file, and under KMS there is no key file |
+| H-3 | `FsyncDirectory`'s `DllImport("libc")` can throw on **musl**, uncaught, escaping *after* `File.Move` committed — a durable rotation reported as failed, provider left on its stale cached key | False *failure*, not false success; recoverable by restart or `CompleteRotationAsync`. ADR 0015's "best-effort" claim corrected to admit the code does not yet match it |
+| M-1 | The concurrency test **runs sequentially** and would pass with the sidecar lock deleted; it proves the additive merge, not mutual exclusion | Needs a real second process; no such harness exists (SAC has blocked spawning fresh binaries here). Test comment and ADR 0015 corrected in place |
+| M-2 | Nothing tests durability — `WriteThrough`, `Flush(flushToDisk:true)`, directory fsync, lock contention and timeout all unasserted; fsync is a no-op on the Windows dev box | Needs a Linux CI runner and crash injection |
+| C-A residual | The sweep spans many transactions, so another process rotating mid-sweep leaves this one converging onto a stale target | Stated in the name — with one process there is no other rotator. Recoverable by re-running |
+
+**Also moved to Phase 15** as the same subject: **H7** (container-ephemeral KEK path, no escrow or
+replication — its compose-volume half previously had *no* owner), **H8** (KMS providers throw at
+first use rather than at startup), and the **KEK retirement floor**.
+
+**H4/H5 deliberately stay as "Phase 2 hardening"** — they are logging-pipeline findings, not key
+custody, and folding them into Phase 15 would launder the ownership gap rather than close it. The
+standing note above — that **no phase owns the logging pipeline or deployment packaging** — remains
+open and is still a decision someone has to make.
+
+**New, found while dispositioning H-D — recorded, not fixed.** `DataKeyService.GetOrCreateActiveAsync`
+mints a tenant's **root DEK with no audit row** (`IAuditLog` is not injected at all). A key-custody
+event with no trail — same class and same M4/`EfAuditLog` constraint as the `Create` gap above.
+**→ Phase 13**, with the rest of the audit cluster.
+
+### Exit criteria — status at the close of Phase 2 (2026-07-26)
+Gates completion (CLAUDE.md §6: no phase is done until its exit criteria are met and its tests pass).
+The criteria themselves were **amended** on 2026-07-26 — see the Phase 2 section above and
+[ADR 0016](adr/0016-single-process-vault.md).
 
 | Criterion | Review verdict at `305cc81` | Now |
 |---|---|---|
 | Software provider round-trips a credential | Met | **Met** — unchanged |
-| KEK rotation re-wraps DEKs without re-encrypting credentials | Algorithm proven; product not (C1) | **Met** — proven off the HTTP path through the real DI container ([ADR 0014](adr/0014-system-tenancy-scope.md)) |
-| Decryption in-memory only | Not established | **Still not established** — nothing tests zeroing, pinning, or the exception path (memory-hygiene mediums) |
-| Provider swappable via config, no caller changes | Not established | **Still not established** — no test sets `VAULT_KEY_PROVIDER`; three of four providers remain stubs (H8) |
-| Never-log / never-return **with tests proving them** | Not met | **Never-log met** — the primary guarantee is now proven on the formatted, exception *and* structured channels. **Never-return still vacuous** — there are no vault endpoints to assert against |
-| Every credential access audited | Partially | **Still partial** — success paths tested; failed decrypts and `ListAsync` silent (→ Phase 13) |
+| KEK rotation re-wraps DEKs without re-encrypting credentials | Algorithm proven; product not (C1) | **Met** — proven off the HTTP path through the real DI container ([ADR 0014](adr/0014-system-tenancy-scope.md)) and over a real key file |
+| Decryption in-memory only | Not established | **Met in substance** — plaintext lives in a pinned, self-zeroing `PinnedBuffer`, and since re-review H-1 so does KEK material, with the zeroing made structural rather than remembered. **Residue recorded, not claimed:** the orphaned `secretCopy` on the cancel path, plaintext across DB round-trips, `Array.Clear` vs `ZeroMemory`, no page-locking → **Phase 2 hardening** |
+| ~~Provider swappable via config, no caller changes~~ | Not established | **AMENDED OUT → Phase 15.** The seam is delivered and exercised; the three cloud backends ship as honest stubs that throw. Swappability, a test that sets `VAULT_KEY_PROVIDER`, and the startup probe (H8) are Phase 15's exit criteria. Recorded as a scope move in the shape of C1's amendment to Phase 1 — not a lowered bar |
+| Never-log **with tests proving it** | Not met | **Met** — proven on the formatted, exception *and* structured channels, with the two unscrubbed channels pinned by convention tests so neither can move silently |
+| Never-return **with tests proving it** | Not met | **Vacuous by construction** — there are no vault endpoints to assert against. `NeverReturnContractTests` stands as far as it reaches (`ResolvedCredential` is structurally un-serializable). **Re-assert at Phases 12/14**, when a caller-facing surface first exists |
+| Every credential access audited | Partially | **Met for the day-one requirement** — store and resolve audit metadata-only from day one. **Gaps recorded → Phase 13**, all gated on M4: failed decrypts, `ListAsync`, `ITenantScope.Create`, and root-DEK creation |
 
 **Also fixed during review:** `PatchManagement.Api` did not reference `PatchManagement.Vault`, so
 the module never loaded in the shipped host — several findings were latent only because of it
@@ -445,6 +556,69 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
+
+### 2026-07-26 — Phase 2 closed out · GREEN and pushed · HELD AT THE MERGE GATE · RESUME HERE
+**Phase 2 is `complete` and `phase/2-vault` is green — and deliberately NOT merged.** `main` is
+untouched at `42529db`. Three commits landed on top of `c132b25`:
+
+1. `32c8716` — **H-1**: the KEK keyset now owns its key material.
+2. `493ebf2` — **H-B/H-C/H-D**: cancellation must not make a sweep lie; the cross-tenant seam is fenced.
+3. this one — dispositions, ADR 0016, Phase 15, exit-criteria amendment.
+
+**Tests: Vault 66/66 (was 54), IntegrationTests 36/36, Contracts 19/19 — 121 total.** Twelve added.
+
+**⛔ DO NOT MERGE YET.** The owner is deciding whether to commission **one genuinely cold review of
+the key-custody path** before it reaches `main`. The reason is specific and still true: of the
+criticals found on this branch, **two were introduced by the remediation itself** (CR-1 and C-A) and
+were caught only because someone looked again — and every review so far has run in the same session
+context as the code. That is not a track record that justifies self-certifying key custody. Do not
+merge, do not rebase Phases 3/5, do not touch `main`, until that call is made.
+
+**The decision that unblocked the eight open findings:** ship a correct **single-process** vault;
+production multi-process arrives via **`IKeyProvider` KMS backends** (ADR 0002), not by hardening
+shared-file locking. Recorded as **[ADR 0016](adr/0016-single-process-vault.md)**. Nothing in the
+repo claimed multi-instance, so this narrows a supported shape rather than retracting a promise —
+and it puts the multi-process work where it was always going to be solved properly.
+
+**New: Phase 15 — Key custody & KMS providers** (parallel, depends on 2). A real phase rather than
+another line in the "Phase 2 hardening" bucket the ROADMAP itself calls a naming dodge. It owns the
+three KMS backends, **H-2/H-3/M-1/M-2** and C-A's residual window, plus **H7** (whose compose-volume
+half previously had *no* owner) and **H8**, and the **KEK retirement floor**. **No multi-instance or
+SaaS deployment is supported until it completes.**
+
+**Fixed, each proven red-first** with the wrong values recorded in its commit body:
+- **H-1** — the keyset copied only the *map*; all four accessors shared the `byte[]`. The exposure
+  that mattered was destruction, not tampering: `PinnedBuffer.Dispose` zeroes, so an ordinary
+  `using` around a resolved KEK would have wiped it for every later wrap in the process. Now
+  deep-copied in and out, with `Contains` + `CopyKeyTo(Span<byte>)` replacing `Get`/`TryGet`.
+- **H-1 (test)** — `VaultLoggingConventionTests` detected records via `<Clone>$`, which record
+  *structs* do not have, so `KeyBinding` was invisible to a scan two documents claimed pinned it.
+  Widened and **mutation-checked in both directions**.
+- **H-B/H-C** — the same defect class as C1 and H-A, now at the cancellation boundary: an audit that
+  could be cancelled out from under an already-committed re-wrap, and a counter that erased a tenant
+  it could not vouch for. H-C sits in shared infrastructure Phases 8/11 are told to consume, which
+  is why it was not deferred.
+- **H-D** — "no elevation" was true of the database and overstated about the application.
+  `TenantScopeConventionTests` now fences the seam; Phase 14 supplies real authorization.
+- **H-D1/H-D2** — the two stale doc claims, H-D2 being the dangerous one: `phase-2.md` said rotation
+  "retires the old version", which the code deliberately does not do and must not.
+- **M-6** — assessed and **upheld, not changed**: an adversary who can write `wrapped_dek` writes
+  `key_id` in the same statement, so binding over it closes nothing, while the mismatched pair it
+  would catch already fails. The real residual is downgrade persistence, whose fix is the retirement
+  floor — Phase 15, not an associated-data change.
+
+**Recorded, not fixed (new, found while dispositioning H-D):**
+`DataKeyService.GetOrCreateActiveAsync` mints a tenant's root DEK with **no audit row** — `IAuditLog`
+is not even injected. → **Phase 13**, with the audit cluster, gated on M4.
+
+**Carry-forward unchanged:** no phase owns the **logging pipeline** (H4/H5) or **deployment
+packaging** — H4/H5 stay "Phase 2 hardening" on purpose, because moving logging findings into a
+key-custody phase would launder the gap rather than close it · the **alpine→Debian(glibc)** Postgres
+revert (ADR 0009) before any perf work or production packaging · **Phases 3 and 5 untouched** since
+the fan-out — `phase/3-connector` at `67cc648`, `phase/5-content` at `3a24ccd`.
+
+**Env prereqs unchanged:** SAC off; root stack + lab fleet up; `dotnet` at `C:\Program Files\dotnet`;
+apply `db/roles.sql` after `dotnet ef database update`.
 
 ### 2026-07-25 — Phase 2 remediated but NOT merge-ready · 8 re-review findings open
 Phase 2 vault sits on **`phase/2-vault`, unmerged, 14 commits ahead of `main`** (code pushed to origin

@@ -34,6 +34,15 @@ internal static class EnvelopeBinding
     /// rotation rewrites it (<c>KekRotationService</c>), so a binding containing it would differ
     /// between unwrap and re-wrap. The keyId already selects the KEK version, and <c>retired_at</c>
     /// is excluded for the same reason — retiring a row must never brick its unwrap.
+    ///
+    /// <para>The exclusion was re-examined against re-review M-6 (replaying a retired-KEK
+    /// <c>(wrapped_dek, key_id)</c> pair onto a current row) and UPHELD: an adversary who can write
+    /// one column writes both in the same statement, so a binding over <c>key_id</c> authenticates
+    /// a consistently replayed pair just as readily — while the mismatched pair it would catch
+    /// already fails, because the blob does not open under the wrong KEK version. Rotation re-wraps
+    /// the same DEK, so replay also yields no plaintext the attacker lacks. The real residual is
+    /// downgrade persistence, whose fix is a KEK retirement floor rather than an associated-data
+    /// change; see ADR 0013 and ADR 0016 (Phase 15).</para>
     /// </summary>
     public static byte[] ForDataKey(Guid tenantId, Guid dataKeyId) =>
         Encoding.UTF8.GetBytes($"{DataKeyDomain}|{tenantId:N}|{dataKeyId:N}");

@@ -58,8 +58,17 @@ public sealed class KeyFileDurabilityTests
     /// <summary>
     /// C2: two instances sharing one key file must not erase each other's KEK versions. Two
     /// independent source+provider pairs share nothing but the file — the two-process condition
-    /// minus the process boundary — and a real OS file lock is per-handle, so it is genuinely
-    /// exercised here.
+    /// minus the process boundary.
+    ///
+    /// <para><b>What this does NOT test, despite the name (re-review M-1).</b> It does not exercise
+    /// mutual exclusion. Both calls run on the calling thread and the first provider's entire
+    /// read-modify-write — uncontended lock, small synchronous serialize and flush, release —
+    /// completes before the second is invoked, so <c>Task.WhenAll</c> awaits two already-finished
+    /// tasks. The retry/backoff path is never entered, and this would still pass with the sidecar
+    /// lock deleted, as long as <c>AddVersionAsync</c> still re-reads from disk. What it genuinely
+    /// proves is the <b>additive merge</b> — that a second writer extends the first's keyset rather
+    /// than replacing it — which is what C2 was actually about. A real concurrency test needs a
+    /// second process; owned by Phase 15 (ADR 0016).</para>
     /// </summary>
     [Fact]
     public async Task Concurrent_rotations_do_not_erase_each_others_key_versions()
