@@ -91,6 +91,24 @@ default, so this is a statement reorder in `VaultCredentialProvider.StoreAsync` 
 context.** RLS makes them equal in normal operation; when they differ, that *is* the relocation, and
 authentication fails.
 
+> **Correction 2026-07-26 (cold review L1) — do not read this as defense-in-depth against a wrong
+> tenant context.** Building the binding from the row means the envelope is authenticated **against
+> itself**: every value checked comes from the same row, so the check is self-consistent by
+> construction. If the tenant GUC were ever wrong, RLS would hand back that other tenant's rows and
+> the binding would validate them happily. `ResolveAsync` does not assert
+> `credential.TenantId == tenant.TenantId`, and adding that assertion today would catch nothing —
+> both values come from the same `TenantContextAccessor`, so a wrong GUC makes them wrong *together*.
+>
+> What this design **does** guarantee is unchanged and was re-verified: an envelope **relocated**
+> across tenants or rows fails with `AuthenticationTagMismatchException`, because relocating requires
+> rewriting `tenant_id` to satisfy RLS, which breaks the AAD. That is the property the ADR exists to
+> establish, and it holds. The overstatement was implying the binding adds a second, independent
+> check on the *ambient* tenant. It does not — **RLS is still the only thing standing between a
+> request and another tenant's rows.**
+>
+> The assertion becomes meaningful in **Phase 14**, where the authorization tenant is derived from a
+> verified claim and therefore has a different source from the GUC. Tracked there.
+
 **Version `0x02`; `0x01` is rejected outright.** No transitional read path: accepting unbound
 envelopes would leave a permanent bypass of the property this ADR exists to establish. Verified safe
 — the live cluster reports `credentials = 0` and `data_keys = 0` in both persistent databases, test

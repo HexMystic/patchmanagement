@@ -89,8 +89,26 @@ Worse, the real defect was never the one described: `Fsync`'s return value was *
 review M6): the body cannot throw past the committed rename, and a failing `open` or `fsync` is logged
 with its errno. The ADR 0015 correction that asserted the musl premise is retracted there.
 
-**Both rows are struck from the deferral table below.** The remaining deferrals are re-derived on
-grounds that survive contact with a reviewer who ran the code.
+### 3. "Cross-process custody is argued, not test-proven" — false, and in our favour
+
+ADR 0015 recorded the cross-process guarantee as unproven and the **M-1** row below deferred it as
+needing "a harness this repo does not have". **The reviewer built one.** Eight genuine OS processes
+rotating a single key file simultaneously: 9/9 versions on disk, no version lost, the seed survived,
+`current` is one of the minted versions, every version loadable by a fresh source, and the sidecar
+lock demonstrably exclusive — a contender waited 3.2 s for a 3 s holder. Identical on Windows, glibc
+and musl.
+
+This does not change the single-process *decision* — a verified lock is still not a supported
+topology, and none of H-2, M-2 or C-A's residual is answered by it. It does change what M-1 *is*:
+not "we do not know", but "we have no regression test for something now demonstrated". Phase 15
+should port a harness of this shape rather than re-open the question.
+
+Worth stating plainly: **two of these three premises made the system look better than it was, and one
+made it look worse.** The common cause is the same — a claim written from reasoning and never
+executed.
+
+**The first two rows are struck from the deferral table below**, and M-1 is re-derived. The remaining
+deferrals now rest on grounds that survived contact with a reviewer who ran the code.
 
 ## What is deferred, and why each is genuinely multi-process
 
@@ -98,7 +116,7 @@ grounds that survive contact with a reviewer who ran the code.
 |---|---|---|
 | **H-2** | Every `IKekSource` entry point takes the sidecar lock, opened `OpenOrCreate` + `ReadWrite`, so a **read-only key mount cannot even boot** — the read path needs *create* access, not just write | A read-only mounted secret is a managed-orchestrator pattern. A single host owns its key file and can write beside it. Under KMS there is no key file at all |
 | ~~**H-3**~~ | ~~`FsyncDirectory` can throw on musl~~ | **STRUCK 2026-07-26 — premise false, and fixed.** See "Two premises were wrong" above |
-| **M-1** | The **cross-process** file-lock guarantee is untested. `Concurrent_rotations_do_not_erase_each_others_key_versions` serialises — the uncontended lock and flush path completes synchronously, so `Task.WhenAll` awaits two finished tasks, and it would pass with the sidecar lock deleted | **Re-derived.** The *in-process* half of this gap is now closed: `ConcurrentRotationTests` forces a real interleave of two rotations and proves the sweep guard. What remains untested is mutual exclusion **across processes**, which needs a second-process harness this repo does not have |
+| **M-1** | **No in-repo regression test** for cross-process exclusion. `Concurrent_rotations_do_not_erase_each_others_key_versions` serialises — the uncontended lock and flush path completes synchronously, so `Task.WhenAll` awaits two finished tasks, and it would pass with the sidecar lock deleted | **Re-derived twice, and now much narrower.** The *in-process* half is closed and proven (`ConcurrentRotationTests` forces a real interleave). The *cross-process* half is **no longer unknown**: the cold reviewer built the harness this row previously said the repo lacked and ran eight OS processes against one key file on Windows, glibc and musl — no version lost, lock demonstrably exclusive. What remains is porting a regression test, **not** establishing the guarantee. See "Two premises were wrong", third entry |
 | **M-2** | Nothing tests durability — `WriteThrough`, `Flush(flushToDisk: true)` and the directory fsync are unasserted, and fsync is a deliberate no-op on the Windows dev box. No lock-contention or timeout test either | Needs a Linux CI runner and crash injection. The single-process consequence is bounded by restore-from-backup; the multi-process one is divergence between live processes |
 | **C-A residual** | The convergence target is authoritative at read time, but the sweep spans many transactions, so a rotation by **another process** mid-sweep leaves this one converging onto a stale target. Recoverable by re-running | Genuinely cross-process, and now the *only* remaining form of the concurrent-rotation hazard: the in-process case is fixed above. Phase 15 should treat this and M-1 as one problem — cross-process rotation exclusion — rather than two |
 

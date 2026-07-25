@@ -164,11 +164,23 @@ would have meant knowingly reintroducing the hole in fresh code.
 
 ## Limitations, stated rather than implied
 
-- **The cross-process guarantee is argued, not test-proven.** The tests run two independent
-  source+provider pairs over one file in one process — but not a true process boundary. There is no
-  console project or second-process harness in this repo, and Smart App Control has historically
-  blocked spawning freshly built binaries here. The guarantee rests on documented
-  `FileShare.None` semantics.
+- **The cross-process guarantee was argued, not test-proven — and has since been demonstrated.**
+  The in-repo tests run two independent source+provider pairs over one file in one process, not a
+  true process boundary; there is still no console project or second-process harness here, and Smart
+  App Control has historically blocked spawning freshly built binaries.
+
+  > **Correction 2026-07-26 (cold review).** An external reviewer built the harness this bullet said
+  > did not exist and ran **eight genuine OS processes** rotating one key file simultaneously: 9/9
+  > versions on disk, no version lost, the seed survived, `current` is one of the minted versions,
+  > every version loadable by a fresh source, and the lock demonstrably exclusive (a contender waited
+  > 3.2 s for a 3 s holder). Identical on **Windows, glibc and musl**. See
+  > [`docs/reviews/phase-2-cold-review.md`](../reviews/phase-2-cold-review.md).
+  >
+  > So this limitation is narrower than written: the guarantee is **demonstrated**, and what remains
+  > is that **this repository carries no regression test** for it. Porting one is Phase 15's
+  > ([ADR 0016](0016-single-process-vault.md), M-1). Stated because the previous wording understated
+  > the design — the same error as the two premises that overstated it, from the same cause: a claim
+  > reasoned about and never executed.
 
   > **Correction 2026-07-26 (re-review M-1).** This bullet claimed the test "does exercise the real
   > OS lock, since `FileShare.None` is per-handle". It does not. `Concurrent_rotations_do_not_erase_each_others_key_versions`

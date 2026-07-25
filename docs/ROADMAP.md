@@ -212,6 +212,12 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
 - **Dependencies:** Phase 6.
 - **Exit criteria:** Hangfire-backed schedules; notification channels; compliance/
   operational reports; all tenant-scoped.
+- **Also owns the KEK rotation trigger (cold review L4).** Nothing in `src/` references
+  `IKekRotationService` except its DI registration, so **the shipped host cannot start a rotation** —
+  review C1 fixed the wiring, not the trigger, and [ADR 0014](adr/0014-system-tenancy-scope.md)
+  records the absence as deliberate until Hangfire arrives here. Consume `ITenantScopeFactory` rather
+  than inventing a sweep (ADR 0014), expect `TenantScopeConventionTests` to require an allowlist
+  entry, and note that **Phase 14** gates whatever trigger is exposed.
 - **Owned paths:** `src/Modules/Scheduling`, `src/Modules/Reporting`.
 
 ## Phase 12 — UI  · parallel · Status: not-started
@@ -253,6 +259,13 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
     unchanged, only the *source* of the tenant id moves from a header to a verified claim.
   - **RBAC** driven by `operators.role`: authorization checks on privileged operations (the
     endpoints that touch credentials, deployments, exceptions).
+  - **Assert the resolved credential's tenant against the authenticated one (cold review L1).** Once
+    the tenant comes from a verified claim it has a *different source* from the RLS GUC, so
+    `credential.TenantId == <authenticated tenant>` becomes a real second check. Today it would catch
+    nothing — both values come from the same `TenantContextAccessor` — and
+    [ADR 0013](adr/0013-envelope-binding.md) has been corrected to stop implying otherwise.
+  - **Gate the rotation trigger** Phase 11 introduces, and the `ITenantScopeFactory` seam that
+    `TenantScopeConventionTests` currently fences by convention rather than by authorization.
   - Any new tables (sessions, role assignments, refresh tokens) **follow the frozen tenancy
     convention** — `tenant_id` + ENABLE/FORCE RLS + `tenant_isolation` policy + grants — which
     `RlsConventionTests` (H4) now enforces automatically. Decide up front whether an operator is
@@ -294,11 +307,18 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
   - **H-3** — `FsyncDirectory` cannot fail a rotation that already committed: `DllImport("libc")` can
     throw on **musl**, escaping after `File.Move`, so a durable rotation reports failure and the
     provider keeps its stale cached key. Make the code match ADR 0015's "best-effort" claim.
-  - **M-1 / C-A residual — one problem, not two: cross-process rotation exclusion.** The in-process
-    half is closed (`ConcurrentRotationTests` forces a real interleave and proves the sweep guard);
-    what remains is mutual exclusion **across processes**, which needs a second-process harness this
-    repo does not have. The key-file concurrency test still serialises and would pass with the
-    sidecar lock deleted.
+  - **M-1 — port a cross-process regression test.** Narrower than it once read: the in-process half
+    is closed (`ConcurrentRotationTests`), and the cross-process guarantee was **demonstrated** by
+    the cold reviewer's eight-process harness on Windows/glibc/musl. What is missing is a test *here*
+    that would catch a regression. The in-repo key-file concurrency test still serialises and would
+    pass with the sidecar lock deleted, so it does not count.
+  - **C-A residual** — cross-process convergence: another process rotating mid-sweep still leaves
+    this one on a stale target. Distinct from M-1 (which is now a testing gap, not an unknown).
+  - **L2/L3 (key-file diagnostics and validation)** — `AcquireLockAsync` misreports a wrong path,
+    permissions failure or full disk as lock contention after a full 30 s wait; `ReadFileAsync`
+    validates nothing on read (no KEK length check — a 16-byte key loads and fails late and
+    confusingly at `CopyKeyTo` — and no MAC over the file). Inherited from "Phase 2 hardening",
+    which is a weaker owner now that Phase 2 is `complete`.
   - **Rotation correctness (cold review M2–M5):** a 61-byte ceiling on the pre-auth DEK-unwrap
     allocation (**M2**); `Complete` must not be true for an **empty registry** (**M3**); decide
     whether **retired DEKs** must converge, which is the retirement-floor question (**M4**); and
@@ -537,11 +557,17 @@ event with no trail — same class and same M4/`EfAuditLog` constraint as the `C
 
 ### Phase 2 cold review (zero-history, key custody) — 2026-07-26
 
+Full detail in [`docs/reviews/phase-2-cold-review.md`](reviews/phase-2-cold-review.md). IDs below are
+that document's.
+
+> **Do not renumber.** The review's MEDIUM block starts at **M2** — there is no M1. That is a
+> labelling gap, not a missing finding, and other documents already cite these IDs.
+
 An independent reviewer with no history in this codebase examined the key-custody path and
 **confirmed the core**: cross-process custody, no version loss, absence-fatal initialization, the H-1
 deep copy, envelope relocation failing, no downgrade path, no cross-tenant bypass — verified on
-Windows, glibc **and** musl. It then found two must-fix defects and, more usefully, **disproved two
-premises that ADR 0016's deferrals rested on**.
+Windows, glibc **and** musl. It then found two must-fix defects and, more usefully, **disproved three
+premises this repo's own documents asserted** (the third is in "Claims that do hold", below).
 
 **Fixed before merge** (`a4fd28c` → `8a073a1` → `347d2f2`):
 
@@ -559,8 +585,31 @@ premises that ADR 0016's deferrals rested on**.
 | **M2** | Unbounded pinned pre-auth allocation — `PlaintextLength` sizes a buffer from attacker-influenced bytes before authentication. A wrapped DEK is always 61 bytes, so a ceiling is cheap | **Phase 15** — the bound belongs on the DEK-unwrap path; the credential layer's length is legitimately variable. Not merge-blocking |
 | **M3** | An **empty registry yields `Complete = true`** — a sweep over zero tenants reports a successful rotation | **Phase 15**. Same family as H1: a success signal that is true only vacuously |
 | **M4** | **Retired DEKs are excluded** from the convergence query and therefore from `Complete` | **Phase 15**. Needs a decision on whether a retired DEK must converge at all, which is the retirement-floor question |
-| **M5** | **Sweep accounting corrupts if the sweep is ever parallelized** — plain captured locals, a bare `List<T>`, safe only because one sweep runs at a time | **Phase 15**, and **flagged loudly in the code** at the mutation site and in [ADR 0014](adr/0014-system-tenancy-scope.md), because the person who breaks this will be doing the 10,000-endpoint work and will be reading the sweep, not this table |
-| **L1/L2/L3** | **Content not available in-session.** | **UNDISPOSITIONED — action required.** The agreed home for the cold review is `docs/reviews/phase-2-cold-review.md`, matching `phase-1-review.md` / `phase-2-review.md`; it has not been added. These three are recorded here so they cannot be lost, but they are **not** dispositioned, and this section is not complete until they are |
+| **M5** | **Sweep accounting corrupts if the sweep is ever parallelized** — plain captured locals, a bare `List<T>`, safe only because one sweep runs at a time. The review's sharper framing: `KekRotationService` documents the *implementation* ("runs tenants sequentially"), while `ITenantScopeFactory.SweepAsync`'s **contract** promises only "once per tenant, each in its own scope" — so the code depends on something the interface never guaranteed | **Phase 15**, and **flagged loudly in the code** at the mutation site and in [ADR 0014](adr/0014-system-tenancy-scope.md), because the person who breaks this will be doing the 10,000-endpoint work and will be reading the sweep, not this table |
+
+**LOW — dispositioned 2026-07-26.** Three of the four are code defects rather than doc points, so
+each carries an explicit fix-now-or-defer verdict rather than being swept into Phase 15:
+
+| # | Finding | Owner / verdict |
+|---|---------|----------------|
+| **L1** | `ResolveAsync` never asserts `credential.TenantId == tenant.TenantId`. The AAD is built entirely from the row, so it authenticates the row **against itself** and contributes zero defense-in-depth if the tenant GUC is ever wrong | **Split, and the doc half is the real one.** Note *why* the assertion is near-useless today: both values come from the same `TenantContextAccessor`, so a wrong GUC makes them wrong **together** and the check still passes. It only acquires meaning once the authorization tenant and the GUC tenant have different sources — i.e. **Phase 14**, which derives the tenant from a verified claim. What is actionable now is that [ADR 0013](adr/0013-envelope-binding.md) overstates the binding as cross-tenant defense-in-depth beyond RLS; **corrected in this slice**. Assertion → **Phase 14**, where it stops being decorative |
+| **L2** | `AcquireLockAsync` treats **every** `IOException` as contention, so a wrong path, a permissions problem or a full disk spins the full 30 s and then reports "another process may be rotating" — a misleading diagnosis on the one path where an operator is already under pressure | **Code defect → flagged for a fix-now call.** Cheap (inspect the exception before assuming contention) and it is diagnostics on the key-custody path, where a wrong answer costs an outage. If deferred: **Phase 15** |
+| **L3** | `ReadFileAsync` validates nothing — no length check on the decoded base64 (a 16-byte KEK loads fine and only fails later at `CopyKeyTo` as an `ArgumentException` about destination size), no MAC over the file | **Already tracked**, previously as "key file unvalidated on read" under Phase 2 hardening — **moved to Phase 15** with the rest of key custody, since Phase 2 is now `complete`. Split by cost: the **length check is cheap → flagged for a fix-now call**; a **MAC over the file is a design item → Phase 15** |
+| **L4** | **Rotation has no production trigger.** Nothing in `src/` references `IKekRotationService` except the DI registration — C1 fixed the wiring, but nothing in the shipped host can start a rotation | **Phase 11 (Scheduling)** — *not* Phase 15. This is the missing Hangfire schedule, and [ADR 0014](adr/0014-system-tenancy-scope.md) already states the absence is deliberate for now ("real scheduling arrives with Hangfire in Phase 11"). Phase 11 must consume `ITenantScopeFactory` rather than invent its own sweep, and **Phase 14** gates whatever trigger it exposes |
+
+**The third disproven premise — and this one is in our favour.** ADR 0015 called cross-process KEK
+custody "argued, not test-proven" and ADR 0016 deferred **M-1** as needing "a harness this repo does
+not have". The reviewer **built one**: eight genuine OS processes rotating a single key file
+simultaneously — 9/9 versions on disk, no version lost, the seed survived, `current` is one of the
+minted versions, every version loadable by a fresh source, and the sidecar lock demonstrably excluded
+(a contender waited 3.2 s for a 3 s holder). Identical on Windows, glibc and musl. Their words:
+*"This is stronger than the repo believes it is."*
+
+So M-1's grounds change again, and are re-derived rather than left overstated: the guarantee is
+**empirically verified on three platforms**, and what the repo still lacks is a **regression test** —
+a different and much smaller claim than "untested". Corrected in
+[ADR 0015](adr/0015-kek-file-durability.md) and [ADR 0016](adr/0016-single-process-vault.md). Phase 15
+should port a harness of this shape rather than re-derive the question.
 
 **A note the next rotation author should read first:** "reports success while untrue" is this
 subsystem's characteristic failure — **four instances** (C1, H-A, CR-1/C-A, H1), and the H-A fix
@@ -634,11 +683,24 @@ re-proven red against the unguarded code — the proof covers what was committed
 
 **⛔ STILL NOT MERGED.** `main` untouched at `42529db`. Phases 3/5 not rebased.
 
-**One item is genuinely outstanding, not closed:** the cold review's **L1/L2/L3 have no
-disposition** — their content was never in-session. The agreed home is
-`docs/reviews/phase-2-cold-review.md` (matching `phase-1-review.md` / `phase-2-review.md`), and that
-file has not been added. M2–M5 are dispositioned to Phase 15; L1–L3 are recorded so they cannot be
-lost, but the cold-review section is **not complete** until they are read and owned.
+**CLOSED — the review is now on disk and every finding is dispositioned.**
+[`docs/reviews/phase-2-cold-review.md`](reviews/phase-2-cold-review.md) is committed verbatim, so
+every verdict above has a citable source (the re-review never did, which is part of why a cold pass
+was needed). It contains **L1–L4** — there is an L4 — and its MEDIUM block starts at **M2**: a
+labelling gap, not a missing finding, and deliberately **not** renumbered because other documents
+already cite these IDs.
+
+Three of the four LOWs are code defects, so none was swept into Phase 15 by default:
+**L1** → the actionable half was a *doc* overstatement in ADR 0013 (the binding authenticates the row
+against itself, so it is not defense-in-depth against a wrong tenant context) — **corrected here**;
+the assertion goes to **Phase 14**, where it stops being decorative · **L2** (lock contention
+misdiagnosis) and **L3**'s cheap half (KEK length check on read) are **flagged for a fix-now call**,
+with **Phase 15** as the fallback and L3's MAC firmly there · **L4** (no production rotation trigger)
+→ **Phase 11**, since it is the missing Hangfire schedule, gated by Phase 14.
+
+**And a third premise fell** — see the cold-review section: cross-process custody is **demonstrated**,
+not merely argued. That one made the system look *worse* than it is; the other two made it look
+better. Same cause: claims written from reasoning and never executed.
 
 ### 2026-07-26 — Phase 2 closed out · GREEN and pushed · HELD AT THE MERGE GATE
 **Phase 2 is `complete` and `phase/2-vault` is green — and deliberately NOT merged.** `main` is
