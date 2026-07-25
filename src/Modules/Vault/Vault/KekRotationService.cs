@@ -85,6 +85,11 @@ public sealed class KekRotationService(
             var moved = 0;
             foreach (var dek in deks)
             {
+                // A tenant with many DEKs was otherwise interruptible only through whatever I/O
+                // happened to be awaited next (CLAUDE.md NEVER #5 — time-bounded). Throwing here
+                // abandons the change tracker before any save, so nothing partial can commit.
+                token.ThrowIfCancellationRequested();
+
                 if (dek.WrappedDek is null || dek.KeyId is null)
                 {
                     skipped++; // never sealed — nothing to re-wrap
@@ -121,6 +126,10 @@ public sealed class KekRotationService(
 
             if (moved == 0) return;
 
+            // Last point at which cancelling is free. Past the save, the key change is durable and
+            // abandoning the audit would leave it unrecorded (re-review H-B).
+            token.ThrowIfCancellationRequested();
+
             // Save first, then audit: EfAuditLog saves the shared context, so auditing mid-loop would
             // flush half-converged state (review M4, second half).
             await db.SaveChangesAsync(token);
@@ -132,10 +141,20 @@ public sealed class KekRotationService(
                 deksRewrapped = moved,
                 credentialsReencrypted = 0,
             });
+
+            // CancellationToken.None, deliberately, and the one place in this module that departs
+            // from "a token on every I/O". The re-wrap above is ALREADY COMMITTED; this append is
+            // its only record. Honouring a cancel here would silently trade a key change for no
+            // audit trail — and a KEK rotation nobody can prove happened is the failure mode this
+            // service exists to avoid. The append is a bounded single-row insert.
+            //
+            // Residual, not closed here: a crash (rather than a cancel) between the two writes still
+            // loses the row. The real fix is one transaction, which needs EfAuditLog to stop saving
+            // the caller's context — Phase-1 review M4, owned by Phase 13.
             await audit.AppendAsync(
                 new AuditEntry(scope.TenantId, actor.Name, "kek.rotate", $"kek:{targetKeyId}",
                     DateTimeOffset.UtcNow, detail),
-                token);
+                CancellationToken.None);
         }, ct);
 
         // sweep.Failures carries tenants whose scope threw OUTSIDE the per-DEK try — a dropped

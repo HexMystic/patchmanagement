@@ -53,7 +53,16 @@ public sealed class TenantScopeFactory(IServiceScopeFactory scopes, ILogger<Tena
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                attempted--; // this tenant did not complete and was not a failure — the caller cancelled
+                // Do NOT decrement. This tenant was entered, and from here there is no way to know
+                // whether its work committed before the cancel landed — the delegate may have saved
+                // and then been cancelled during a follow-up write. Un-counting it erased the tenant
+                // from BOTH TenantsAttempted and Failures, so a tenant whose rows had actually
+                // changed vanished from the result entirely (re-review H-C). Record it by name with
+                // the honest verdict instead: attempted, outcome unknown.
+                failures.Add(new TenantFailure(
+                    tenantId,
+                    "OperationCanceledException: cancelled after this tenant's scope started; "
+                    + "committed state is unknown"));
                 break;
             }
             catch (Exception ex)

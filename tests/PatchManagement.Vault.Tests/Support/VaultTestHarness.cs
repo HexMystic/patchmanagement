@@ -85,7 +85,12 @@ public sealed class VaultTestHarness
     /// harness handed it a superuser context that no production wiring produces, which is exactly
     /// what hid review C1: the algorithm passed while the shipped service rotated nothing.</para>
     /// </summary>
-    public ServiceProvider HostLikeContainer(IKeyProvider? keyProvider = null)
+    /// <param name="configure">
+    /// Last-word overrides applied after the real module registrations, for tests that need to
+    /// observe a collaborator the host resolves from DI (e.g. substituting <c>IAuditLog</c>).
+    /// </param>
+    public ServiceProvider HostLikeContainer(
+        IKeyProvider? keyProvider = null, Action<IServiceCollection>? configure = null)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -103,6 +108,8 @@ public sealed class VaultTestHarness
         // a key file. A test may pass its own provider — e.g. one over a real KeyFileKekSource — but
         // only when its database is isolated, because a sweep visits EVERY tenant in the database.
         services.AddSingleton<IKeyProvider>(keyProvider ?? KeyProvider);
+
+        configure?.Invoke(services);
 
         return services.BuildServiceProvider();
     }

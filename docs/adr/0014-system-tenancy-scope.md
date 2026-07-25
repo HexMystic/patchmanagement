@@ -33,8 +33,8 @@ Task<IReadOnlyList<Guid>> ListTenantsAsync(ct)           // registry only
 Task<TenantSweepResult> SweepAsync(operation, work, ct)  // one scope per tenant
 ```
 
-**No elevation is involved, and that is the point.** There is no new database role, no new
-connection string, no `BYPASSRLS`, no superuser, and no schema change:
+**No elevation is involved at the database layer, and that is the point.** There is no new database
+role, no new connection string, no `BYPASSRLS`, no superuser, and no schema change:
 
 - `tenants` carries no `tenant_id` and has no RLS policy, and `patchmgmt_app` already holds
   `GRANT SELECT` on it. Enumerating tenants therefore needs no privilege and exposes no
@@ -46,6 +46,34 @@ connection string, no `BYPASSRLS`, no superuser, and no schema change:
 So the capability to read two tenants in one query is never created. The worst a misuse
 achieves is what a loop of ordinary per-tenant requests could already do.
 
+> **Correction 2026-07-26 (re-review H-D) — the claim above is true of the database and was
+> overstated about the application.** Two application-layer capabilities exist that no ordinary
+> tenant-scoped request has, and the original wording read as though none did:
+>
+> - **`ListTenantsAsync` enumerates the registry.** A tenant-scoped caller cannot learn that other
+>   tenants exist, let alone their ids. That the read needs no *database* privilege is exactly why
+>   it needs an *application* one — the DB will not stop it.
+> - **`Create(tenantId)` writes no audit row.** The "misuse is attributable" mitigation below is
+>   true only of `SweepAsync` callers that audit inside the sweep, as `KekRotationService` does.
+>   A direct `Create` leaves no trace at all.
+>
+> Neither is a cross-tenant *read* capability — RLS still fences every query — so the isolation
+> argument stands. What does not stand is treating "no elevation" as unqualified.
+>
+> The residual below was recorded as unenforceable in DI, which is true, and then left there.
+> `TenantScopeConventionTests` now enforces it the way ADR 0012 decision B enforces the unscrubbed
+> scope channel: a source scan with an explicit allowlist — the declaration, the implementation, the
+> DI registration, and `KekRotationService` — so a new cross-tenant caller is a deliberate edit
+> someone defends rather than an accident. It was mutation-checked: a probe resolving the factory
+> under `src/Host/Api` fails the test. Phases 8 and 11 are expected to join that list and should
+> audit per tenant as rotation does.
+>
+> This is a fence, not authorization. **Phase 14** supplies the real gate. **Auditing `Create`
+> itself is deferred to Phase 13**, the audit-module owner, and is gated on the same Phase-1 **M4**
+> change — `EfAuditLog` saves the caller's shared context, so a write-per-scope would flush the
+> caller's state mid-operation. Nothing in the shipped host calls it today: `Program.cs` exposes
+> only `/health` and `/diag/assets`, and there is deliberately no rotation trigger.
+
 **The tenant is immutable for the life of the scope.** The GUC is written when a connection
 opens (`set_config(..., false)`), so reassigning the tenant on a live scope would silently
 not apply to a connection already open. `ITenantScope` exposes no setter; one scope, one
@@ -54,6 +82,21 @@ tenant.
 **Each tenant is isolated.** A failure is recorded against that tenant and the sweep
 continues. Cancellation stops cleanly between tenants and returns a partial result rather
 than throwing — `TenantsAttempted` versus `TenantsTotal` makes that visible.
+
+> **Amendment 2026-07-26 (re-review H-C) — a cancelled tenant is reported, never un-counted.**
+> Cancellation *between* tenants is clean, as written. Cancellation *inside* one was not: the
+> handler decremented `TenantsAttempted` and broke, on the reasoning that the tenant "did not
+> complete and was not a failure". But the factory cannot know that — the delegate may have saved
+> and then been cancelled during a follow-up write, which is precisely the H-B window below. The
+> decrement erased such a tenant from **both** `TenantsAttempted` and `Failures`, so a tenant whose
+> rows had actually changed vanished from the result entirely. That is review C1's "did nothing,
+> reported success" inverted: *did something, reported nothing*.
+>
+> The decrement is gone. An interrupted tenant stays counted as attempted and is recorded by name
+> with the honest verdict — cancelled after its scope started, committed state unknown — so
+> `Complete` is false and the tenant is nameable rather than merely missing (CLAUDE.md §4.6). This
+> lives in shared infrastructure that Phases 8 and 11 are told to consume, which is why it is fixed
+> rather than deferred: a counter that lies would propagate to every future sweep.
 
 **Rotation is now resumable.** `RotateAsync` mints a version and converges;
 `CompleteRotationAsync` converges onto the **existing current** version without minting.
@@ -109,6 +152,19 @@ fix existed to remove, reappearing one layer up. `KekRotationResult` now carries
   `audit_log` `WITH CHECK` naturally. M4 remains open — a genuine "the system did X" record
   still needs `AuditEntry.TenantId` to become nullable, and this design does not treat the
   non-nullable column as permanent.
+- **The audit append is uncancellable, deliberately (re-review H-B).** It is a *second*
+  transaction — `EfAuditLog` calls `SaveChangesAsync` itself — so it compensates for a re-wrap that
+  is already durable. Threading the sweep's token through it meant a cancel landing between the two
+  writes committed the key change and dropped its only record: probing the vault would leave no
+  trail exactly when someone was probing it. `ConvergeAsync` now checks cancellation immediately
+  *before* the save, where stopping is still free, and passes `CancellationToken.None` to the
+  append — the one place in the module that departs from "a token on every I/O", for a bounded
+  single-row insert. **Residual, stated not closed:** a crash rather than a cancel between the two
+  writes still loses the row. The real fix is one transaction, which needs `EfAuditLog` to stop
+  saving the caller's context — Phase-1 review **M4**, owned by **Phase 13**.
+- The per-DEK loop checks cancellation each iteration, so a tenant with many DEKs is interruptible
+  without waiting on whatever I/O happened to be awaited next (CLAUDE.md NEVER #5). Throwing there
+  abandons the change tracker before any save, so nothing partial commits.
 - `KekRotationService` is now a singleton: it creates its own scopes, so a background job
   resolves it from the root without ceremony.
 - **Residual risk, stated rather than hidden:** DI cannot prevent request-path code
