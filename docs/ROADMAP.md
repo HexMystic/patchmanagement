@@ -314,11 +314,10 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
     pass with the sidecar lock deleted, so it does not count.
   - **C-A residual** — cross-process convergence: another process rotating mid-sweep still leaves
     this one on a stale target. Distinct from M-1 (which is now a testing gap, not an unknown).
-  - **L2/L3 (key-file diagnostics and validation)** — `AcquireLockAsync` misreports a wrong path,
-    permissions failure or full disk as lock contention after a full 30 s wait; `ReadFileAsync`
-    validates nothing on read (no KEK length check — a 16-byte key loads and fails late and
-    confusingly at `CopyKeyTo` — and no MAC over the file). Inherited from "Phase 2 hardening",
-    which is a weaker owner now that Phase 2 is `complete`.
+  - **L3 (MAC over the key file)** — the only part of the old "key file unvalidated on read" item
+    still open. Length and base64 validation landed in Phase 2; a MAC is a design question, because
+    it needs a key to MAC *with*, which is the custody problem itself. Inherited from "Phase 2
+    hardening", a weaker owner now that Phase 2 is `complete`.
   - **Rotation correctness (cold review M2–M5):** a 61-byte ceiling on the pre-auth DEK-unwrap
     allocation (**M2**); `Complete` must not be true for an **empty registry** (**M3**); decide
     whether **retired DEKs** must converge, which is the retirement-floor question (**M4**); and
@@ -593,8 +592,8 @@ each carries an explicit fix-now-or-defer verdict rather than being swept into P
 | # | Finding | Owner / verdict |
 |---|---------|----------------|
 | **L1** | `ResolveAsync` never asserts `credential.TenantId == tenant.TenantId`. The AAD is built entirely from the row, so it authenticates the row **against itself** and contributes zero defense-in-depth if the tenant GUC is ever wrong | **Split, and the doc half is the real one.** Note *why* the assertion is near-useless today: both values come from the same `TenantContextAccessor`, so a wrong GUC makes them wrong **together** and the check still passes. It only acquires meaning once the authorization tenant and the GUC tenant have different sources — i.e. **Phase 14**, which derives the tenant from a verified claim. What is actionable now is that [ADR 0013](adr/0013-envelope-binding.md) overstates the binding as cross-tenant defense-in-depth beyond RLS; **corrected in this slice**. Assertion → **Phase 14**, where it stops being decorative |
-| **L2** | `AcquireLockAsync` treats **every** `IOException` as contention, so a wrong path, a permissions problem or a full disk spins the full 30 s and then reports "another process may be rotating" — a misleading diagnosis on the one path where an operator is already under pressure | **Code defect → flagged for a fix-now call.** Cheap (inspect the exception before assuming contention) and it is diagnostics on the key-custody path, where a wrong answer costs an outage. If deferred: **Phase 15** |
-| **L3** | `ReadFileAsync` validates nothing — no length check on the decoded base64 (a 16-byte KEK loads fine and only fails later at `CopyKeyTo` as an `ArgumentException` about destination size), no MAC over the file | **Already tracked**, previously as "key file unvalidated on read" under Phase 2 hardening — **moved to Phase 15** with the rest of key custody, since Phase 2 is now `complete`. Split by cost: the **length check is cheap → flagged for a fix-now call**; a **MAC over the file is a design item → Phase 15** |
+| **L2** | `AcquireLockAsync` treats **every** `IOException` as contention, so a wrong path, a permissions problem or a full disk spins the full 30 s and then reports "another process may be rotating" — a misleading diagnosis on the one path where an operator is already under pressure | **FIXED 2026-07-26.** Failures retrying cannot fix (`DirectoryNotFoundException`, `FileNotFoundException`, `PathTooLongException` — all `IOException` **subclasses**, which is why the blanket catch swallowed them) now surface immediately; and the timeout only *claims* contention when the OS actually said so, otherwise naming the real error. Unrecognised `IOException`s are still retried on purpose — misclassifying real contention on a platform we cannot test here would be the worse error |
+| **L3** | `ReadFileAsync` validates nothing — no length check on the decoded base64 (a 16-byte KEK loads fine and only fails later at `CopyKeyTo` as an `ArgumentException` about destination size), no MAC over the file | **Length check FIXED 2026-07-26** — the store is validated on read, and a bad key names the version, both lengths and the file. Bad base64 is reported the same way instead of a bare `FormatException`. **MAC over the file → Phase 15** as the design item (it needs a key to MAC *with*, which is the custody question itself) |
 | **L4** | **Rotation has no production trigger.** Nothing in `src/` references `IKekRotationService` except the DI registration — C1 fixed the wiring, but nothing in the shipped host can start a rotation | **Phase 11 (Scheduling)** — *not* Phase 15. This is the missing Hangfire schedule, and [ADR 0014](adr/0014-system-tenancy-scope.md) already states the absence is deliberate for now ("real scheduling arrives with Hangfire in Phase 11"). Phase 11 must consume `ITenantScopeFactory` rather than invent its own sweep, and **Phase 14** gates whatever trigger it exposes |
 
 **The third disproven premise — and this one is in our favour.** ADR 0015 called cross-process KEK
@@ -658,8 +657,9 @@ H-1 deep copy, envelope relocation failing, no downgrade, no cross-tenant bypass
 Windows, glibc **and** musl) and found **two must-fix defects plus two false premises**. Commissioning
 it was the right call: the false premises were mine, and both were in ADR 0016.
 
-Four commits: `a4fd28c` (H1) → `8a073a1` (H2) → `347d2f2` (M6/M7) → this one.
-**Tests: Contracts 19/19, IntegrationTests 36/36, Vault 71/71 — 126 total** (was 121).
+Six commits: `a4fd28c` (H1) → `8a073a1` (H2) → `347d2f2` (M6/M7) → `1d23efa` (ADR 0016 re-derived)
+→ `0511bef` (review committed, L1–L4 dispositioned) → this one (L2 + L3 length check).
+**Tests: Contracts 19/19, IntegrationTests 36/36, Vault 80/80 — 135 total** (was 121).
 
 **The two premises, both disproven by a reviewer who ran the code:**
 - **"Concurrent rotation is multi-process only."** False — `KekRotationService` is a **singleton**, so
@@ -693,10 +693,10 @@ already cite these IDs.
 Three of the four LOWs are code defects, so none was swept into Phase 15 by default:
 **L1** → the actionable half was a *doc* overstatement in ADR 0013 (the binding authenticates the row
 against itself, so it is not defense-in-depth against a wrong tenant context) — **corrected here**;
-the assertion goes to **Phase 14**, where it stops being decorative · **L2** (lock contention
-misdiagnosis) and **L3**'s cheap half (KEK length check on read) are **flagged for a fix-now call**,
-with **Phase 15** as the fallback and L3's MAC firmly there · **L4** (no production rotation trigger)
-→ **Phase 11**, since it is the missing Hangfire schedule, gated by Phase 14.
+the assertion goes to **Phase 14**, where it stops being decorative · **L2 and L3's length check were
+FIXED** (both cheap, both on the key-custody path; see the LOW table) with only **L3's MAC** deferred
+to **Phase 15** as a genuine design item · **L4** (no production rotation trigger) → **Phase 11**,
+since it is the missing Hangfire schedule, gated by Phase 14.
 
 **And a third premise fell** — see the cold-review section: cross-process custody is **demonstrated**,
 not merely argued. That one made the system look *worse* than it is; the other two made it look

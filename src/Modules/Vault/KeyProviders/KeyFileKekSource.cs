@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using PatchManagement.Vault.Crypto;
 
 namespace PatchManagement.Vault.KeyProviders;
 
@@ -39,7 +40,10 @@ namespace PatchManagement.Vault.KeyProviders;
 /// existing DEK (re-review CR-1). It only ever applies to <see cref="LoadOrInitializeAsync"/>.
 /// </param>
 public sealed class KeyFileKekSource(
-    string path, bool allowInitialize = false, ILogger<KeyFileKekSource>? logger = null) : IKekSource
+    string path,
+    bool allowInitialize = false,
+    ILogger<KeyFileKekSource>? logger = null,
+    TimeSpan? lockTimeout = null) : IKekSource
 {
     private const string TempSuffix = ".tmp";
     private const string LockSuffix = ".lock";
@@ -50,8 +54,9 @@ public sealed class KeyFileKekSource(
     /// </summary>
     private const string SentinelSuffix = ".init";
 
-    /// <summary>How long to wait for another process to finish its read-modify-write.</summary>
-    private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(30);
+    /// <summary>How long to wait for another process to finish its read-modify-write. Overridable
+    /// only so the timeout path itself is testable without a 30-second test.</summary>
+    private TimeSpan LockTimeout { get; } = lockTimeout ?? TimeSpan.FromSeconds(30);
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
@@ -160,10 +165,38 @@ public sealed class KeyFileKekSource(
         var doc = await JsonSerializer.DeserializeAsync<KeyFileDocument>(stream, JsonOptions, ct)
             ?? throw new InvalidOperationException($"KEK key file '{path}' is empty or malformed.");
 
-        var keys = doc.Keys.ToDictionary(
-            kv => kv.Key,
-            kv => Convert.FromBase64String(kv.Value),
-            StringComparer.Ordinal);
+        // Validate on READ, not on first use. A malformed store used to load without complaint and
+        // fail much later from CopyKeyTo as "Destination is 32 bytes but KEK version 'x' is 16" —
+        // blaming the caller's buffer for a corrupt file, at a call site nowhere near the cause, and
+        // only once someone tried to unwrap something (cold review L3).
+        var keys = new Dictionary<string, byte[]>(doc.Keys.Count, StringComparer.Ordinal);
+        foreach (var (keyId, encoded) in doc.Keys)
+        {
+            byte[] key;
+            try
+            {
+                key = Convert.FromBase64String(encoded);
+            }
+            catch (FormatException ex)
+            {
+                throw new InvalidOperationException(
+                    $"KEK version '{keyId}' in key file '{path}' is not valid base64. The store is "
+                    + "corrupt; restore it from backup rather than reinitializing.", ex);
+            }
+
+            if (key.Length != AesGcmEnvelope.KeySizeBytes)
+            {
+                // Do not put the length-mismatched material anywhere it could be mistaken for a key.
+                CryptographicOperations.ZeroMemory(key);
+                throw new InvalidOperationException(
+                    $"KEK version '{keyId}' in key file '{path}' is {key.Length} bytes; expected "
+                    + $"{AesGcmEnvelope.KeySizeBytes}. The store is corrupt or truncated; restore it "
+                    + "from backup rather than reinitializing.");
+            }
+
+            keys[keyId] = key;
+        }
+
         return new KekKeyset(doc.Current, keys);
     }
 
@@ -239,6 +272,7 @@ public sealed class KeyFileKekSource(
         var lockPath = path + LockSuffix;
         var deadline = DateTime.UtcNow + LockTimeout;
         var delay = TimeSpan.FromMilliseconds(10);
+        IOException? lastError = null;
 
         while (true)
         {
@@ -248,18 +282,70 @@ public sealed class KeyFileKekSource(
                 return new FileStream(
                     lockPath, CreateOptions(FileMode.OpenOrCreate, FileAccess.ReadWrite, FileOptions.None));
             }
-            catch (IOException) when (DateTime.UtcNow < deadline)
+            catch (IOException ex) when (IsDefinitelyNotContention(ex))
             {
+                // Waiting cannot help: no amount of retrying makes a missing directory appear. This
+                // used to be swallowed by the blanket IOException catch below and retried for the
+                // full timeout, then reported as though another process held the lock — a wrong
+                // diagnosis, delivered 30s late, during an incident (cold review L2).
+                throw;
+            }
+            catch (IOException ex) when (DateTime.UtcNow < deadline)
+            {
+                lastError = ex;
                 await Task.Delay(delay, ct);
                 delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 250));
             }
             catch (IOException ex)
             {
-                throw new TimeoutException(
-                    $"Timed out after {LockTimeout.TotalSeconds:N0}s waiting for the KEK key-file lock " +
-                    $"'{lockPath}'. Another process may be rotating, or a stale lock is held.", ex);
+                throw LockTimedOut(lockPath, ex);
             }
         }
+
+        TimeoutException LockTimedOut(string lockFile, IOException ex)
+        {
+            var cause = lastError ?? ex;
+            var prefix = $"Timed out after {LockTimeout.TotalSeconds:N0}s waiting for the KEK key-file "
+                + $"lock '{lockFile}'. ";
+
+            // Only claim contention when the OS actually said so. Asserting it unconditionally sent
+            // operators hunting for a rotating process when the real cause was a full disk or an
+            // unreadable path.
+            return IsSharingViolation(cause)
+                ? new TimeoutException(
+                    prefix + "Another process is holding it, or a stale lock remains.", cause)
+                : new TimeoutException(
+                    prefix + "This does NOT look like lock contention — the last attempt failed with "
+                    + $"{cause.GetType().Name}: {cause.Message} Check the path, its permissions, and "
+                    + "free space before assuming another process is rotating.", cause);
+        }
+    }
+
+    /// <summary>
+    /// Failures that retrying cannot fix, so they must surface immediately rather than after the
+    /// full lock timeout. Deliberately a small allow-list of <i>known</i> non-contention cases:
+    /// anything unrecognised keeps the previous retry behaviour, because misclassifying real
+    /// contention would break the cross-process guarantee on a platform we cannot test here.
+    /// Verified on Windows: a missing directory surfaces as <see cref="DirectoryNotFoundException"/>,
+    /// which derives from <see cref="IOException"/> and was therefore being retried.
+    /// </summary>
+    internal static bool IsDefinitelyNotContention(IOException ex) =>
+        ex is DirectoryNotFoundException or FileNotFoundException or PathTooLongException;
+
+    /// <summary>
+    /// Whether the OS reported the file as locked or shared-violation, as opposed to some other I/O
+    /// failure. Windows uses <c>ERROR_SHARING_VIOLATION</c>/<c>ERROR_LOCK_VIOLATION</c>; .NET
+    /// surfaces a <c>flock</c> conflict on Unix with the same HResult, and <c>EAGAIN</c>/
+    /// <c>EWOULDBLOCK</c> (11 on Linux, 35 on macOS) is accepted as well rather than relying on one
+    /// mapping. Used only to word the timeout honestly — never to decide whether to keep waiting.
+    /// </summary>
+    internal static bool IsSharingViolation(IOException ex)
+    {
+        const int SharingViolation = unchecked((int)0x80070020);
+        const int LockViolation = unchecked((int)0x80070021);
+
+        if (ex.HResult == SharingViolation || ex.HResult == LockViolation) return true;
+        return !OperatingSystem.IsWindows() && ex.HResult is 11 or 35;
     }
 
     /// <summary>
