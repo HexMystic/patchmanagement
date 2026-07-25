@@ -650,7 +650,37 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
-### 2026-07-26 (later) — cold review actioned · GREEN · STILL HELD AT THE MERGE GATE · RESUME HERE
+### 2026-07-26 (merge) — Phase 2 MERGED to main · 135 green on main · RESUME HERE
+**`phase/2-vault` is merged.** `--no-ff` at **`19956af`**, pushed (`42529db..19956af`). 24 commits
+plus the merge. **Phase 2 (Credential vault) is `complete`.**
+
+**Verified on `main` itself, not on the branch** — Contracts **19/19**, IntegrationTests **36/36**,
+Vault **80/80** = **135**. Host boots from `main`, `/health` 200.
+
+**One conflict, in this file.** `main` carried a session-log entry (`42529db`) committed straight to
+it while work continued on the branch, so the branch never had it. Kept, placed in date order below,
+and **marked superseded** rather than deleted — it describes tip `7195bee` at Vault 24/24, and its
+one pending item was not only applied but later revised (ADR 0012 decision E). Nothing was dropped.
+
+**Every cold-review finding is fixed or deferred with a named owner** — see the cold-review section
+above and [`docs/reviews/phase-2-cold-review.md`](reviews/phase-2-cold-review.md). Fixed: H1, H2, M6,
+M7, L2, and L3's length check, plus L1's doc half. Deferred with owners: **Phase 15** (KMS backends,
+cross-process hardening, KEK escrow, the retirement floor, rotation-correctness M2–M5, L3's MAC) ·
+**Phase 13** (the audit cluster, gated on Phase-1 M4) · **Phase 14** (real authorization for the
+tenant seam, and L1's assertion once the tenant comes from a claim) · **Phase 11** (the rotation
+trigger — nothing in the shipped host can start one).
+
+**NEXT SESSION — a fresh one, and one branch at a time (WORKFLOW §4):** rebase **Phase 3**
+(`phase/3-connector`, `67cc648`) onto the new `main`, bring it to green in its own worktree, review,
+merge, re-run the suite on `main`; **then** repeat for **Phase 5** (`phase/5-content`, `3a24ccd`).
+Both are WIP and **not green today** — Phase 3 has no tests and is not in the `.sln`; Phase 5's test
+project is barely started. Neither is crypto, so they warrant a lighter review than Phase 2 — but
+Phase 3 consumes `ResolvedCredential` and owns the NeverLog residual that ADR 0012 hands it.
+
+*The entry below was written before the merge; its "held at the merge gate" status is what this
+entry closes.*
+
+### 2026-07-26 (later) — cold review actioned · GREEN · then merged (see above)
 A **zero-history cold review of the key custody path** — the one the previous entry was holding for —
 came back. It **confirmed the core** (cross-process custody, no version loss, absence-fatal init, the
 H-1 deep copy, envelope relocation failing, no downgrade, no cross-tenant bypass; verified on
