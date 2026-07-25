@@ -50,6 +50,22 @@ Selected via `VAULT_KEY_PROVIDER`. See `docs/adr/0002-key-provider.md`.
   kind, scope) — never ciphertext or plaintext. A contract test asserts no vault
   endpoint serializes secret fields.
 
+## Accepted limitations (redaction) — see [ADR 0012](../adr/0012-log-redaction-scope.md)
+The redaction filter is the **belt**; the primary guarantee remains that vault code
+never passes secret material to a logger. Three boundaries are accepted, not deferred:
+- **No runtime caller for `Register()`.** Resolve-time self-registration is
+  **rejected** — it would hold a non-zeroable plaintext string per resolved credential
+  for the process lifetime, contradicting the in-memory-only invariant above. The
+  filter takes process-lifetime literals only.
+- **Log scope state is not scrubbed.** `BeginScope` state is forwarded unchanged;
+  arbitrary `TState` cannot be rewritten. Accepted because nothing creates a
+  data-carrying scope, and enforced by `VaultLoggingConventionTests`.
+- **Records must not leak via a generated `ToString()`.** Secret-bearing types either
+  are not records or override `ToString()` redacted; pinned by the same test.
+
+Residual obligation is owned by **Phase 3 (Connectors)**: the belt covers vault log
+categories only, so the NeverLog scan must be extended to the connector module.
+
 ## Data (extends Phase 1 `credentials`)
 `credentials(envelope bytea, dek_id, kind, target_scope, ...)`,
 `data_keys(id, tenant_id, wrapped_dek bytea, key_id, created_at, retired_at)`.

@@ -95,6 +95,13 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
   tests proving them; **every credential access logged via the Phase-1 `IAuditLog`
   from day one** (metadata only — never the secret).
 - **Owned paths:** `src/Modules/Vault`.
+- **Accepted limitations (redaction), recorded not deferred** — [ADR 0012](adr/0012-log-redaction-scope.md):
+  resolve-time secret self-registration is **rejected** (it would retain non-zeroable
+  plaintext for the process lifetime); log **scope state** is not scrubbed; secret-bearing
+  records must not rely on a generated `ToString()`. The latter two are enforced by
+  `VaultLoggingConventionTests`, not just documented. **Residual obligation → Phase 3**
+  (Connectors): the belt covers vault log categories only, so the NeverLog scan must be
+  extended to the connector module.
 - **Detail:** `docs/phases/phase-2.md`. See `docs/THREAT-MODEL.md`.
 
 ## Phase 3 — Endpoint connector  · parallel · Status: in-progress

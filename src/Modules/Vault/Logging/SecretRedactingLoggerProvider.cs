@@ -27,7 +27,16 @@ public sealed class SecretRedactingLoggerProvider(ILoggerProvider inner, Func<st
 
     private readonly ConcurrentDictionary<string, byte> _sentinels = new(StringComparer.Ordinal);
 
-    /// <summary>Register a literal that must never appear in a log line. Ignores empty/whitespace.</summary>
+    /// <summary>
+    /// Register a literal that must never appear in a log line. Ignores empty/whitespace.
+    ///
+    /// <para>Takes literals that are ALREADY resident for the process lifetime — a config-sourced
+    /// value, or a test proving the filter bites. Per-request resolved credentials are deliberately
+    /// NOT registered: the argument is held as a non-zeroable string until the process exits, so
+    /// registering each resolved secret would build a permanent plaintext registry and defeat the
+    /// pinned-buffer zeroing it is meant to complement. Rejected, not deferred — see
+    /// ADR 0012 (docs/adr/0012-log-redaction-scope.md).</para>
+    /// </summary>
     public void Register(string secret)
     {
         if (!string.IsNullOrWhiteSpace(secret)) _sentinels.TryAdd(secret, 0);
@@ -82,6 +91,12 @@ public sealed class SecretRedactingLoggerProvider(ILoggerProvider inner, Func<st
 
     private sealed class RedactingLogger(ILogger inner, SecretRedactingLoggerProvider owner) : ILogger
     {
+        // Scope state is NOT scrubbed — it is forwarded to the sink exactly as given. TState is
+        // arbitrary (commonly an anonymous type) and cannot be rewritten while preserving what a
+        // structured sink reads from it. Accepted because nothing in the module creates a
+        // data-carrying scope, and VaultLoggingConventionTests fails if that changes. Note the
+        // capturing harness behind NeverLogTests discards scope state, so that suite cannot see
+        // this channel — the convention test is the guard. ADR 0012.
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => inner.BeginScope(state);
 
         public bool IsEnabled(LogLevel logLevel) => inner.IsEnabled(logLevel);
