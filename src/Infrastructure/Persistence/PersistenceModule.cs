@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using PatchManagement.Contracts.Auditing;
+using PatchManagement.Contracts.Tenancy;
 using PatchManagement.Contracts.Modules;
 using PatchManagement.Persistence.Auditing;
 using PatchManagement.Persistence.Rls;
@@ -28,6 +29,10 @@ public static class PersistenceModule
                 .UseSnakeCaseNamingConvention());
 
         services.AddScoped<IAuditLog, EfAuditLog>();
+
+        // The sanctioned off-HTTP tenancy pattern (review M6, ADR 0014). Singleton because it
+        // CREATES scopes rather than living in one — a background job resolves it from the root.
+        services.AddSingleton<ITenantScopeFactory, TenantScopeFactory>();
 
         return services;
     }
