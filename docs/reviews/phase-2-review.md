@@ -68,6 +68,8 @@ realization of Phase-1 **M6**.
 
 ### C2. Two processes sharing the key file destroy each other's KEK versions
 
+*(**Resolved** — cross-process lock + reload-under-lock; see ADR 0015.)*
+
 **Files:** `src/Modules/Vault/KeyProviders/SoftwareKeyProvider.cs:17,51-53`;
 `KeyFileKekSource.cs:42-62`; `KekKeyset.cs:46-55`.
 
@@ -82,6 +84,8 @@ process only; there is no file lock, lease, or read-modify-write.
 
 ### C3. The key file is renamed into place without an fsync
 
+*(**Resolved** — flush-to-disk, atomic rename, directory fsync; see ADR 0015.)*
+
 **File:** `src/Modules/Vault/KeyProviders/KeyFileKekSource.cs:53-61`.
 
 Temp-then-rename is the right shape, but `File.Create` + serialize flushes to
@@ -93,6 +97,8 @@ credential in the product is unrecoverable.** One unreplicated file, no escrow,
 no backup hook.
 
 ### C4. A new KEK becomes the in-memory current before it is durably persisted
+
+*(**Resolved** — the keyset is republished only after the durable write returns; see ADR 0015.)*
 
 **File:** `src/Modules/Vault/KeyProviders/SoftwareKeyProvider.cs:51-53`.
 
@@ -121,7 +127,7 @@ the decryption oracle. Verified by writing the test to assert the attack
 
 ### H2. The key file is created at default permissions and hardened afterwards
 
-*(Corroborated by two passes.)*
+*(Corroborated by two passes. **Resolved** — created 0600 via `UnixCreateMode`; see ADR 0015.)*
 
 **File:** `src/Modules/Vault/KeyProviders/KeyFileKekSource.cs:55-61,66-78`.
 
@@ -170,6 +176,8 @@ type collapses to `object` and defeats `TryAddEnumerable` dedupe. No test
 exercises the real host's provider list.
 
 ### H6. A resolve concurrent with a rotation races on a non-thread-safe Dictionary
+
+*(**Resolved** — `KekKeyset` is immutable and republished by reference swap; see ADR 0015.)*
 
 **Files:** `src/Modules/Vault/KeyProviders/KekKeyset.cs:16,40-52`;
 `SoftwareKeyProvider.cs:29,36`.

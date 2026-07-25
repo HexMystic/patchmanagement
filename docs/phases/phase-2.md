@@ -52,6 +52,11 @@ Selected via `VAULT_KEY_PROVIDER`. See `docs/adr/0002-key-provider.md`.
 - **Isolation** — each DEK re-wraps in its own try/catch, so a corrupt or relocated row
   fails alone and is reported in `KekRotationResult.Failures` rather than aborting the
   sweep. Each tenant saves and audits in its own scope, so no transaction spans the estate.
+- **Key-file custody** — adding a KEK version is one atomic read-modify-write: an exclusive
+  cross-process lock on a sidecar, a re-read from disk (so concurrent rotations are additive,
+  never destructive), then flush-to-disk → atomic rename → directory fsync. It returns only
+  once durable, and the in-memory keyset — immutable — is republished by reference swap only
+  after that ([ADR 0015](../adr/0015-kek-file-durability.md), review C2/C3/C4).
 - **Resumability** — `CompleteRotationAsync` converges stragglers onto the *existing*
   current version without minting a new one. Retrying `RotateAsync` would mint a key per
   attempt; use it to start a rotation, `CompleteRotationAsync` to finish a partial one.

@@ -13,6 +13,15 @@ public sealed class KeyProviderTests
     /// <summary>A distinct data-key row binding per call (ADR 0013).</summary>
     private static KeyBinding Binding() => new(Guid.NewGuid(), Guid.NewGuid());
 
+    /// <summary>Per-test scratch directory: the key file now has a lock sidecar, so deleting a
+    /// single file would leave it behind (ADR 0015).</summary>
+    private static string NewScratchDirectory()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "kek-test-" + Guid.NewGuid().ToString("N")[..12]);
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
     [Fact]
     public async Task Wrap_then_unwrap_recovers_the_dek()
     {
@@ -65,7 +74,8 @@ public sealed class KeyProviderTests
     [Fact]
     public async Task Key_file_source_persists_and_reloads_the_keyset()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"kek-{Guid.NewGuid():N}.json");
+        var dir = NewScratchDirectory();
+        var path = Path.Combine(dir, "kek.json");
         try
         {
             var provider1 = new SoftwareKeyProvider(new KeyFileKekSource(path));
@@ -83,14 +93,15 @@ public sealed class KeyProviderTests
         }
         finally
         {
-            File.Delete(path);
+            Directory.Delete(dir, recursive: true);
         }
     }
 
     [Fact]
     public async Task Key_file_survives_rotation_across_a_restart()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"kek-{Guid.NewGuid():N}.json");
+        var dir = NewScratchDirectory();
+        var path = Path.Combine(dir, "kek.json");
         try
         {
             var provider1 = new SoftwareKeyProvider(new KeyFileKekSource(path));
@@ -102,7 +113,7 @@ public sealed class KeyProviderTests
         }
         finally
         {
-            File.Delete(path);
+            Directory.Delete(dir, recursive: true);
         }
     }
 

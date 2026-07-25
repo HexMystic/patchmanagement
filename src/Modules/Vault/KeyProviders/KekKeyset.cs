@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 
 namespace PatchManagement.Vault.KeyProviders;
@@ -7,9 +8,15 @@ namespace PatchManagement.Vault.KeyProviders;
 /// <c>keyId → 32-byte KEK</c> plus a pointer to the current version. Older versions are retained
 /// so a DEK wrapped before a rotation still unwraps.
 ///
-/// This holds raw KEK material, so it is never logged or serialized except by an
-/// <see cref="IKekSource"/> persisting it to its cold-start store (e.g. a permission-locked key
-/// file). <see cref="ToString"/> is redacted.
+/// <para><b>Immutable.</b> Adding a version returns a NEW instance (<see cref="WithNewVersion"/>)
+/// rather than mutating this one. That is what lets the provider publish a new keyset with a single
+/// reference swap, only after it is durably stored — a reader mid-<see cref="Get"/> can never
+/// observe a half-updated map, and a failed write cannot leave a version live in memory that is not
+/// on disk (review C2/C4/H6, ADR 0015).</para>
+///
+/// <para>This holds raw KEK material, so it is never logged or serialized except by an
+/// <see cref="IKekSource"/> persisting it to its cold-start store. <see cref="ToString"/> is
+/// redacted.</para>
 /// </summary>
 public sealed class KekKeyset
 {
@@ -25,9 +32,7 @@ public sealed class KekKeyset
         CurrentKeyId = currentKeyId;
     }
 
-    public string CurrentKeyId { get; private set; }
-
-    public IReadOnlyCollection<string> KeyIds => _keys.Keys;
+    public string CurrentKeyId { get; }
 
     /// <summary>A brand-new keyset with a single freshly generated 256-bit KEK.</summary>
     public static KekKeyset CreateNew()
@@ -37,22 +42,34 @@ public sealed class KekKeyset
         return new KekKeyset(keyId, new Dictionary<string, byte[]> { [keyId] = key });
     }
 
+    /// <summary>Looks up a version without throwing — used to decide whether a reload is warranted.</summary>
+    public bool TryGet(string keyId, [MaybeNullWhen(false)] out byte[] key) => _keys.TryGetValue(keyId, out key);
+
     public byte[] Get(string keyId) =>
-        _keys.TryGetValue(keyId, out var key)
+        TryGet(keyId, out var key)
             ? key
             : throw new KeyNotFoundException($"No KEK version '{keyId}' is loaded. Cannot unwrap.");
 
-    /// <summary>Add a freshly generated KEK version, make it current, and return its keyId.</summary>
-    public string AddNewCurrent()
+    /// <summary>
+    /// A NEW keyset carrying every version of this one plus a freshly generated version, which
+    /// becomes current. This instance is left unchanged — see the class remarks.
+    /// </summary>
+    public KekKeyset WithNewVersion()
     {
         var keyId = NewKeyId();
-        _keys[keyId] = RandomNumberGenerator.GetBytes(32);
-        CurrentKeyId = keyId;
-        return keyId;
+        var keys = new Dictionary<string, byte[]>(_keys, StringComparer.Ordinal)
+        {
+            [keyId] = RandomNumberGenerator.GetBytes(32),
+        };
+        return new KekKeyset(keyId, keys);
     }
 
-    /// <summary>Snapshot for persistence by an <see cref="IKekSource"/>. Callers must not log this.</summary>
-    public IReadOnlyDictionary<string, byte[]> Snapshot() => _keys;
+    /// <summary>
+    /// A copy for persistence by an <see cref="IKekSource"/> — a copy, not the live map, so a holder
+    /// cannot observe or affect this keyset. Callers must not log it.
+    /// </summary>
+    public IReadOnlyDictionary<string, byte[]> Snapshot() =>
+        new Dictionary<string, byte[]>(_keys, StringComparer.Ordinal);
 
     private static string NewKeyId() =>
         $"kek-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}"[..40];

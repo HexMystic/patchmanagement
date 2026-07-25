@@ -328,19 +328,19 @@ Full detail in [`docs/reviews/phase-2-review.md`](reviews/phase-2-review.md) (re
 | # | Finding | Where it should land | Status |
 |---|---------|----------------------|--------|
 | C1 | **Rotation runs under RLS in production DI and silently rotates nothing** — registered on the app-role context; off the HTTP path the DEK query returns zero rows and it reports success. Same root as `M6` | Phase 2 — sanctioned system tenancy scope ([ADR 0014](adr/0014-system-tenancy-scope.md)) | RESOLVED |
-| C2 | Two processes sharing the KEK file overwrite each other's versions — permanent, unrecoverable data loss | Phase 2 (key custody) | OPEN |
-| C3 | KEK file renamed into place without fsync — a crash can leave a zero-length `kek.json`, losing every credential | Phase 2 (key custody) | OPEN |
-| C4 | A new KEK becomes in-memory `current` before it is durably persisted; no rollback if the save fails | Phase 2 (key custody) | OPEN |
+| C2 | Two processes sharing the KEK file overwrite each other's versions — permanent, unrecoverable data loss | Phase 2 — cross-process lock + reload-under-lock ([ADR 0015](adr/0015-kek-file-durability.md)) | RESOLVED |
+| C3 | KEK file renamed into place without fsync — a crash can leave a zero-length `kek.json`, losing every credential | Phase 2 — flush-to-disk + atomic rename + directory fsync ([ADR 0015](adr/0015-kek-file-durability.md)) | RESOLVED |
+| C4 | A new KEK becomes in-memory `current` before it is durably persisted; no rollback if the save fails | Phase 2 — durable-before-published ([ADR 0015](adr/0015-kek-file-durability.md)) | RESOLVED |
 
 ### High
 | # | Finding | Where it should land | Status |
 |---|---------|----------------------|--------|
 | H1 | **No AES-GCM associated data** — an envelope is not bound to its row; cross-tenant relocation decrypts | Phase 2 ([ADR 0013](adr/0013-envelope-binding.md)) | RESOLVED |
-| H2 | KEK file created at default permissions, hardened only after writing | Phase 2 (key custody) | OPEN |
+| H2 | KEK file created at default permissions, hardened only after writing | Phase 2 — created 0600 via `UnixCreateMode`, closed with [ADR 0015](adr/0015-kek-file-durability.md) | RESOLVED |
 | H3 | **Redaction belt scrubs the formatted string only — structured state is forwarded raw** and is what production sinks render | Phase 2 (amends ADR 0012) | OPEN |
 | H4 | No test can observe the structured channel; the wiring test passes for the wrong reason | Phase 2 (with H3) | OPEN |
 | H5 | The belt is silently removed by `ClearProviders()` and duplicated by a later `AddConsole()` | Phase 2 (with H3) | OPEN |
-| H6 | Resolve concurrent with rotation races on a non-thread-safe `Dictionary` in `KekKeyset` | Phase 2 (key custody) | OPEN |
+| H6 | Resolve concurrent with rotation races on a non-thread-safe `Dictionary` in `KekKeyset` | Phase 2 — `KekKeyset` made immutable, closed with [ADR 0015](adr/0015-kek-file-durability.md) | RESOLVED |
 | H7 | Default KEK path is container-ephemeral — a rebuild destroys the key while the DB keeps the ciphertext | Phase 2 / deployment | OPEN |
 | H8 | KMS providers fail at first use, not at startup; the app boots green and throws on the first credential operation | Phase 2 | OPEN |
 
