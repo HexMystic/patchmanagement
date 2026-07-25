@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using PatchManagement.Contracts.Credentials;
 using PatchManagement.Contracts.Modules;
 using PatchManagement.Vault.KeyProviders;
+using PatchManagement.Vault.Logging;
 using PatchManagement.Vault.Services;
 
 namespace PatchManagement.Vault;
@@ -18,6 +19,10 @@ public static class VaultModule
 {
     public static IServiceCollection AddVaultModule(this IServiceCollection services, IConfiguration configuration)
     {
+        // NEVER #1 defense-in-depth: the redaction belt only helps if it is in the pipeline, so put
+        // it there here rather than leaving it a class that only tests construct.
+        services.AddSecretRedactingLogging();
+
         var providerName = configuration["VAULT_KEY_PROVIDER"] ?? "software";
 
         switch (providerName.Trim().ToLowerInvariant())

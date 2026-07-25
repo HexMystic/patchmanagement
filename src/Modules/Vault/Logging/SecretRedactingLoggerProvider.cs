@@ -20,7 +20,8 @@ namespace PatchManagement.Vault.Logging;
 /// only thing that can reliably be recognised as "this exact secret" is a value someone hands us —
 /// e.g. a test proving the filter bites, or a caller who knows a literal must never surface.
 /// </summary>
-public sealed class SecretRedactingLoggerProvider(ILoggerProvider inner) : ILoggerProvider
+public sealed class SecretRedactingLoggerProvider(ILoggerProvider inner, Func<string, bool>? appliesTo = null)
+    : ILoggerProvider, ISupportExternalScope
 {
     public const string Redacted = "***REDACTED***";
 
@@ -57,7 +58,25 @@ public sealed class SecretRedactingLoggerProvider(ILoggerProvider inner) : ILogg
             type.FullName ?? type.Name);
     }
 
-    public ILogger CreateLogger(string categoryName) => new RedactingLogger(inner.CreateLogger(categoryName), this);
+    /// <summary>
+    /// Wraps the inner logger when <paramref name="categoryName"/> is in scope for redaction. With no
+    /// predicate every category is wrapped; the host wiring passes one so the belt covers vault code
+    /// without stripping exception detail from unrelated application logging.
+    /// </summary>
+    public ILogger CreateLogger(string categoryName) =>
+        appliesTo is null || appliesTo(categoryName)
+            ? new RedactingLogger(inner.CreateLogger(categoryName), this)
+            : inner.CreateLogger(categoryName);
+
+    /// <summary>
+    /// Forwarded so wrapping a provider does not silently cost it scope support: LoggerFactory hands
+    /// the external scope provider only to providers that implement this, and without the forward the
+    /// inner provider would never receive it (console scopes would just stop appearing).
+    /// </summary>
+    public void SetScopeProvider(IExternalScopeProvider scopeProvider)
+    {
+        if (inner is ISupportExternalScope supported) supported.SetScopeProvider(scopeProvider);
+    }
 
     public void Dispose() => inner.Dispose();
 
