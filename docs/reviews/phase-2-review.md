@@ -42,6 +42,8 @@ establish.
 
 ### C1. Rotation runs under RLS in production DI and silently rotates nothing
 
+*(**Resolved** — sanctioned per-tenant system scope, no elevated role; see ADR 0014.)*
+
 **Files:** `src/Modules/Vault/VaultModule.cs:55`;
 `src/Modules/Vault/Vault/KekRotationService.cs:29-40`;
 `src/Infrastructure/Persistence/PersistenceModule.cs:16-28`.
@@ -138,6 +140,13 @@ symlinks. If serialization throws, a partial world-readable KEK file is left
 behind, never hardened and never deleted.
 
 ### H3. The redaction belt scrubs the formatted string only; structured state is forwarded raw
+
+*(**Accepted, documented and fenced** — not scrubbed. A sentinel-based state scrubber would be inert
+(nothing registers a sentinel at runtime by design) and type-based filtering would have to redact
+every string. ADR 0012 decision D records the corrected scope; `StructuredStateChannelTests` pins
+both the boundary and the primary guarantee on this channel. Note the finding's severity: the channel
+is unguarded, but all five vault log call sites pass only ids, enums and counts, so nothing leaks
+through it today.)*
 
 **File:** `src/Modules/Vault/Logging/SecretRedactingLoggerProvider.cs:104-115`.
 

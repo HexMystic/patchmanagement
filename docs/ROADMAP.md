@@ -324,6 +324,12 @@ system-scope audit (Phase 2's cross-tenant KEK rotation must be auditable) will 
 Full detail in [`docs/reviews/phase-2-review.md`](reviews/phase-2-review.md) (reviewed at
 `305cc81`). IDs below are that document's.
 
+**Status 2026-07-25:** the remediation slice (`a50d9ec` → `ca54bec` → `20b721d` → `e47735f` →
+`8dcf349`) closed **C1, C2, C3, C4, H1, H2, H6**, accepted **H3** with the scope corrected and
+fenced, and fixed the module-wiring gap that made several findings latent. **Open — tracked, not
+fixed:** H4, H5, H7, H8 and the medium cluster. None is a live disclosure path. The branch is ready
+for a fresh-session re-review of the whole remediated vault before merge.
+
 ### Critical
 | # | Finding | Where it should land | Status |
 |---|---------|----------------------|--------|
@@ -337,25 +343,69 @@ Full detail in [`docs/reviews/phase-2-review.md`](reviews/phase-2-review.md) (re
 |---|---------|----------------------|--------|
 | H1 | **No AES-GCM associated data** — an envelope is not bound to its row; cross-tenant relocation decrypts | Phase 2 ([ADR 0013](adr/0013-envelope-binding.md)) | RESOLVED |
 | H2 | KEK file created at default permissions, hardened only after writing | Phase 2 — created 0600 via `UnixCreateMode`, closed with [ADR 0015](adr/0015-kek-file-durability.md) | RESOLVED |
-| H3 | **Redaction belt scrubs the formatted string only — structured state is forwarded raw** and is what production sinks render | Phase 2 (amends ADR 0012) | OPEN |
-| H4 | No test can observe the structured channel; the wiring test passes for the wrong reason | Phase 2 (with H3) | OPEN |
-| H5 | The belt is silently removed by `ClearProviders()` and duplicated by a later `AddConsole()` | Phase 2 (with H3) | OPEN |
+| H3 | **Redaction belt scrubs the formatted string only — structured state is forwarded raw** and is what production sinks render | Phase 2 — [ADR 0012](adr/0012-log-redaction-scope.md) amended (decision D); the channel is recorded uncovered and pinned by `StructuredStateChannelTests` | ACCEPTED — documented + fenced |
+| H4 | No test can observe the structured channel; the wiring test passes for the wrong reason | **Phase 2 hardening, deferred** — `CapturingLoggerProvider` is formatter-shaped; `StructuredCapturingLoggerProvider` now exists to build on | OPEN |
+| H5 | The belt is silently removed by `ClearProviders()` and duplicated by a later `AddConsole()` | **Phase 2 hardening, deferred** — needs an assertion over the real host's provider list | OPEN |
 | H6 | Resolve concurrent with rotation races on a non-thread-safe `Dictionary` in `KekKeyset` | Phase 2 — `KekKeyset` made immutable, closed with [ADR 0015](adr/0015-kek-file-durability.md) | RESOLVED |
-| H7 | Default KEK path is container-ephemeral — a rebuild destroys the key while the DB keeps the ciphertext | Phase 2 / deployment | OPEN |
-| H8 | KMS providers fail at first use, not at startup; the app boots green and throws on the first credential operation | Phase 2 | OPEN |
+| H7 | Default KEK path is container-ephemeral — a rebuild destroys the key while the DB keeps the ciphertext | **Phase 2 hardening, deferred** for the code default. The compose volume has **no owner** — see the note below | OPEN |
+| H8 | KMS providers fail at first use, not at startup; the app boots green and throws on the first credential operation | **Phase 2 hardening, deferred** — a startup probe of the selected provider | OPEN |
 
 ### Medium
-Memory hygiene (orphaned `secretCopy` on the cancel/audit-failure path; plaintext held across DB
-round-trips; `Array.Clear` vs `ZeroMemory`; **KEK material held to a weaker standard than the DEKs
-it protects**; no page-locking so plaintext is swap- and coredump-visible) · audit gaps (failed
-decrypts and `ListAsync` unaudited; audit written after commit outside any transaction; actor is a
-constant) · correctness (no tenant predicate on vault queries; rotation counts over-report; old KEK
-versions never retired despite `phase-2.md:40`; retired DEKs excluded from re-wrap; key file
-unvalidated on read; `NeverReturnContractTests` is one-assembly/`byte[]`-only/properties-only; EF
-`EnableSensitiveDataLogging` unpinned by any test; exceptions escaping the vault logged outside the
-belt's category scope) · ADR 0012 judgements (scope-state exemption under-rated — the guard greps
-one directory but `IExternalScopeProvider` is process-wide; `RedactedException` is net-negative
-while `Register()` has no runtime caller).
+Memory hygiene — **Phase 2 hardening, deferred**: orphaned `secretCopy` on the cancel/audit-failure
+path; plaintext held across DB round-trips; `Array.Clear` vs `ZeroMemory`; **KEK material held to a
+weaker standard than the DEKs it protects**; no page-locking so plaintext is swap- and
+coredump-visible · audit gaps — **Phase 13** (the audit-module owner), *gated on the Phase-1 M4
+change that makes `AuditEntry.TenantId` nullable*: failed decrypts and `ListAsync` unaudited, audit
+written after commit outside any transaction, actor is the constant `"vault"` · correctness —
+**Phase 2 hardening, deferred**: no tenant predicate on vault queries; old KEK versions never retired
+despite `phase-2.md` (*doc/code mismatch — the code retains them deliberately, which is what makes a
+half-finished rotation recoverable; the doc is wrong, not the code*); retired DEKs excluded from
+re-wrap; key file unvalidated on read (no length check, no MAC); `NeverReturnContractTests` is
+one-assembly/`byte[]`-only/properties-only; EF `EnableSensitiveDataLogging` correct but unpinned by
+any test · connector-side never-log residue — **Phase 3**, per [ADR 0012](adr/0012-log-redaction-scope.md)'s
+existing hand-off: exceptions escaping the vault are logged by ASP.NET outside the belt's category
+scope, and the belt covers vault categories only · ADR 0012 judgements: the scope-state exemption is
+*still* justified by a one-directory grep while `IExternalScopeProvider` is process-wide
+(**Phase 2 hardening, deferred**), and `RedactedException` being net-negative is **RESOLVED** — it is
+now gated on the belt being armed (ADR 0012 decision E) · rotation's `DeksRewrapped` over-reporting —
+**RESOLVED** by the C1 slice.
+
+**Recorded because it must not vanish without a verdict — RESOLVED by the C1 + C2/C3/C4 slices.**
+The review found rotation was one unbounded transaction across all tenants with no batching or
+resumability, and that after ADR 0013 a single poisoned row aborted the whole sweep. This item was
+dropped from an earlier version of this paragraph; it is restored with its verdict. Now: the
+per-tenant scope is the batch and commit boundary, each DEK re-wraps in its own try/catch, and
+`CompleteRotationAsync` converges stragglers without minting a new key
+([ADR 0014](adr/0014-system-tenancy-scope.md)).
+
+**New, found while fixing H3 — `KekRotationFailure.Reason` embeds `ex.Message` verbatim.** That
+record's members (`TenantId`, `DataKeyId`, `Reason`) miss `VaultLoggingConventionTests`' deliberately
+narrow vocabulary, so a future structural log of a `KekRotationResult` would render a provider
+exception message raw on the uncovered structured channel. **Phase 2 hardening, deferred.**
+
+**Remaining hardening (deferred):** H4/H5 (belt testability and removability), H7 (KEK path — the
+code default plus an unowned compose volume), H8 (startup validation), the memory-hygiene and
+correctness mediums, and `KekRotationFailure.Reason`. None is a live disclosure path.
+
+**Note — no phase owns the logging pipeline or application deployment.** H3/H4/H5 are
+logging-pipeline findings and H7 is a container-volume one, but Phase 8 "Deployment engine" deploys
+*patches to endpoints*, and Phase 0 owns `docker-compose.yml` and is **complete**. Rather than invent
+a phase, these are parked as **Phase 2 hardening** — which satisfies `DIFFERENTIATORS.md`'s rule
+("deferring **without a named owner** is not") only because Phase 2 accepts them. The gap is real and
+recurs: ADR 0009's glibc production-pinning carry-over has the same problem. Naming an owner for
+logging/telemetry and deployment packaging is a decision someone still has to make.
+
+### Exit criteria — status at `8dcf349`
+Gates merge (CLAUDE.md §6: no phase is done until its exit criteria are met and its tests pass).
+
+| Criterion | Review verdict at `305cc81` | Now |
+|---|---|---|
+| Software provider round-trips a credential | Met | **Met** — unchanged |
+| KEK rotation re-wraps DEKs without re-encrypting credentials | Algorithm proven; product not (C1) | **Met** — proven off the HTTP path through the real DI container ([ADR 0014](adr/0014-system-tenancy-scope.md)) |
+| Decryption in-memory only | Not established | **Still not established** — nothing tests zeroing, pinning, or the exception path (memory-hygiene mediums) |
+| Provider swappable via config, no caller changes | Not established | **Still not established** — no test sets `VAULT_KEY_PROVIDER`; three of four providers remain stubs (H8) |
+| Never-log / never-return **with tests proving them** | Not met | **Never-log met** — the primary guarantee is now proven on the formatted, exception *and* structured channels. **Never-return still vacuous** — there are no vault endpoints to assert against |
+| Every credential access audited | Partially | **Still partial** — success paths tested; failed decrypts and `ListAsync` silent (→ Phase 13) |
 
 **Also fixed during review:** `PatchManagement.Api` did not reference `PatchManagement.Vault`, so
 the module never loaded in the shipped host — several findings were latent only because of it
