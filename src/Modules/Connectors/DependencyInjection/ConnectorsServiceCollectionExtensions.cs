@@ -71,7 +71,9 @@ public static class ConnectorsServiceCollectionExtensions
             sp.GetRequiredService<TimeProvider>()));
 
         // WinRM — real WS-Man transport, integration-tested later (no Windows host in the dev lab).
-        services.TryAddSingleton<IWinRmClient>(sp => new HttpWinRmClient(sp.GetService<IHttpClientFactory>()));
+        // No IHttpClientFactory: a pooled, named client cannot carry per-target credentials, and the
+        // previous registration handed one in — which made every WinRM call unauthenticated.
+        services.TryAddSingleton<IWinRmClient>(_ => new HttpWinRmClient());
         services.AddScoped<IEndpointConnector>(sp => new WinRmConnector(
             sp.GetRequiredService<ICredentialProvider>(),
             sp.GetRequiredService<IWinRmClient>(),

@@ -100,11 +100,20 @@ public static class WinRmMessageBuilder
     private static string XmlSafe(string value) => new(value.Where(c => c >= 0x20 || c is '\t' or '\n' or '\r').ToArray());
 
     /// <summary>Renders a password into a transient char span for the HTTP handler; caller clears it.</summary>
-    internal static SecureString ToSecureString(ReadOnlySpan<char> chars)
-    {
-        var secure = new SecureString();
-        foreach (var c in chars) secure.AppendChar(c);
-        secure.MakeReadOnly();
-        return secure;
-    }
+    /// <summary>
+    /// Quotes a value for use inside a PowerShell <b>single-quoted</b> literal.
+    ///
+    /// <para>Remote paths were interpolated raw into <c>'...'</c>, so a path containing an apostrophe
+    /// closed the literal and everything after it became executable PowerShell — running with
+    /// whatever privileges the WinRM session holds, which for a patching product is administrative.
+    /// A path is attacker-influenced whenever it comes from inventory, a manifest or an operator
+    /// pasting a value, so this is a live injection vector rather than a robustness nicety.</para>
+    ///
+    /// <para>Inside a single-quoted PowerShell literal the ONLY metacharacter is the apostrophe, and
+    /// it is escaped by doubling. Nothing else — <c>$</c>, backtick, <c>;</c>, newline — is special
+    /// there, which is exactly why single quotes are the right container and why the escaping is
+    /// this small.</para>
+    /// </summary>
+    internal static string SingleQuoted(string? value) =>
+        "'" + (value ?? string.Empty).Replace("'", "''", StringComparison.Ordinal) + "'";
 }

@@ -23,14 +23,70 @@ internal sealed class HttpWinRmClient : IWinRmClient
     private static readonly XNamespace W = "http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd";
     private static readonly XNamespace Rsp = "http://schemas.microsoft.com/wbem/wsman/1/windows/shell";
 
-    private readonly IHttpClientFactory? _httpClientFactory;
+    private readonly Func<ResolvedCredential, HttpMessageHandler> _handlerFactory;
 
-    public HttpWinRmClient(IHttpClientFactory? httpClientFactory = null) => _httpClientFactory = httpClientFactory;
+    /// <param name="handlerFactory">
+    /// Builds the message handler for a credential. Defaults to <see cref="BuildAuthenticatedHandler"/>;
+    /// tests substitute a scripted handler, which is what makes this class testable at all without a
+    /// Windows host.
+    ///
+    /// <para>It takes the credential rather than being a plain <c>IHttpClientFactory</c> deliberately.
+    /// A pooled, named client cannot carry per-target credentials, and the previous code proved why:
+    /// when a factory was present it returned the pooled client and DISCARDED the NetworkCredential
+    /// it had just built, so every WinRM call went out unauthenticated. Authentication is a property
+    /// of the handler, so the credential has to reach the thing that builds it.</para>
+    /// </param>
+    public HttpWinRmClient(Func<ResolvedCredential, HttpMessageHandler>? handlerFactory = null) =>
+        _handlerFactory = handlerFactory ?? BuildAuthenticatedHandler;
 
+    /// <summary>
+    /// The production handler. Always carries the credential — there is no branch that can drop it.
+    /// </summary>
+    internal static HttpClientHandler BuildAuthenticatedHandler(ResolvedCredential credential) =>
+        new()
+        {
+            Credentials = new NetworkCredential(
+                credential.Username,
+                // Transient: NetworkCredential requires a string. Not logged, not returned, not held
+                // beyond the handler's life (NEVER #1/#2).
+                Encoding.UTF8.GetString(credential.Secret)),
+            PreAuthenticate = true,
+        };
+
+    /// <summary>
+    /// Proves the endpoint is reachable AND that the credential is accepted.
+    ///
+    /// <para>This used to send a WS-Man <c>Identify</c>, which many configurations answer
+    /// <b>without authentication</b> — so a probe with an entirely wrong credential returned success
+    /// and the endpoint was reported healthy. Creating and deleting a shell is the cheapest exchange
+    /// that a server will not perform for an unauthenticated caller, so a rejected credential is now
+    /// rejected here rather than at the first real operation.</para>
+    /// </summary>
     public async Task ProbeAsync(EndpointTarget target, ResolvedCredential credential, TimeSpan timeout, CancellationToken ct)
     {
+        var url = EndpointUrl(target);
         using var http = CreateClient(credential, timeout);
-        await PostAsync(http, EndpointUrl(target), WinRmMessageBuilder.Identify(), timeout, ct).ConfigureAwait(false);
+
+        var createReply = await PostAsync(http, url, WinRmMessageBuilder.CreateShell(url, timeout), timeout, ct)
+            .ConfigureAwait(false);
+
+        var shellId = SelectValue(createReply, W + "Selector", "ShellId") ?? SelectValue(createReply, Rsp + "ShellId", null);
+        if (shellId is null)
+        {
+            throw new ConnectorConnectException(
+                ConnectorOutcome.ProtocolError, "WinRM did not return a ShellId for the connectivity probe.");
+        }
+
+        // Best-effort cleanup: the probe has already proven what it needed to.
+        try
+        {
+            await PostAsync(http, url, WinRmMessageBuilder.DeleteShell(url, shellId, timeout), timeout, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // A shell we could not delete does not make the endpoint unreachable or the credential bad.
+        }
     }
 
     public async Task<CommandResult> ExecuteAsync(
@@ -54,10 +110,36 @@ internal sealed class HttpWinRmClient : IWinRmClient
             var stderr = new StringBuilder();
             int? exitCode = null;
 
+            // Bounded by the operation's own deadline, not only by the caller's token.
+            //
+            // This loop previously exited on ct alone, so a server that accepted the command and then
+            // never reported CommandState/Done kept it polling until the caller happened to cancel —
+            // and a caller that passed CancellationToken.None would poll forever, holding a connection
+            // slot against the process-wide budget. NEVER #5 says no unbounded remote wait ever, and
+            // "the caller can always cancel" is not a bound the connector provides.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (timeout > TimeSpan.Zero) deadline.CancelAfter(timeout);
+
             while (exitCode is null)
             {
+                if (deadline.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    throw new ConnectorConnectException(
+                        ConnectorOutcome.Timeout,
+                        "WinRM command did not report completion within its time budget.");
+                }
+
                 ct.ThrowIfCancellationRequested();
-                var receive = await PostAsync(http, url, WinRmMessageBuilder.Receive(url, shellId, commandId, timeout), timeout, ct).ConfigureAwait(false);
+
+                // The CALLER's token, not the deadline's. PostAsync distinguishes caller cancellation
+                // (rethrow untouched) from its own timeout (map to Outcome.Timeout) by asking whether
+                // the token it was given is cancelled — so handing it the deadline token would make
+                // every expiry look like the caller pulling out, and the honest Timeout would be lost.
+                // The overall bound is enforced by the check at the top of this loop instead.
+                var receive = await PostAsync(
+                    http, url, WinRmMessageBuilder.Receive(url, shellId, commandId, timeout), timeout, ct)
+                    .ConfigureAwait(false);
+
                 AppendStreams(receive, stdout, stderr);
                 exitCode = ReadExitCodeIfDone(receive);
             }
@@ -77,7 +159,10 @@ internal sealed class HttpWinRmClient : IWinRmClient
         var content = file.Content?.ToArray() ?? await File.ReadAllBytesAsync(file.LocalPath!, ct).ConfigureAwait(false);
         var b64 = Convert.ToBase64String(content);
         // Push then run locally — this is exactly how a double-hop is avoided (HARD-PROBLEMS #9).
-        var ps = $"$d=[Convert]::FromBase64String('{b64}'); [IO.File]::WriteAllBytes('{file.RemotePath}',$d)";
+        // The remote path is escaped, not interpolated: an apostrophe in it would otherwise close the
+        // literal and turn the remainder into executable PowerShell in an administrative session.
+        var ps = $"$d=[Convert]::FromBase64String({WinRmMessageBuilder.SingleQuoted(b64)}); "
+                 + $"[IO.File]::WriteAllBytes({WinRmMessageBuilder.SingleQuoted(file.RemotePath)},$d)";
         var result = await ExecuteAsync(target, credential, "powershell -NonInteractive -EncodedCommand " + EncodePowerShell(ps), file.Timeout, ct).ConfigureAwait(false);
         if (!result.Succeeded || result.ExitCode != 0)
         {
@@ -97,7 +182,7 @@ internal sealed class HttpWinRmClient : IWinRmClient
     public async Task<long> DownloadAsync(
         EndpointTarget target, ResolvedCredential credential, FileTransfer file, Stream destination, CancellationToken ct)
     {
-        var ps = $"[Convert]::ToBase64String([IO.File]::ReadAllBytes('{file.RemotePath}'))";
+        var ps = $"[Convert]::ToBase64String([IO.File]::ReadAllBytes({WinRmMessageBuilder.SingleQuoted(file.RemotePath)}))";
         var result = await ExecuteAsync(target, credential, "powershell -NonInteractive -EncodedCommand " + EncodePowerShell(ps), file.Timeout, ct).ConfigureAwait(false);
         if (!result.Succeeded || result.ExitCode != 0)
         {
@@ -115,26 +200,11 @@ internal sealed class HttpWinRmClient : IWinRmClient
         if (credential.Kind != CredentialKind.WindowsPassword)
             throw new ConnectorConnectException(ConnectorOutcome.AuthFailed, "WinRM connector requires a Windows password credential.");
 
-        var networkCredential = new NetworkCredential(
-            credential.Username,
-            Encoding.UTF8.GetString(credential.Secret)); // transient; NetworkCredential requires a string
-
-        HttpClient client;
-        if (_httpClientFactory is not null)
+        var client = new HttpClient(_handlerFactory(credential), disposeHandler: true)
         {
-            client = _httpClientFactory.CreateClient("winrm");
-        }
-        else
-        {
-            var handler = new HttpClientHandler
-            {
-                Credentials = networkCredential,
-                PreAuthenticate = true,
-            };
-            client = new HttpClient(handler, disposeHandler: true);
-        }
+            Timeout = timeout > TimeSpan.Zero ? timeout + TimeSpan.FromSeconds(5) : Timeout.InfiniteTimeSpan,
+        };
 
-        client.Timeout = timeout > TimeSpan.Zero ? timeout + TimeSpan.FromSeconds(5) : Timeout.InfiniteTimeSpan;
         return client;
     }
 
