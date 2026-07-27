@@ -19,7 +19,7 @@ separate worktrees. **Phase 8 is solo.**
 | 0 | Environment & design | solo | — | **complete** |
 | 1 | Contracts | solo | 0 | **complete** |
 | 2 | Credential vault | parallel | 1 | **complete** |
-| 3 | Endpoint connector | parallel | 1 | **in-progress** |
+| 3 | Endpoint connector | parallel | 1 | **in-progress** — built, 267 green, **unmerged, awaiting cold review**; SSH verified, WinRM unverified |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
 | 5 | Content ingestion | parallel | 1 | **in-progress** |
 | 6 | Assessment | solo | 4, 5 | not-started |
@@ -122,15 +122,81 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
   recorded as Phase 2 hardening.
 - **Detail:** `docs/phases/phase-2.md`. See `docs/THREAT-MODEL.md`.
 
-## Phase 3 — Endpoint connector  · parallel · Status: in-progress
-- **Goal:** `IEndpointConnector` with WinRM and SSH implementations.
+## Phase 3 — Endpoint connector  · parallel · Status: in-progress (awaiting cold review)
+- **Goal:** `IEndpointConnector` with SSH **and** WinRM implementations. *(As built: the SSH half is
+  verified against the lab fleet; the WinRM half is written and unverified — see the status note
+  below. The goal is not the achievement.)*
 - **Dependencies:** Phase 1.
 - **Exit criteria:** Provider-neutral connector (bastion vs direct is config, not
   code); every operation idempotent + time-bounded with `CancellationToken`;
   connection pooling/concurrency limits (the scaling wall); integration tests
   against the lab fleet over SSH.
-- **Owned paths:** `src/Modules/Connectors`.
+- **Owned paths:** `src/Modules/Connectors`, plus `src/Shared/Contracts/Connectors`
+  ([ADR 0017](adr/0017-connector-contract-surface.md)).
 - **Detail:** `docs/phases/phase-3.md`. See `docs/adr/0003-cloud-agnostic-connector.md`.
+
+### Status at the close of the build — SSH verified, WINDOWS NOT
+
+All six exit criteria (a)–(f) are met **for the SSH/Linux path**, each ticked in `phase-3.md` against
+the specific test that proves it. Criterion (c) is proven only by `SshFleetTests`, a theory over all
+five lab containers against real sshd — no unit stand-in satisfies it.
+
+> **⚠ The Windows path has never run against a Windows host, and this phase does not claim it has.**
+> `WinRmConnector`/`HttpWinRmClient` are **written and unverified**. No Windows target exists here and
+> the guardrail (ADR 0007) denies every WinRM cmdlet from a dev session, so the path is untestable in
+> this repository by construction. The WinRM suite runs against a **scripted HTTP handler**: it proves
+> what the client *sends* and how it reacts to what it is *told*, and it found and fixed four real
+> transport defects that way. It proves nothing about how a real WinRM server responds. A green WinRM
+> suite is a statement about this client, not about WinRM. Real-host verification is **D-303 (Phase 8)**.
+
+**Tests: 267 passing, 0 skipped.** Contracts 19 · Connectors unit 86 · IntegrationTests 38 ·
+Vault 80 (unregressed — Phase 3 did not disturb Phase 2) · **Connectors.IntegrationTests 44**.
+
+The 44 fleet tests are **tests that require the lab fleet**, not optional extras. They hard-fail with
+an actionable message when the fleet is down rather than skipping, because a silently-skipped fleet
+looks exactly like a passing one and would quietly corrupt the count above. Run them with the fleet up
+(`docker compose -f lab/docker-compose.yml up -d`, from the main worktree per WORKFLOW §3).
+
+**Notable findings during the build**, each fixed with a red-first test and recorded in its commit:
+
+- **The module could not resolve in the shipped host at all** — connectors registered as singletons
+  captured the scoped `ICredentialProvider`. Found by the host-discovery guard, not by reading.
+- **Two tenants shared one authenticated SSH session.** The pool keyed on `host:port#credentialId`, so
+  isolation held only because credential ids happen to differ per tenant — incidental, not enforced.
+  RLS separates tenants in the database; nothing separated them in the connection pool.
+- **A rejected credential was reported as a timeout.** The lab's sshd takes ~10.15s to reject a key
+  (measured, stock OpenSSH client); a single 15s budget ran out mid-exchange. Reachability and
+  authentication are now budgeted separately — unreachable is detected *faster* and auth rejection is
+  classified correctly.
+- **Host keys were accepted unconditionally** (`e.CanTrust = true`), making every connection
+  interceptable. Now configuration, defaulting to refuse; the lab opts in explicitly.
+- **WinRM double-hop detection was inert** — `\b-ComputerName` can never match, because a word
+  boundary cannot sit between a space and a hyphen. The check HARD-PROBLEMS #9 relies on had never
+  fired.
+- **WinRM calls went out unauthenticated** whenever an `IHttpClientFactory` was registered: the
+  credential was built and then discarded.
+- **The WinRM receive loop was unbounded** — it exhausted the process rather than merely hanging.
+
+### Phase 3 deferrals — every one has a named owner and a gate
+
+`DIFFERENTIATORS.md` forbids deferring without a named owner. Each row states what the owner
+inherits and what it cannot claim until then.
+
+| ID | Deferred | Owner | Gate — what cannot be claimed until it lands |
+|----|----------|-------|----------------------------------------------|
+| **D-301** | Persistent verified-host-key (TOFU) store. The *seam* and reject-by-default ship now | **Phase 4** — it belongs with asset persistence | The connector **cannot be pointed at a real fleet**. `AllowUnknownHostKeys` defaults false, so production either refuses to connect or an operator disables verification wholesale. That flag is the gate, deliberately |
+| **D-302** | Windows facts collection (`WindowsFactsParser`) | **Phase 8** | Inventory over WinRM returns `Unsupported`, test-enforced. Phase 6 assessment cannot cover Windows hosts |
+| **D-303** | **WinRM verification against a real Windows host** | **Phase 8** | **The Windows path is unproven.** Phase 8 inherits an implementation that compiles, has transport-seam coverage, and has never spoken to a Windows machine. It cannot be claimed working — the SOAP envelopes, Negotiate/NTLM, the shell lifecycle and the base64 transfer round-trip are all unobserved. A Windows wave planned on this is planning on untested code |
+| **D-304** | **CredSSP / constrained-Kerberos delegation — the double-hop *solution*** | **Phase 8** | Phase 3 only **surfaces** `DoubleHopRequired` instead of hanging, which is its whole obligation under HARD-PROBLEMS #9. Any Phase 8 flow needing a second hop (an SMB payload fetch, an onward session) will be refused, not silently attempted. `AllowCredentialDelegation` currently only *skips the check* — it delegates nothing |
+| **D-305** | Redis-backed distributed concurrency tokens | **Phase 11** (scheduling) | The budget is per-process. Multi-instance deployments would each hold a full budget. The `IConnectionGovernor` surface is already scheduler-ready, so this is an implementation, not a redesign |
+| **D-306** | Multi-hop (>1) bastion chains | **Phase 4** — topology lives with assets | A two-hop plan is **refused by name**, not silently truncated to the first hop |
+| **D-307** | Passphrase-protected private keys; `CredentialKind` expansion | **Phase 15** (key custody) | `new PrivateKeyFile(stream)` is key-only; an encrypted key fails as `ProtocolError` |
+| **D-308** | Collapse `Vault.Tests/Support` onto the shared `TestSupport` project | **Phase 15** — the next phase to edit vault tests | Two capturing-logger implementations coexist. Kept out of Phase 3 to hold this phase's diff inside its owned paths |
+| **D-309** | SSH password / keyboard-interactive auth | **Phase 8** | Key-only. The lab is key-only by construction, so this is untested either way |
+
+**Also inherited by Phase 8, and worth stating plainly:** the sudo-password path (`sudo -S`) is proven
+only against a fake session. The lab grants `NOPASSWD` sudo with a locked account password, so it
+**structurally cannot** exercise it — a green fleet run says nothing about it.
 
 ## Phase 4 — Discovery & inventory  · parallel · Status: not-started
 - **Goal:** Discover endpoints; build inventory; surface **unmanaged assets**.
@@ -650,7 +716,67 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
-### 2026-07-26 (merge) — Phase 2 MERGED to main · 135 green on main · RESUME HERE
+### 2026-07-28 — Phase 3 built to green · NOT MERGED · awaiting a COLD review · RESUME HERE
+
+`phase/3-connector` rebased onto `main` (zero conflicts — the WIP was one purely additive commit) and
+brought from "module surface only, no tests, not in the .sln" to **267 passing, 0 skipped**.
+
+**⛔ DO NOT MERGE YET.** `main` is untouched. The next step is **one genuinely cold review** — a fresh
+session with **no history of this build**. That is not ceremony: on Phase 2, two of the criticals were
+introduced by the remediation itself and were caught only because someone looked again with fresh
+eyes, and every review before that had run in the same context as the code. The same context that
+wrote this phase must not sign it off.
+
+**Tests: Contracts 19 · Connectors unit 86 · IntegrationTests 38 · Vault 80 · fleet 44 = 267, zero
+skipped.** Vault unregressed. The 44 fleet tests **require the lab fleet** and hard-fail (never skip)
+when it is down. Verified on freshly built assemblies — see the preflight note below.
+
+**Commits (10):** `d78b9b7` solution + first compile → `16cca40` test projects + TestSupport →
+`716fb56` contract surface to Contracts → `9a4607a` credentials + sudo → `b282d1b` governor +
+ConnectionKey (atomic) → `f1c8bcc` TimeProvider deadlines → `88d850c` protocol-keyed resolution +
+bastion → `f349dc3` NeverLog scan → `ae09d20` fleet integration → `e520b2b` budget split →
+`447e63e` WinRM transport defects.
+
+**⚠ THE WINDOWS PATH HAS NEVER RUN AGAINST A WINDOWS HOST.** WinRM is **written and unverified**. No
+Windows target exists here and the guardrail denies every WinRM cmdlet from a dev session, so it is
+untestable in this repo by construction. Its suite runs against a scripted HTTP handler — it proves
+what the client sends and how it reacts to what it is told, and found four real transport defects that
+way. It says nothing about how a real WinRM server responds. **D-303, owner Phase 8.**
+
+**Seven defects that the tests found and reading had not:**
+1. The module **could not resolve in the shipped host at all** — singletons capturing the scoped
+   `ICredentialProvider`. Found by the host-discovery guard.
+2. **Two tenants shared one authenticated SSH session** — the pool key omitted the tenant, so
+   isolation was incidental to credential-id uniqueness. RLS separates tenants in the database;
+   nothing separated them in the pool.
+3. **A rejected credential reported as a timeout** (~10.15s server rejection vs a 15s single budget).
+4. **Host keys accepted unconditionally** — every connection interceptable.
+5. **Double-hop detection inert** — `\b-ComputerName` cannot match; it had never fired.
+6. **WinRM unauthenticated** whenever an `IHttpClientFactory` was registered.
+7. **WinRM receive loop unbounded** — exhausts the process, not merely hangs.
+
+**Three recurrences of one tooling hazard, now mechanised.** Scripted patches that silently fail to
+match and report success bit three times (a regex revert, a log probe, a diagnostic patch). A run
+against unmutated source is indistinguishable from a test that cannot catch the defect.
+`scripts/mutation-guard.ps1` now refuses to proceed unless git sees the file modified **and** the
+marker is present. Related: `scripts/test-preflight.ps1` fails when a stale `testhost` holds the
+output assemblies — that happened once here, and MSBuild reports it as a *warning* under a
+"Build succeeded", so a suite ran against code that was not on disk. Both are the build-layer form of
+this project's characteristic failure: reporting success while untrue.
+
+**Two tests that passed for the wrong reason, found by mutation, not review.** The WinRM receive-loop
+test asserted only that `Timeout` eventually arrived — it passed against the unbounded loop in 95s
+instead of 0.5s. The session-cap test measured live sessions, which for a pooling connector counts
+every session ever created. Both now assert the property that actually matters (elapsed time; peak
+concurrent *operations*). A green test is not evidence until it has been seen red for the right reason.
+
+**For the cold reviewer.** Start at `docs/phases/phase-3.md` — every exit criterion names the test
+that proves it. The highest-value targets: the concurrency governor (fairness ordering, waiter
+accounting, pruning under cancellation), the credential lifecycle on failure paths, and whether the
+NeverLog scans can actually fail. Assume any convention regex is inert until proven otherwise — one
+already was.
+
+### 2026-07-26 (merge) — Phase 2 MERGED to main · 135 green on main
 **`phase/2-vault` is merged.** `--no-ff` at **`19956af`**, pushed (`42529db..19956af`). 24 commits
 plus the merge. **Phase 2 (Credential vault) is `complete`.**
 

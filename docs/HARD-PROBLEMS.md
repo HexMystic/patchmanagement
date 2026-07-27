@@ -108,6 +108,17 @@ requirement** rather than hang. The connector detects and reports double-hop
 conditions (Phase 3).
 **Rejected.** Blind CredSSP everywhere (credential-theft exposure). Pretending the
 hop works (opaque hangs/failures).
+**Status after Phase 3.** Detection ships and is protocol-scoped: Windows-shaped signals (UNC paths,
+onward-session cmdlets, network-drive mapping) apply to WinRM only, because running them against SSH
+produced false refusals on commands that merely contained the text. Push and pull are assessed too —
+writing to a UNC share over WinRM is the textbook case and was previously unchecked.
+**A warning for whoever implements delegation.** The detection was **inert on its most important
+pattern** until Phase 3: the onward-session regex matched the switch as `\b-ComputerName`, and a word
+boundary can never sit between a space and a hyphen, so the ordinary form never matched. It was
+written, reviewed and shipped without ever firing. Delegation work should assume the same of any
+pattern it adds, and prove each one against a known-offending sample.
+**Still open — D-304, owner Phase 8.** `AllowCredentialDelegation` currently only *skips the check*;
+it delegates nothing. A flow that genuinely needs a second hop is refused, not attempted.
 
 ## 10. Roaming devices
 **Problem.** Agentless management **cannot reach machines that aren't on a reachable
@@ -118,3 +129,37 @@ network** — laptops off-VPN, travelling endpoints. This is a real, structural 
 management is added later it's an additive capability, not a hidden assumption.
 **Rejected.** Pretending coverage is total. Silently dropping unreachable devices
 from compliance denominators (dishonest metrics).
+
+## 11. Host-key verification without a key store
+**Problem.** An agentless connector authenticates *to* endpoints with high-value credentials, so it
+must first authenticate *the endpoint*. Phase 3 shipped with `e.CanTrust = true` — every presented
+host key accepted — which authenticates whatever answers on the target's address and then sends it a
+private key. But refusing unknown keys requires a store of verified fingerprints, and nothing owns
+one yet.
+**Recommended.** Refuse by default and make the exception explicit configuration
+(`ConnectorSecurityOptions.AllowUnknownHostKeys`, default false). The dev lab opts in, because its
+containers regenerate host keys on every rebuild and there is nothing stable to pin. A real fleet
+needs the store, and until it exists the flag is what keeps the connector off production — the gating
+is the point, not a side effect.
+**Rejected.** Trust-on-first-use with no persistence (indistinguishable from trusting everything
+after a restart). Accepting all keys with a warning (warnings in build output are what get missed).
+**Owner.** D-301, Phase 4 — the store belongs with asset persistence, where a fingerprint is just
+another observed fact about a host.
+
+## 12. Reachability and authentication are different questions
+**Problem.** Bounding "can I reach this host and log in" with one timeout makes the timeout decide the
+*outcome*, not just the deadline. The lab's sshd takes ~10.15s to reject an unauthorised key
+(measured, stock OpenSSH client); under a single 15s budget the connector ran out of time mid-exchange
+and reported `Timeout` for a rejected credential. On a real estate the gap is wider — PAM fail-delays,
+fail2ban and directory-backed auth reject far more slowly. `unreachable` sends someone to the network
+team and `auth-failed` sends them to whoever owns credentials, so conflating them wastes the hour the
+report is read in.
+**Recommended.** Budget them separately. A TCP pre-flight on a short budget answers reachability;
+authentication gets a generous budget because its duration is controlled by the far end. This improves
+*both* properties: unreachable is detected sooner (which matters at 10,000 endpoints, where a sweep
+over a dead subnet costs hosts × timeout of held connection budget) and rejection is classified
+truthfully.
+**Rejected.** Raising the single timeout — it only moves the cliff, and you pay the larger number on
+every genuinely dead host. Also: resolving addresses sequentially. A dual-stack host whose first
+address is unroutable consumes the whole budget before the second is tried, reporting an outage that
+does not exist; addresses are probed concurrently, first success wins.
