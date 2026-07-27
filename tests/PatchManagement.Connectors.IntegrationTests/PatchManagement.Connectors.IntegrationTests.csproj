@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Integration suite: real SSH against the lab fleet on localhost:2201-2205.
+    Requires the lab to be up (docker compose -f lab/docker-compose.yml up -d, from the MAIN
+    worktree per WORKFLOW.md section 3) and lab/keys/lab_ed25519 to be present.
+
+    When either is missing these tests FAIL rather than skip. That is deliberate: xunit 2.9.2 has no
+    Assert.Skip, the repo's existing fixtures hard-fail the same way when Postgres is down, and
+    ROADMAP.md records suite sizes as absolute counts that silent skips would quietly corrupt.
+    LabFixture's failure message names the exact command to fix it.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="9.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Modules\Connectors\PatchManagement.Connectors.csproj" />
+    <ProjectReference Include="..\..\src\Shared\Contracts\PatchManagement.Contracts.csproj" />
+    <ProjectReference Include="..\PatchManagement.TestSupport\PatchManagement.TestSupport.csproj" />
+  </ItemGroup>
+
+</Project>
