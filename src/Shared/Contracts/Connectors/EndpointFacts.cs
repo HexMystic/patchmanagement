@@ -1,4 +1,4 @@
-namespace PatchManagement.Connectors.Model;
+namespace PatchManagement.Contracts.Connectors;
 
 /// <summary>A single installed package as observed on the endpoint (name/version/arch).</summary>
 public sealed record InstalledPackage(string Name, string Version, string Architecture);

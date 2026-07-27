@@ -1,6 +1,6 @@
 using PatchManagement.Contracts.Credentials;
 
-namespace PatchManagement.Connectors.Model;
+namespace PatchManagement.Contracts.Connectors;
 
 /// <summary>
 /// A managed endpoint the connector can reach. Carries host/protocol/port, a credential
@@ -24,6 +24,25 @@ public sealed record EndpointTarget
 
     /// <summary>Reference to the stored credential; resolved to memory only at the moment of use.</summary>
     public required CredentialRef Credential { get; init; }
+
+    /// <summary>
+    /// Optional second credential for privilege elevation — the <c>sudo</c> password on Linux.
+    ///
+    /// <para>Why a second reference rather than a second secret on one credential: a login key and a
+    /// sudo password are two secrets belonging to one logical identity, and the frozen
+    /// <see cref="ResolvedCredential"/> carries exactly one <c>byte[]</c> (review finding M7). Rather
+    /// than change a frozen contract, the connector resolves two references and disposes both. Each
+    /// is stored, rotated and audited independently, which is arguably the more honest model anyway.</para>
+    ///
+    /// <para>Null means no elevation secret is available: an elevated command then runs
+    /// <c>sudo -n</c> (non-interactive) and fails honestly if the host demands a password, rather
+    /// than hanging on a prompt no one can answer.</para>
+    ///
+    /// <para><b>Untested against real hardware.</b> The dev lab grants <c>NOPASSWD</c> sudo and locks
+    /// the account password, so the fleet cannot exercise this path at all; it is proven against a
+    /// fake session only. See docs/phases/phase-3.md.</para>
+    /// </summary>
+    public CredentialRef? PrivilegeCredential { get; init; }
 
     /// <summary>Optional jump host. Null = direct connection. Non-null = tunnel through it.</summary>
     public BastionHop? Bastion { get; init; }

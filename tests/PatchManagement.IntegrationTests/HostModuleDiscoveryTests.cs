@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using PatchManagement.Contracts.Connectors;
 using PatchManagement.Contracts.Credentials;
 
 namespace PatchManagement.IntegrationTests;
@@ -68,6 +69,50 @@ public sealed class HostModuleDiscoveryTests
                 .Any(p => p.GetType().Name == "SecretRedactingLoggerProvider"),
             "No SecretRedactingLoggerProvider in the host's logger providers — the redaction belt is "
             + "not active in the shipped app.");
+    }
+
+    /// <summary>
+    /// Same guard, for the Connectors module. Phase 3's WIP branch shipped the module without ever
+    /// adding it to the solution or referencing it from the API — the identical defect the Vault hit
+    /// at <c>a50d9ec</c>, where several review findings were latent purely because the module never
+    /// loaded. One occurrence is an accident; the second is a pattern, so it gets a standing test.
+    /// </summary>
+    [Fact]
+    public void Api_project_ships_the_connectors_module()
+    {
+        var deps = ApiDepsJsonPath();
+        Assert.True(File.Exists(deps), $"Expected the API's build output at '{deps}'.");
+
+        Assert.True(
+            File.ReadAllText(deps).Contains("PatchManagement.Connectors", StringComparison.Ordinal),
+            "PatchManagement.Api.deps.json does not list PatchManagement.Connectors, so the module "
+            + "never reaches the host output and CompositionRoot cannot discover ConnectorsRegistrar "
+            + "— endpoint operations would be unreachable in production. Add "
+            + @"<ProjectReference Include=""..\..\Modules\Connectors\PatchManagement.Connectors.csproj"" /> "
+            + $"to src/Host/Api/PatchManagement.Api.csproj.{Environment.NewLine}Checked: {deps}");
+    }
+
+    /// <summary>
+    /// The behavioural half for Connectors. Asserted through <see cref="IEndpointConnector"/>, which
+    /// lives in PatchManagement.Contracts, so this project still needs no reference to the module —
+    /// the property that makes the test capable of failing (see the class remarks).
+    /// </summary>
+    [Fact]
+    public void Real_host_container_resolves_the_connectors_module()
+    {
+        using var factory = new WebApplicationFactory<Program>();
+        using var scope = factory.Services.CreateScope();
+
+        var connectors = scope.ServiceProvider.GetServices<IEndpointConnector>().ToList();
+
+        Assert.True(connectors.Count > 0,
+            "The real host's container has no IEndpointConnector — ConnectorsRegistrar was not "
+            + "discovered by CompositionRoot, so the Connectors module is not loaded in the shipped app.");
+
+        // Compared as a string so this project needs no compile-time reference to the module.
+        Assert.Contains(
+            connectors,
+            c => c.GetType().Assembly.GetName().Name == "PatchManagement.Connectors");
     }
 
     /// <summary>Path to the API's own build output, matching this test run's configuration.</summary>

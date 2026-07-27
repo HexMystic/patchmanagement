@@ -1,6 +1,6 @@
 using PatchManagement.Contracts.Credentials;
 
-namespace PatchManagement.Connectors.Model;
+namespace PatchManagement.Contracts.Connectors;
 
 /// <summary>
 /// A jump/bastion host the connector tunnels through to reach the target.

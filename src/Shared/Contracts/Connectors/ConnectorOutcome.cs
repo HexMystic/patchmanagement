@@ -1,6 +1,6 @@
 using PatchManagement.Contracts.States;
 
-namespace PatchManagement.Connectors.Model;
+namespace PatchManagement.Contracts.Connectors;
 
 /// <summary>
 /// The honest outcome of a connector operation. "Couldn't check" is NEVER collapsed into

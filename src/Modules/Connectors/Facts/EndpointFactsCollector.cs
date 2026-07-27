@@ -1,4 +1,4 @@
-using PatchManagement.Connectors.Model;
+using PatchManagement.Contracts.Connectors;
 
 namespace PatchManagement.Connectors.Facts;
 

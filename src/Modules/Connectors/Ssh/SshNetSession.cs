@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using PatchManagement.Connectors.Model;
+using PatchManagement.Contracts.Connectors;
 using Renci.SshNet;
 
 namespace PatchManagement.Connectors.Ssh;

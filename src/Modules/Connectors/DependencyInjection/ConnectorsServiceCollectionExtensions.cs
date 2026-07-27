@@ -7,14 +7,29 @@ using PatchManagement.Connectors.Facts;
 using PatchManagement.Connectors.Ssh;
 using PatchManagement.Connectors.WinRm;
 using PatchManagement.Contracts.Credentials;
+using PatchManagement.Contracts.Connectors;
 
 namespace PatchManagement.Connectors.DependencyInjection;
 
 /// <summary>
-/// Wires the Connectors module. The concurrency governor and operation coordinator are singletons
-/// (the connection budget is process-wide — the scaling wall; CLAUDE.md §2). Connectors are
-/// singletons too so the SSH pool and its governed sessions are shared. Production swaps the
-/// governor/coordinator for their Redis-backed equivalents here without touching connector code.
+/// Wires the Connectors module. Production swaps the governor/coordinator for their Redis-backed
+/// equivalents here without touching connector code.
+///
+/// <para><b>The lifetime split, and why it is not arbitrary.</b> Everything that carries the
+/// process-wide connection budget — the governor, the operation coordinator, the session factory and
+/// the SSH pool — is a <b>singleton</b>: that budget is the scaling wall at 10,000 endpoints
+/// (CLAUDE.md §2), and a per-request pool would reuse nothing and cap nothing.</para>
+///
+/// <para>The connectors themselves are <b>scoped</b>, because they consume
+/// <see cref="ICredentialProvider"/>, which the vault registers scoped (it depends on the
+/// per-request <c>AppDbContext</c> and tenant context). Registering the connectors as singletons
+/// made them capture a scoped service — a captive dependency that .NET's scope validation rejects
+/// outright, so the module could not resolve in the shipped host at all. Resolving a fresh scope
+/// inside a singleton would not have fixed it either: the tenant context is ambient to the request,
+/// and a new scope would silently lose it, which is the fail-closed hole ADR 0014 exists to close.</para>
+///
+/// <para>So the expensive shared state is process-wide and the tenant-scoped composition is
+/// per-request, which is what both constraints actually demand.</para>
 /// </summary>
 public static class ConnectorsServiceCollectionExtensions
 {
@@ -31,7 +46,7 @@ public static class ConnectorsServiceCollectionExtensions
         // construct them with same-assembly factory lambdas rather than open-generic registration.
         services.TryAddSingleton<ISshSessionFactory, SshNetSessionFactory>();
         services.TryAddSingleton<SshConnectionPool>();
-        services.AddSingleton<IEndpointConnector>(sp => new SshConnector(
+        services.AddScoped<IEndpointConnector>(sp => new SshConnector(
             sp.GetRequiredService<ICredentialProvider>(),
             sp.GetRequiredService<ISshSessionFactory>(),
             sp.GetRequiredService<SshConnectionPool>(),
@@ -41,16 +56,18 @@ public static class ConnectorsServiceCollectionExtensions
 
         // WinRM — real WS-Man transport, integration-tested later (no Windows host in the dev lab).
         services.TryAddSingleton<IWinRmClient>(sp => new HttpWinRmClient(sp.GetService<IHttpClientFactory>()));
-        services.AddSingleton<IEndpointConnector>(sp => new WinRmConnector(
+        services.AddScoped<IEndpointConnector>(sp => new WinRmConnector(
             sp.GetRequiredService<ICredentialProvider>(),
             sp.GetRequiredService<IWinRmClient>(),
             sp.GetRequiredService<IConnectionGovernor>(),
             sp.GetRequiredService<IOperationCoordinator>(),
             sp.GetRequiredService<ILogger<WinRmConnector>>()));
 
-        services.TryAddSingleton<IEndpointConnectorRegistry>(sp =>
+        // Scoped, following the connectors they compose over — a singleton registry would capture
+        // the scoped connectors and reintroduce the same captive dependency one level up.
+        services.TryAddScoped<IEndpointConnectorRegistry>(sp =>
             new EndpointConnectorRegistry(sp.GetServices<IEndpointConnector>()));
-        services.TryAddSingleton<EndpointFactsCollector>();
+        services.TryAddScoped<EndpointFactsCollector>();
 
         return services;
     }

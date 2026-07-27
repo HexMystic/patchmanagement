@@ -1,6 +1,6 @@
 using PatchManagement.Contracts.States;
 
-namespace PatchManagement.Connectors.Model;
+namespace PatchManagement.Contracts.Connectors;
 
 /// <summary>
 /// The result of a connectivity/auth probe. Maps onto the honest state machine so an

@@ -1,4 +1,4 @@
-namespace PatchManagement.Connectors.Model;
+namespace PatchManagement.Contracts.Connectors;
 
 /// <summary>Typed result of a push/pull. Failure is modelled, not thrown.</summary>
 public sealed record FileResult

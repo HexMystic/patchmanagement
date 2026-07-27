@@ -1,6 +1,6 @@
 using System.Net.Sockets;
 using PatchManagement.Connectors.Connection;
-using PatchManagement.Connectors.Model;
+using PatchManagement.Contracts.Connectors;
 using PatchManagement.Contracts.Credentials;
 using Renci.SshNet;
 using Renci.SshNet.Common;

@@ -1,4 +1,4 @@
-namespace PatchManagement.Connectors.Model;
+namespace PatchManagement.Contracts.Connectors;
 
 /// <summary>
 /// The typed result of a remote command — failure is modelled, not thrown (CLAUDE.md §5).

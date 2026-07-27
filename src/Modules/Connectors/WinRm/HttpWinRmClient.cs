@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Xml.Linq;
-using PatchManagement.Connectors.Model;
+using PatchManagement.Contracts.Connectors;
 using PatchManagement.Connectors.Ssh;
 using PatchManagement.Contracts.Credentials;
 

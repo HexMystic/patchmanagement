@@ -1,6 +1,5 @@
-using PatchManagement.Connectors.Model;
 
-namespace PatchManagement.Connectors;
+namespace PatchManagement.Contracts.Connectors;
 
 /// <summary>
 /// One abstraction over "run work on a remote endpoint", agentless (CLAUDE.md §2). Concrete

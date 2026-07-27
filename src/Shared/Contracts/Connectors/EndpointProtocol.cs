@@ -1,4 +1,4 @@
-namespace PatchManagement.Connectors.Model;
+namespace PatchManagement.Contracts.Connectors;
 
 /// <summary>The remote-management protocol used to reach an endpoint (agentless — CLAUDE.md §2).</summary>
 public enum EndpointProtocol

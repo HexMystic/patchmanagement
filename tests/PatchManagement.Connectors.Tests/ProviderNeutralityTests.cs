@@ -1,4 +1,4 @@
-using PatchManagement.Connectors;
+using PatchManagement.Contracts.Connectors;
 
 namespace PatchManagement.Connectors.Tests;
 

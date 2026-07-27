@@ -1,5 +1,5 @@
 using PatchManagement.Connectors.Connection;
-using PatchManagement.Connectors.Model;
+using PatchManagement.Contracts.Connectors;
 using PatchManagement.Contracts.Credentials;
 
 namespace PatchManagement.Connectors.Ssh;

@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 using PatchManagement.Connectors.Concurrency;
 using PatchManagement.Connectors.Connection;
 using PatchManagement.Connectors.DoubleHop;
-using PatchManagement.Connectors.Model;
+using PatchManagement.Contracts.Connectors;
 using PatchManagement.Contracts.Credentials;
 
 namespace PatchManagement.Connectors.Ssh;
