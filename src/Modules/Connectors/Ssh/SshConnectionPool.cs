@@ -18,9 +18,27 @@ internal sealed class SshConnectionPool : IAsyncDisposable
 {
     private readonly ConnectorConcurrencyOptions _options;
     private readonly ConcurrentDictionary<string, PoolEntry> _entries = new(StringComparer.Ordinal);
+    private readonly TimeProvider _time;
+    private readonly ITimer _evictionTimer;
     private bool _disposed;
 
-    public SshConnectionPool(IOptions<ConnectorConcurrencyOptions> options) => _options = options.Value;
+    /// <summary>
+    /// <paramref name="timeProvider"/> is injected so eviction is testable without waiting in real
+    /// time: a test advances a <c>FakeTimeProvider</c> and asserts the session was disposed, rather
+    /// than sleeping for the idle timeout and hoping.
+    /// </summary>
+    public SshConnectionPool(IOptions<ConnectorConcurrencyOptions> options, TimeProvider? timeProvider = null)
+    {
+        _options = options.Value;
+        _time = timeProvider ?? TimeProvider.System;
+
+        // Eviction ran only at the top of AcquireAsync, so a pool that went quiet never evicted
+        // anything: the sessions most deserving of cleanup — on a host nobody is talking to — were
+        // exactly the ones nothing came back to clean up. They held an authenticated transport and a
+        // file handle open until the process exited. A timer closes that.
+        var period = _options.PooledSessionIdleTimeout;
+        _evictionTimer = _time.CreateTimer(_ => EvictIdle(), state: null, dueTime: period, period: period);
+    }
 
     /// <summary>Count of live pooled sessions (instrumentation/tests).</summary>
     public int PooledSessionCount => _entries.Values.Count(e => e.Session is { IsConnected: true });
@@ -38,7 +56,7 @@ internal sealed class SshConnectionPool : IAsyncDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         EvictIdle();
 
-        var entry = _entries.GetOrAdd(key, _ => new PoolEntry());
+        var entry = _entries.GetOrAdd(key, _ => new PoolEntry(_time));
         await entry.Gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -49,7 +67,7 @@ internal sealed class SshConnectionPool : IAsyncDisposable
             }
 
             entry.InUse++;
-            entry.LastUsed = DateTimeOffset.UtcNow;
+            entry.LastUsed = _time.GetUtcNow();
             return new PooledSessionLease(entry, entry.Session);
         }
         finally
@@ -60,7 +78,7 @@ internal sealed class SshConnectionPool : IAsyncDisposable
 
     private void EvictIdle()
     {
-        var cutoff = DateTimeOffset.UtcNow - _options.PooledSessionIdleTimeout;
+        var cutoff = _time.GetUtcNow() - _options.PooledSessionIdleTimeout;
         foreach (var (key, entry) in _entries)
         {
             if (entry.InUse != 0 || entry.LastUsed > cutoff)
@@ -87,6 +105,7 @@ internal sealed class SshConnectionPool : IAsyncDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _evictionTimer.Dispose();
         foreach (var entry in _entries.Values)
         {
             await entry.Gate.WaitAsync().ConfigureAwait(false);
@@ -104,12 +123,16 @@ internal sealed class SshConnectionPool : IAsyncDisposable
         _entries.Clear();
     }
 
-    internal sealed class PoolEntry
+    // Carries the TimeProvider so a returning lease stamps LastUsed from the same clock the evictor
+    // reads. Mixing the injected clock with DateTimeOffset.UtcNow here would make a FakeTimeProvider
+    // test pass or fail on wall-clock timing, which is the flakiness the injection exists to remove.
+    internal sealed class PoolEntry(TimeProvider time)
     {
         public SemaphoreSlim Gate { get; } = new(1, 1);
         public ISshSession? Session { get; set; }
         public int InUse { get; set; }
-        public DateTimeOffset LastUsed { get; set; } = DateTimeOffset.UtcNow;
+        public TimeProvider Time => time;
+        public DateTimeOffset LastUsed { get; set; } = time.GetUtcNow();
     }
 
     /// <summary>A borrowed reference to a shared pooled session. Disposing returns it (does not close it).</summary>
@@ -126,7 +149,7 @@ internal sealed class SshConnectionPool : IAsyncDisposable
             try
             {
                 entry.InUse--;
-                entry.LastUsed = DateTimeOffset.UtcNow;
+                entry.LastUsed = entry.Time.GetUtcNow();
             }
             finally
             {

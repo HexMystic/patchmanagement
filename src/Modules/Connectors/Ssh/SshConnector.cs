@@ -202,7 +202,9 @@ public sealed class SshConnector : IEndpointConnector
         var plan = ConnectionPlanner.Plan(target);
         var key = ConnectionKey.For(plan);
 
-        var lease = await _governor.AcquireAsync(target.TenantId, ct).ConfigureAwait(false);
+        var lease = await _governor
+            .AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(plan), ct)
+            .ConfigureAwait(false);
         try
         {
             var pooled = await _pool.AcquireAsync(

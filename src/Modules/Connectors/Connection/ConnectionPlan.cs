@@ -14,7 +14,7 @@ public sealed record HopSpec(string Host, int Port, CredentialRef Credential, st
 /// This is a pure value derived from configuration alone. There is <b>no</b> cloud-provider
 /// branch anywhere in its construction (ADR 0003) — a bastion is just "a host reached first".
 /// </summary>
-public sealed record ConnectionPlan(HopSpec Destination, IReadOnlyList<HopSpec> Hops)
+public sealed record ConnectionPlan(Guid TenantId, HopSpec Destination, IReadOnlyList<HopSpec> Hops)
 {
     public bool IsDirect => Hops.Count == 0;
 }
@@ -40,9 +40,9 @@ public static class ConnectionPlanner
                 bastion.Port > 0 ? bastion.Port : EndpointProtocolDefaults.SshPort,
                 bastion.Credential,
                 bastion.Username);
-            return new ConnectionPlan(destination, [hop]);
+            return new ConnectionPlan(target.TenantId, destination, [hop]);
         }
 
-        return new ConnectionPlan(destination, []);
+        return new ConnectionPlan(target.TenantId, destination, []);
     }
 }

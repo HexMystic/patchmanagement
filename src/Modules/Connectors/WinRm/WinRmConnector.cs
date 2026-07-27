@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using PatchManagement.Connectors.Concurrency;
+using PatchManagement.Connectors.Connection;
 using PatchManagement.Connectors.DoubleHop;
 using PatchManagement.Contracts.Connectors;
 using PatchManagement.Connectors.Ssh;
@@ -47,7 +48,7 @@ public sealed class WinRmConnector : IEndpointConnector
     {
         ArgumentNullException.ThrowIfNull(target);
         var sw = Stopwatch.StartNew();
-        await using var lease = await _governor.AcquireAsync(target.TenantId, ct).ConfigureAwait(false);
+        await using var lease = await _governor.AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(ConnectionPlanner.Plan(target)), ct).ConfigureAwait(false);
         try
         {
             using var credential = await _credentials.ResolveAsync(target.Credential, ct).ConfigureAwait(false);
@@ -77,7 +78,7 @@ public sealed class WinRmConnector : IEndpointConnector
 
         var sw = Stopwatch.StartNew();
         await using var op = await _operations.AcquireAsync(command.IdempotencyKey, ct).ConfigureAwait(false);
-        await using var lease = await _governor.AcquireAsync(target.TenantId, ct).ConfigureAwait(false);
+        await using var lease = await _governor.AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(ConnectionPlanner.Plan(target)), ct).ConfigureAwait(false);
         try
         {
             using var credential = await _credentials.ResolveAsync(target.Credential, ct).ConfigureAwait(false);
@@ -107,7 +108,7 @@ public sealed class WinRmConnector : IEndpointConnector
 
         var sw = Stopwatch.StartNew();
         await using var op = await _operations.AcquireAsync(file.IdempotencyKey, ct).ConfigureAwait(false);
-        await using var lease = await _governor.AcquireAsync(target.TenantId, ct).ConfigureAwait(false);
+        await using var lease = await _governor.AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(ConnectionPlanner.Plan(target)), ct).ConfigureAwait(false);
         try
         {
             using var credential = await _credentials.ResolveAsync(target.Credential, ct).ConfigureAwait(false);
