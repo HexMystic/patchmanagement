@@ -56,10 +56,14 @@ public sealed class EndpointFactsCollector
     private async Task<string> RunOrThrow(EndpointTarget target, string command, TimeSpan timeout, CancellationToken ct)
     {
         var result = await _connector.RunAsync(target, new RemoteCommand { CommandLine = command, Timeout = timeout }, ct).ConfigureAwait(false);
+        // Bounded codes plus the outcome/exit code — never the command text or the remote detail.
+        // The command line is where a caller embeds a secret, and result.Detail may itself have been
+        // built from remote output. Interpolating either here would push both into an exception
+        // message that ASP.NET logs outside any redaction scope (ADR 0012's residual for Phase 3).
         if (!result.Succeeded)
-            throw new FactsCollectionException($"Fact-gathering command failed ({result.Outcome}): {result.Detail ?? command}");
+            throw new FactsCollectionException($"{ConnectorReason.FactsCommandFailed} ({result.Outcome})");
         if (result.ExitCode != 0)
-            throw new FactsCollectionException($"Fact-gathering command exited {result.ExitCode}: {command}");
+            throw new FactsCollectionException($"{ConnectorReason.FactsCommandNonZeroExit} (exit {result.ExitCode})");
         return result.StandardOutput;
     }
 }

@@ -23,8 +23,16 @@ public sealed class CapturingLoggerProvider : ILoggerProvider
     /// <summary>The formatted-message channel — what <c>string.Format</c> substitution produced.</summary>
     public ConcurrentQueue<string> FormattedLines { get; } = new();
 
-    /// <summary>The structured channel — the raw values a structured sink serializes.</summary>
-    public ConcurrentQueue<KeyValuePair<string, object?>> StateValues { get; } = new();
+    /// <summary>
+    /// The structured channel, rendered EAGERLY at log time.
+    ///
+    /// <para>Rendering must not be deferred to assertion time. This originally stored the value
+    /// object and rendered it later, which let a caller that zeroes its buffer after logging — as the
+    /// connector correctly does with a sudo password — produce a capture full of zeros. The channel
+    /// then looked clean because of the zeroing, not because nothing was logged, and a genuine leak
+    /// went unreported. A real sink serializes while the bytes are still live, so this does too.</para>
+    /// </summary>
+    public ConcurrentQueue<KeyValuePair<string, string>> StateValues { get; } = new();
 
     /// <summary>Exceptions exactly as the sink received them (i.e. after any belt substitution).</summary>
     public ConcurrentQueue<Exception> Exceptions { get; } = new();
@@ -34,9 +42,9 @@ public sealed class CapturingLoggerProvider : ILoggerProvider
 
     public string AllFormatted => string.Join("\n", FormattedLines);
 
-    /// <summary>Every structured value, rendered the way a structured sink would render it.</summary>
+    /// <summary>Every structured value, as a structured sink would have serialized it.</summary>
     public string AllRenderedValues =>
-        string.Join("\n", StateValues.Select(kv => $"{kv.Key}={Render(kv.Value)}"));
+        string.Join("\n", StateValues.Select(kv => $"{kv.Key}={kv.Value}"));
 
     /// <summary>Exception text, for error-path sweeps where the throw itself is the risk.</summary>
     public string AllExceptionText => string.Join("\n", Exceptions.Select(e => e.ToString()));
@@ -80,14 +88,16 @@ public sealed class CapturingLoggerProvider : ILoggerProvider
             owner.Categories.Enqueue(category);
             owner.FormattedLines.Enqueue(formatter(state, exception));
 
-            // The structured read: exactly what a JSON/OTel/EventSource sink enumerates.
+            // The structured read: exactly what a JSON/OTel/EventSource sink enumerates — and
+            // rendered NOW, while the values are still whatever the caller passed.
             if (state is IReadOnlyList<KeyValuePair<string, object?>> pairs)
             {
-                foreach (var pair in pairs) owner.StateValues.Enqueue(pair);
+                foreach (var pair in pairs)
+                    owner.StateValues.Enqueue(new KeyValuePair<string, string>(pair.Key, Render(pair.Value)));
             }
             else if (state is not null)
             {
-                owner.StateValues.Enqueue(new KeyValuePair<string, object?>("<state>", state));
+                owner.StateValues.Enqueue(new KeyValuePair<string, string>("<state>", Render(state)));
             }
 
             if (exception is not null) owner.Exceptions.Enqueue(exception);

@@ -80,7 +80,17 @@ internal sealed class HttpWinRmClient : IWinRmClient
         var ps = $"$d=[Convert]::FromBase64String('{b64}'); [IO.File]::WriteAllBytes('{file.RemotePath}',$d)";
         var result = await ExecuteAsync(target, credential, "powershell -NonInteractive -EncodedCommand " + EncodePowerShell(ps), file.Timeout, ct).ConfigureAwait(false);
         if (!result.Succeeded || result.ExitCode != 0)
-            throw new ConnectorConnectException(ConnectorOutcome.ProtocolError, "WinRM upload failed: " + (result.Detail ?? result.StandardError));
+        {
+            // A BOUNDED reason code, never the remote text. This message becomes FileResult.Detail,
+            // which a caller will log — and remote stderr is arbitrary content from the endpoint that
+            // may quote back the command line, an environment variable, or whatever the failing tool
+            // decided to print. The connector cannot know, so it does not forward it into a
+            // diagnostic. The output itself remains available on CommandResult for a caller that
+            // genuinely wants it (ADR 0012's hand-off to Phase 3).
+            throw new ConnectorConnectException(
+                ConnectorOutcome.ProtocolError, ConnectorReason.WinRmUploadFailed);
+        }
+
         return content.LongLength;
     }
 
@@ -90,7 +100,11 @@ internal sealed class HttpWinRmClient : IWinRmClient
         var ps = $"[Convert]::ToBase64String([IO.File]::ReadAllBytes('{file.RemotePath}'))";
         var result = await ExecuteAsync(target, credential, "powershell -NonInteractive -EncodedCommand " + EncodePowerShell(ps), file.Timeout, ct).ConfigureAwait(false);
         if (!result.Succeeded || result.ExitCode != 0)
-            throw new ConnectorConnectException(ConnectorOutcome.ProtocolError, "WinRM download failed: " + (result.Detail ?? result.StandardError));
+        {
+            throw new ConnectorConnectException(
+                ConnectorOutcome.ProtocolError, ConnectorReason.WinRmDownloadFailed);
+        }
+
         var bytes = Convert.FromBase64String(result.StandardOutput.Trim());
         await destination.WriteAsync(bytes, ct).ConfigureAwait(false);
         return bytes.LongLength;

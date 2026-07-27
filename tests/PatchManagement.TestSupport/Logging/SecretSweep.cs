@@ -25,11 +25,52 @@ public static class SecretSweep
         }
 
         Check("utf8", Encoding.UTF8.GetString(bytes));
-        Check("base64", Convert.ToBase64String(bytes));
         Check("hex-upper", Convert.ToHexString(bytes));
         Check("hex-lower", Convert.ToHexString(bytes).ToLowerInvariant());
 
+        // Decimal, comma-separated. NOT a theoretical encoding: Microsoft.Extensions.Logging's
+        // message formatter renders an IEnumerable argument by joining its elements, so a byte[]
+        // passed to LogInformation("{Key}", buffer) appears as "78, 69, 86, ...". It is the default
+        // behaviour of the most obvious way to log a byte array, it does not look like a leak in the
+        // source, and none of the encodings above find it.
+        Check("decimal-csv", string.Join(", ", bytes));
+        Check("decimal-csv-tight", string.Join(",", bytes));
+
+        // Base64 needs alignment variants, and the reason is not academic: a mutation that logged a
+        // secret with ONE trailing newline slipped past a naive Convert.ToBase64String(secret)
+        // comparison. base64 encodes in 3-byte groups, so a secret embedded at a non-multiple-of-3
+        // offset — or followed by more bytes — produces a completely different character sequence
+        // that shares no usable substring with the standalone encoding. Checking only the exact
+        // encoding of the exact bytes finds a leak solely when the secret was logged entirely alone,
+        // which is the one case a careless implementation is least likely to produce.
+        foreach (var (label, needle) in Base64Cores(bytes))
+            Check(label, needle);
+
         return new SweepResult(hits);
+    }
+
+    /// <summary>
+    /// Base64 "cores" for the secret at each of the three byte alignments, with the boundary groups
+    /// trimmed off. Whatever surrounds the secret, one of these must appear verbatim if the bytes
+    /// were base64-encoded anywhere in the body.
+    /// </summary>
+    private static IEnumerable<(string Label, string Needle)> Base64Cores(byte[] secret)
+    {
+        // Below this the trimmed core stops being specific enough to be evidence.
+        if (secret.Length < 12) yield break;
+
+        for (var shift = 0; shift < 3; shift++)
+        {
+            var aligned = new byte[shift + secret.Length];
+            secret.CopyTo(aligned, shift);
+
+            var encoded = Convert.ToBase64String(aligned).TrimEnd('=');
+
+            // Drop the leading group carrying the synthetic prefix and the trailing group, which may
+            // be partial or fused with whatever follows the secret in the real body.
+            if (encoded.Length <= 8) continue;
+            yield return ($"base64(align {shift})", encoded[4..^4]);
+        }
     }
 
     /// <inheritdoc cref="Scan(ReadOnlySpan{byte}, string)"/>
