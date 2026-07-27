@@ -44,6 +44,9 @@ public static class ConnectorsServiceCollectionExtensions
             .Bind(configuration.GetSection(ConnectorTimeoutOptions.SectionName))
             .PostConfigure(o => o.Validate());
 
+        services.AddOptions<ConnectorSecurityOptions>()
+            .Bind(configuration.GetSection(ConnectorSecurityOptions.SectionName));
+
         // Registered so tests can substitute a fake clock through the container rather than only
         // through a hand-built connector.
         services.TryAddSingleton(TimeProvider.System);
@@ -53,7 +56,8 @@ public static class ConnectorsServiceCollectionExtensions
 
         // SSH — real, lab-tested transport. Connectors have internal ctors (encapsulation), so we
         // construct them with same-assembly factory lambdas rather than open-generic registration.
-        services.TryAddSingleton<ISshSessionFactory, SshNetSessionFactory>();
+        services.TryAddSingleton<ISshSessionFactory>(sp => new SshNetSessionFactory(
+            sp.GetRequiredService<IOptions<ConnectorSecurityOptions>>().Value));
         services.TryAddSingleton<SshConnectionPool>();
         services.AddScoped<IEndpointConnector>(sp => new SshConnector(
             sp.GetRequiredService<ICredentialProvider>(),

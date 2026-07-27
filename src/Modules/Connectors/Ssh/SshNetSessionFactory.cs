@@ -13,11 +13,17 @@ namespace PatchManagement.Connectors.Ssh;
 /// then authenticates the target over that tunnel — the connector above is unaware which path was
 /// taken (ADR 0003). Connect/auth failures are translated to honest <see cref="ConnectorOutcome"/>s.
 ///
-/// Host-key policy here accepts the presented key (the dev lab). Production pins/verifies host keys
-/// via <see cref="SshClient.HostKeyReceived"/>; that is a wiring change, not a connector change.
+/// Host-key policy is configuration (<see cref="ConnectorSecurityOptions"/>) and refuses unknown
+/// keys by default. A verified-key store is deferred to Phase 4 with asset persistence; until then
+/// this flag is what keeps the connector off a real fleet.
 /// </summary>
 internal sealed class SshNetSessionFactory : ISshSessionFactory
 {
+    private readonly ConnectorSecurityOptions _security;
+
+    public SshNetSessionFactory(ConnectorSecurityOptions? security = null) =>
+        _security = security ?? new ConnectorSecurityOptions();
+
     public async Task<ISshSession> ConnectAsync(
         ConnectionPlan plan,
         CredentialResolver resolve,
@@ -47,7 +53,7 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
         }
     }
 
-    private static async Task<ISshSession> ConnectDirectAsync(
+    private async Task<ISshSession> ConnectDirectAsync(
         HopSpec destination, CredentialResolver resolve, TimeSpan timeout, CancellationToken ct)
     {
         using var credential = await resolve(destination.Credential, ct).ConfigureAwait(false);
@@ -55,7 +61,7 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
         var info = BuildConnectionInfo(destination.Host, destination.Port, user, credential, timeout);
 
         var client = new SshClient(info);
-        AcceptPresentedHostKey(client);
+        ApplyHostKeyPolicy(client);
         try
         {
             await client.ConnectAsync(ct).ConfigureAwait(false);
@@ -68,7 +74,7 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
         return new SshNetSession(client, info);
     }
 
-    private static async Task<ISshSession> ConnectThroughBastionAsync(
+    private async Task<ISshSession> ConnectThroughBastionAsync(
         ConnectionPlan plan, CredentialResolver resolve, TimeSpan timeout, CancellationToken ct)
     {
         // Exactly one hop is supported. The previous comment here claimed "the loop keeps the code
@@ -95,7 +101,7 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
                 var hopUser = UsernameFor(hop, hopCredential);
                 var hopInfo = BuildConnectionInfo(hop.Host, hop.Port, hopUser, hopCredential, timeout);
                 bastion = new SshClient(hopInfo);
-                AcceptPresentedHostKey(bastion);
+                ApplyHostKeyPolicy(bastion);
                 await bastion.ConnectAsync(ct).ConfigureAwait(false);
             }
 
@@ -108,7 +114,7 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
             var destInfo = BuildConnectionInfo("127.0.0.1", (int)forward.BoundPort, destUser, destCredential, timeout);
 
             var client = new SshClient(destInfo);
-            AcceptPresentedHostKey(client);
+            ApplyHostKeyPolicy(client);
             await client.ConnectAsync(ct).ConfigureAwait(false);
 
             // The session owns the tunnel: disposing it tears down the forward and the bastion.
@@ -157,8 +163,16 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
         ?? credential.Username
         ?? throw new ConnectorConnectException(ConnectorOutcome.AuthFailed, "No SSH username was supplied on the credential or hop.");
 
-    private static void AcceptPresentedHostKey(SshClient client) =>
-        client.HostKeyReceived += (_, e) => e.CanTrust = true;
+    /// <summary>
+    /// Applies the configured host-key policy.
+    ///
+    /// <para>This used to be <c>e.CanTrust = true</c> unconditionally, which authenticates whatever
+    /// answers on the target's address and then sends it a private key. The decision now comes from
+    /// configuration and defaults to refusing (see <see cref="ConnectorSecurityOptions"/>), so a
+    /// deployment that has not consciously opted in cannot be silently intercepted.</para>
+    /// </summary>
+    private void ApplyHostKeyPolicy(SshClient client) =>
+        client.HostKeyReceived += (_, e) => e.CanTrust = _security.AllowUnknownHostKeys;
 
     private static ConnectorConnectException Map(Exception ex) => ex switch
     {

@@ -56,6 +56,22 @@ public static class SourceScanner
             ? Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories).Count(f => !IsBuildOutput(f))
             : 0;
 
+    /// <summary>
+    /// A comment line, including XML doc and block-comment continuations.
+    ///
+    /// <para>Most convention scans want this as their <c>ignore</c> predicate. The rules they enforce
+    /// are about what the code DOES, and a comment explaining why a bad pattern was removed is not a
+    /// reinstatement of it — flagging the explanation just teaches people to delete the explanation.
+    /// Both scans in this repo hit exactly that false positive before adopting it.</para>
+    /// </summary>
+    public static bool IsCommentLine(string line)
+    {
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("//", StringComparison.Ordinal)
+               || trimmed.StartsWith("*", StringComparison.Ordinal)
+               || trimmed.StartsWith("/*", StringComparison.Ordinal);
+    }
+
     private static bool IsBuildOutput(string path) =>
         path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
         || path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal);
