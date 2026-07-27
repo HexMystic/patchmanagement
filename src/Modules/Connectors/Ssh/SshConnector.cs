@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
 using PatchManagement.Connectors.Concurrency;
 using PatchManagement.Connectors.Connection;
@@ -80,11 +81,32 @@ public sealed class SshConnector : IEndpointConnector
 
         var sw = Stopwatch.StartNew();
         await using var op = await _operations.AcquireAsync(command.IdempotencyKey, ct).ConfigureAwait(false);
+
+        // Held outside the try so the finally can wipe it on every exit, including the throwing ones.
+        byte[]? elevation = null;
         try
         {
             await using var scope = await OpenAsync(target, command.Timeout, ct).ConfigureAwait(false);
-            var line = command.RequiresElevation ? $"sudo -n {command.CommandLine}" : command.CommandLine;
-            return await scope.Session.RunAsync(line, command.Timeout, ct).ConfigureAwait(false);
+
+            string line;
+            if (command.RequiresElevation && target.PrivilegeCredential is { } privilege)
+            {
+                elevation = await ReadElevationSecretAsync(privilege, ct).ConfigureAwait(false);
+                // -S reads the password from stdin; -p '' suppresses the prompt, which would
+                // otherwise land in stdout and pollute the caller's result.
+                line = $"sudo -S -p '' {command.CommandLine}";
+            }
+            else
+            {
+                // No elevation secret available: -n is non-interactive, so a host that demands a
+                // password fails immediately and honestly instead of blocking on a prompt no one
+                // can answer (NEVER #5). This is the path the lab exercises — it is NOPASSWD.
+                line = command.RequiresElevation ? $"sudo -n {command.CommandLine}" : command.CommandLine;
+            }
+
+            return await scope.Session
+                .RunAsync(line, command.Timeout, elevation ?? ReadOnlyMemory<byte>.Empty, ct)
+                .ConfigureAwait(false);
         }
         catch (ConnectorConnectException ex)
         {
@@ -94,6 +116,28 @@ public sealed class SshConnector : IEndpointConnector
         {
             return CommandResult.Failed(ConnectorOutcome.Timeout, "Command timed out.", sw.Elapsed);
         }
+        finally
+        {
+            if (elevation is not null) CryptographicOperations.ZeroMemory(elevation);
+        }
+    }
+
+    /// <summary>
+    /// Resolves the privilege credential into a newline-terminated buffer for <c>sudo -S</c>.
+    ///
+    /// <para>The copy is deliberate and unavoidable: <see cref="ResolvedCredential.Secret"/> is a
+    /// <see cref="ReadOnlySpan{T}"/>, which cannot cross an <c>await</c> — so the bytes must be
+    /// materialised synchronously here, before the command runs. The caller owns the result and
+    /// zeroes it; this method holds nothing.</para>
+    /// </summary>
+    private async Task<byte[]> ReadElevationSecretAsync(CredentialRef reference, CancellationToken ct)
+    {
+        using var credential = await _credentials.ResolveAsync(reference, ct).ConfigureAwait(false);
+
+        var buffer = new byte[credential.Secret.Length + 1];
+        credential.Secret.CopyTo(buffer);
+        buffer[^1] = (byte)'\n'; // sudo -S expects the password terminated by a newline
+        return buffer;
     }
 
     public Task<FileResult> PushAsync(EndpointTarget target, FileTransfer file, CancellationToken ct) =>

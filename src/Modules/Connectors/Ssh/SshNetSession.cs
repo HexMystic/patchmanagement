@@ -29,7 +29,8 @@ internal sealed class SshNetSession : ISshSession
 
     public bool IsConnected => !_disposed && _client.IsConnected;
 
-    public async Task<CommandResult> RunAsync(string commandLine, TimeSpan timeout, CancellationToken ct)
+    public async Task<CommandResult> RunAsync(
+        string commandLine, TimeSpan timeout, ReadOnlyMemory<byte> stdin, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -39,6 +40,17 @@ internal sealed class SshNetSession : ISshSession
         cmd.CommandTimeout = timeout;
         try
         {
+            // Write stdin BEFORE executing and close it, so a command that blocks reading input
+            // (sudo -S waiting on a password) is never deadlocked against a stream we never wrote.
+            if (!stdin.IsEmpty)
+            {
+                var input = cmd.CreateInputStream();
+                await input.WriteAsync(stdin, cts.Token).ConfigureAwait(false);
+                await input.FlushAsync(cts.Token).ConfigureAwait(false);
+                // Closing signals EOF; without it sudo waits for more input until the timeout.
+                await input.DisposeAsync().ConfigureAwait(false);
+            }
+
             // SSH.NET 2025.1.0: ExecuteAsync returns a bare Task — stdout is read from Result
             // once the command has completed, not from the awaited value.
             await cmd.ExecuteAsync(cts.Token).ConfigureAwait(false);
