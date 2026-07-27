@@ -39,8 +39,10 @@ internal sealed class SshNetSession : ISshSession
         cmd.CommandTimeout = timeout;
         try
         {
-            var stdout = await cmd.ExecuteAsync(cts.Token).ConfigureAwait(false);
-            return CommandResult.Ran((int?)cmd.ExitStatus ?? -1, stdout ?? string.Empty, cmd.Error ?? string.Empty, sw.Elapsed);
+            // SSH.NET 2025.1.0: ExecuteAsync returns a bare Task — stdout is read from Result
+            // once the command has completed, not from the awaited value.
+            await cmd.ExecuteAsync(cts.Token).ConfigureAwait(false);
+            return CommandResult.Ran(cmd.ExitStatus ?? -1, cmd.Result ?? string.Empty, cmd.Error ?? string.Empty, sw.Elapsed);
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested && !ct.IsCancellationRequested)
         {
