@@ -101,7 +101,7 @@ public sealed class SshConnector : IEndpointConnector
         RequirePositiveTimeout(command.Timeout);
 
         // Surface a double-hop requirement instead of hanging (HARD-PROBLEMS #9).
-        var hop = DoubleHopDetector.Assess(command);
+        var hop = DoubleHopDetector.Assess(command, EndpointProtocol.Ssh);
         if (hop.RequiresOnwardAuth && !target.AllowCredentialDelegation)
             return CommandResult.Failed(ConnectorOutcome.DoubleHopRequired, DoubleHopMessage(hop), TimeSpan.Zero);
 
@@ -179,6 +179,15 @@ public sealed class SshConnector : IEndpointConnector
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(file);
         RequirePositiveTimeout(file.Timeout);
+
+        // Transfers were never assessed. Writing to a path that needs onward authentication is the
+        // textbook double-hop, and it must be surfaced rather than hung on (HARD-PROBLEMS #9).
+        var transferHop = DoubleHopDetector.Assess(file, EndpointProtocol.Ssh);
+        if (transferHop.RequiresOnwardAuth && !target.AllowCredentialDelegation)
+        {
+            return FileResult.Failed(
+                ConnectorOutcome.DoubleHopRequired, file.RemotePath, DoubleHopMessage(transferHop), TimeSpan.Zero);
+        }
 
         var sw = Stopwatch.StartNew();
         await using var op = await _operations.AcquireAsync(file.IdempotencyKey, ct).ConfigureAwait(false);

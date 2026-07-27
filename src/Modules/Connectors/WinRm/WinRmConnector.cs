@@ -72,7 +72,7 @@ public sealed class WinRmConnector : IEndpointConnector
         ArgumentNullException.ThrowIfNull(command);
         RequirePositiveTimeout(command.Timeout);
 
-        var hop = DoubleHopDetector.Assess(command);
+        var hop = DoubleHopDetector.Assess(command, EndpointProtocol.WinRm);
         if (hop.RequiresOnwardAuth && !target.AllowCredentialDelegation)
             return CommandResult.Failed(ConnectorOutcome.DoubleHopRequired, DoubleHopMessage(hop), TimeSpan.Zero);
 
@@ -105,6 +105,15 @@ public sealed class WinRmConnector : IEndpointConnector
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(file);
         RequirePositiveTimeout(file.Timeout);
+
+        // Transfers were never assessed, yet writing to \\server\share over a WinRM session is the
+        // textbook double-hop — the exact case HARD-PROBLEMS #9 opens with.
+        var transferHop = DoubleHopDetector.Assess(file, EndpointProtocol.WinRm);
+        if (transferHop.RequiresOnwardAuth && !target.AllowCredentialDelegation)
+        {
+            return FileResult.Failed(
+                ConnectorOutcome.DoubleHopRequired, file.RemotePath, DoubleHopMessage(transferHop), TimeSpan.Zero);
+        }
 
         var sw = Stopwatch.StartNew();
         await using var op = await _operations.AcquireAsync(file.IdempotencyKey, ct).ConfigureAwait(false);

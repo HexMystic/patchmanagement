@@ -71,7 +71,20 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
     private static async Task<ISshSession> ConnectThroughBastionAsync(
         ConnectionPlan plan, CredentialResolver resolve, TimeSpan timeout, CancellationToken ct)
     {
-        // ConnectionPlanner emits a single hop today; the loop keeps the code honest for chains.
+        // Exactly one hop is supported. The previous comment here claimed "the loop keeps the code
+        // honest for chains" above an indexer, not a loop — so a two-hop chain would have connected
+        // through the first jump host, ignored the second, and reported success. Connecting somewhere
+        // the operator did not ask for is the worst available outcome for a misconfigured chain, so
+        // it is refused by name instead. Multi-hop support is a deferred item with a named owner.
+        if (plan.Hops.Count > 1)
+        {
+            throw new ConnectorConnectException(
+                ConnectorOutcome.ProtocolError,
+                $"This connector supports a single bastion hop; the plan specifies {plan.Hops.Count}. "
+                + "Multi-hop chains are not implemented — configure one jump host, or chain at the "
+                + "SSH-config level on the bastion itself.");
+        }
+
         var hop = plan.Hops[0];
         SshClient? bastion = null;
         ForwardedPortLocal? forward = null;
