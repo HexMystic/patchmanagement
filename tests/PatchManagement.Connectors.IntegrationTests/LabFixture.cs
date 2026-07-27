@@ -88,7 +88,7 @@ public sealed class LabFixture : IAsyncLifetime
     /// failure. Shares nothing with <see cref="Connector"/> so a rejected key cannot poison the
     /// pooled sessions the rest of the suite is using.
     /// </summary>
-    public SshConnector ConnectorWith(ICredentialProvider credentials, TimeSpan? connectivityBudget = null)
+    public SshConnector ConnectorWith(ICredentialProvider credentials, TimeSpan? authenticationBudget = null)
     {
         var options = Options.Create(new ConnectorConcurrencyOptions());
 
@@ -99,7 +99,13 @@ public sealed class LabFixture : IAsyncLifetime
             new SemaphoreConnectionGovernor(options),
             new KeyedOperationCoordinator(),
             NullLogger<SshConnector>.Instance,
-            new ConnectorTimeoutOptions { Connectivity = connectivityBudget ?? TimeSpan.FromSeconds(15) });
+            new ConnectorTimeoutOptions
+            {
+                // Reachability stays short — the point of the split. The AUTH budget is what a caller
+                // varies when it wants to see how a slow rejection classifies.
+                Reachability = TimeSpan.FromSeconds(5),
+                Authentication = authenticationBudget ?? TimeSpan.FromSeconds(45),
+            });
     }
 
     public EndpointTarget TargetFor(LabHost host) => new()

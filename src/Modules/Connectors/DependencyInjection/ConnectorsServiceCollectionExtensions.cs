@@ -57,7 +57,8 @@ public static class ConnectorsServiceCollectionExtensions
         // SSH — real, lab-tested transport. Connectors have internal ctors (encapsulation), so we
         // construct them with same-assembly factory lambdas rather than open-generic registration.
         services.TryAddSingleton<ISshSessionFactory>(sp => new SshNetSessionFactory(
-            sp.GetRequiredService<IOptions<ConnectorSecurityOptions>>().Value));
+            sp.GetRequiredService<IOptions<ConnectorSecurityOptions>>().Value,
+            sp.GetRequiredService<IOptions<ConnectorTimeoutOptions>>().Value));
         services.TryAddSingleton<SshConnectionPool>();
         services.AddScoped<IEndpointConnector>(sp => new SshConnector(
             sp.GetRequiredService<ICredentialProvider>(),

@@ -115,7 +115,11 @@ public sealed class TimeoutTests
         var harness = ConnectorHarness.Build(
             session: () => stalled,
             timeProvider: time,
-            timeouts: new ConnectorTimeoutOptions { Connectivity = TimeSpan.FromSeconds(2) });
+            timeouts: new ConnectorTimeoutOptions
+            {
+                Reachability = TimeSpan.FromSeconds(1),
+                Authentication = TimeSpan.FromSeconds(1),
+            });
 
         var probing = harness.Connector.TestConnectivityAsync(ConnectorHarness.Target(), CancellationToken.None);
 

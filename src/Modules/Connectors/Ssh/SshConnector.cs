@@ -75,10 +75,10 @@ public sealed class SshConnector : IEndpointConnector
     {
         ArgumentNullException.ThrowIfNull(target);
         var sw = Stopwatch.StartNew();
-        using var deadline = Deadline(_timeouts.Connectivity, ct);
+        using var deadline = Deadline(_timeouts.ProbeBudget, ct);
         try
         {
-            await using var scope = await OpenAsync(target, _timeouts.Connectivity, deadline.Token)
+            await using var scope = await OpenAsync(target, _timeouts.Authentication, deadline.Token)
                 .ConfigureAwait(false);
             // Reaching an authenticated session IS the connectivity+auth proof.
             return ConnectivityResult.Reachable(sw.Elapsed);

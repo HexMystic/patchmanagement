@@ -175,7 +175,8 @@ public sealed class SshFleetTests(LabFixture lab)
         var strayRef = new Contracts.Credentials.CredentialRef(Guid.NewGuid());
         provider.Add(strayRef, stray.PrivateKeyBytes, Contracts.Credentials.CredentialKind.SshKey, LabFleet.Username);
 
-        var connector = lab.ConnectorWith(provider, TimeSpan.FromSeconds(60));
+        // DEFAULT budgets — no crutch. This is the configuration that misreported at HEAD.
+        var connector = lab.ConnectorWith(provider);
         var target = lab.TargetFor(host) with { Credential = strayRef };
 
         var result = await connector.TestConnectivityAsync(target, CancellationToken.None);
@@ -184,41 +185,29 @@ public sealed class SshFleetTests(LabFixture lab)
     }
 
     /// <summary>
-    /// REGRESSION TEST FOR A KNOWN, UNFIXED DEFECT — inert until the budget design is settled.
+    /// The other half of the split: an unreachable host is judged on the SHORT budget, so it is
+    /// reported quickly rather than after the authentication allowance has drained.
     ///
-    /// <para>The fleet's sshd takes ~10.15s to reject an unauthorised key (measured three times with
-    /// the stock OpenSSH client, so this is the server's behaviour, not SSH.NET's). Any connectivity
-    /// budget below that turns a credential rejection into <c>Timeout</c>, because the deadline fires
-    /// while the auth exchange is still in flight and the connector has nothing left to classify
-    /// from.</para>
-    ///
-    /// <para>That is precisely the honest-results failure Phase 3 exists to prevent: <c>unreachable</c>
-    /// sends someone to the network team, <c>auth-failed</c> sends them to whoever owns credentials,
-    /// and an estate report that confuses the two wastes the on-call hour it is read in.</para>
-    ///
-    /// <para>Skipped rather than deleted, and rather than asserting the wrong value: the sibling test
-    /// above passes only because it buys a 60-second budget, which would silently start passing for
-    /// the wrong reason if the default were merely retuned. This one pins the actual property — the
-    /// classification must not depend on the budget — and turns on with the fix.</para>
+    /// <para>This is what makes the split pay for itself at scale. Connection concurrency is the
+    /// 10,000-endpoint wall (CLAUDE.md §2), and a sweep across a dead subnet holds a connection slot
+    /// per host for however long the probe takes. Judging reachability separately means that cost is
+    /// the reachability budget, not the authentication one.</para>
     /// </summary>
-    [Theory(Skip = "Known defect, red-proven: with a 5s budget all five hosts report Timeout, not "
-                 + "AuthFailed. Awaiting the budget-design decision (raise the connectivity default "
-                 + "vs. give authentication its own budget); the fix removes this Skip.")]
-    [MemberData(nameof(Fleet))]
-    public async Task A_rejected_key_is_auth_failed_even_on_a_budget_shorter_than_the_rejection(LabHost host)
+    [Fact]
+    public async Task An_unreachable_host_is_reported_without_spending_the_authentication_budget()
     {
-        using var stray = new SshKeyScratch();
-        var provider = new TestSupport.Credentials.FakeCredentialProvider();
-        var strayRef = new Contracts.Credentials.CredentialRef(Guid.NewGuid());
-        provider.Add(strayRef, stray.PrivateKeyBytes, Contracts.Credentials.CredentialKind.SshKey, LabFleet.Username);
+        var target = lab.TargetFor(LabFleet.All[0]) with { Port = 2299 };
+        var authenticationBudget = TimeSpan.FromSeconds(45);
 
-        // Deliberately below the measured ~10.15s server rejection latency.
-        var connector = lab.ConnectorWith(provider, TimeSpan.FromSeconds(5));
-        var target = lab.TargetFor(host) with { Credential = strayRef };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var result = await lab.Connector.TestConnectivityAsync(target, CancellationToken.None);
+        sw.Stop();
 
-        var result = await connector.TestConnectivityAsync(target, CancellationToken.None);
-
-        Assert.Equal(ConnectorOutcome.AuthFailed, result.Outcome);
+        Assert.Equal(ConnectorOutcome.Unreachable, result.Outcome);
+        Assert.True(
+            sw.Elapsed < authenticationBudget,
+            $"an unreachable host took {sw.Elapsed.TotalSeconds:0.#}s, which means reachability is "
+            + "still being judged on the authentication budget rather than its own.");
     }
 
     [Fact]
