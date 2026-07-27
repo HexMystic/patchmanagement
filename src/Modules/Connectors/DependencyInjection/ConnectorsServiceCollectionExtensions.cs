@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using PatchManagement.Connectors.Concurrency;
 using PatchManagement.Connectors.Facts;
 using PatchManagement.Connectors.Ssh;
@@ -39,6 +40,14 @@ public static class ConnectorsServiceCollectionExtensions
             .Bind(configuration.GetSection(ConnectorConcurrencyOptions.SectionName))
             .PostConfigure(o => o.Validate());
 
+        services.AddOptions<ConnectorTimeoutOptions>()
+            .Bind(configuration.GetSection(ConnectorTimeoutOptions.SectionName))
+            .PostConfigure(o => o.Validate());
+
+        // Registered so tests can substitute a fake clock through the container rather than only
+        // through a hand-built connector.
+        services.TryAddSingleton(TimeProvider.System);
+
         services.TryAddSingleton<IConnectionGovernor, SemaphoreConnectionGovernor>();
         services.TryAddSingleton<IOperationCoordinator, KeyedOperationCoordinator>();
 
@@ -52,7 +61,9 @@ public static class ConnectorsServiceCollectionExtensions
             sp.GetRequiredService<SshConnectionPool>(),
             sp.GetRequiredService<IConnectionGovernor>(),
             sp.GetRequiredService<IOperationCoordinator>(),
-            sp.GetRequiredService<ILogger<SshConnector>>()));
+            sp.GetRequiredService<ILogger<SshConnector>>(),
+            sp.GetRequiredService<IOptions<ConnectorTimeoutOptions>>().Value,
+            sp.GetRequiredService<TimeProvider>()));
 
         // WinRM — real WS-Man transport, integration-tested later (no Windows host in the dev lab).
         services.TryAddSingleton<IWinRmClient>(sp => new HttpWinRmClient(sp.GetService<IHttpClientFactory>()));

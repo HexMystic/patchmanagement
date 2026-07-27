@@ -30,7 +30,9 @@ internal sealed class ConnectorHarness
         Func<ISshSession>? session = null,
         Exception? connectThrows = null,
         Action<FakeCredentialProvider>? configureCredentials = null,
-        Action<ConnectorConcurrencyOptions>? configureConcurrency = null)
+        Action<ConnectorConcurrencyOptions>? configureConcurrency = null,
+        TimeProvider? timeProvider = null,
+        ConnectorTimeoutOptions? timeouts = null)
     {
         var credentials = new FakeCredentialProvider();
         credentials.Add(LoginCredential, "fake-ed25519-private-key"u8.ToArray(), CredentialKind.SshKey, "labadmin");
@@ -50,10 +52,12 @@ internal sealed class ConnectorHarness
         var connector = new SshConnector(
             recorder,
             factory,
-            new SshConnectionPool(wrapped),
+            new SshConnectionPool(wrapped, timeProvider),
             governor,
             new KeyedOperationCoordinator(),
-            NullLogger<SshConnector>.Instance);
+            NullLogger<SshConnector>.Instance,
+            timeouts,
+            timeProvider);
 
         return new ConnectorHarness
         {

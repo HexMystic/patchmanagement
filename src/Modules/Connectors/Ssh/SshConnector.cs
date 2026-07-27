@@ -28,6 +28,8 @@ public sealed class SshConnector : IEndpointConnector
     private readonly IConnectionGovernor _governor;
     private readonly IOperationCoordinator _operations;
     private readonly ILogger<SshConnector> _logger;
+    private readonly ConnectorTimeoutOptions _timeouts;
+    private readonly TimeProvider _time;
 
     internal SshConnector(
         ICredentialProvider credentials,
@@ -35,7 +37,9 @@ public sealed class SshConnector : IEndpointConnector
         SshConnectionPool pool,
         IConnectionGovernor governor,
         IOperationCoordinator operations,
-        ILogger<SshConnector> logger)
+        ILogger<SshConnector> logger,
+        ConnectorTimeoutOptions? timeouts = null,
+        TimeProvider? timeProvider = null)
     {
         _credentials = credentials;
         _sessionFactory = sessionFactory;
@@ -43,6 +47,26 @@ public sealed class SshConnector : IEndpointConnector
         _governor = governor;
         _operations = operations;
         _logger = logger;
+        _timeouts = timeouts ?? new ConnectorTimeoutOptions();
+        _time = timeProvider ?? TimeProvider.System;
+    }
+
+    /// <summary>
+    /// The operation's own deadline, linked to the caller's token.
+    ///
+    /// <para>The connector enforces the budget itself rather than trusting the transport to do it.
+    /// NEVER #5 says no unbounded remote wait ever, and "the session implementation also passes the
+    /// timeout down" is not the same guarantee — a transport that ignores or mishandles it would
+    /// leave the operation hanging with nothing above to stop it. This makes the bound structural.</para>
+    ///
+    /// <para>Built from the injected <see cref="TimeProvider"/>, so a test advances a fake clock
+    /// instead of sleeping. Timeout tests that wait in real time are slow, and slow tests get a
+    /// generous margin added until they stop being assertions about timeouts at all.</para>
+    /// </summary>
+    private CancellationTokenSource Deadline(TimeSpan budget, CancellationToken ct)
+    {
+        var deadline = new CancellationTokenSource(budget, _time);
+        return CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
     }
 
     public EndpointProtocol Protocol => EndpointProtocol.Ssh;
@@ -51,9 +75,11 @@ public sealed class SshConnector : IEndpointConnector
     {
         ArgumentNullException.ThrowIfNull(target);
         var sw = Stopwatch.StartNew();
+        using var deadline = Deadline(_timeouts.Connectivity, ct);
         try
         {
-            await using var scope = await OpenAsync(target, TimeSpan.FromSeconds(15), ct).ConfigureAwait(false);
+            await using var scope = await OpenAsync(target, _timeouts.Connectivity, deadline.Token)
+                .ConfigureAwait(false);
             // Reaching an authenticated session IS the connectivity+auth proof.
             return ConnectivityResult.Reachable(sw.Elapsed);
         }
@@ -82,16 +108,18 @@ public sealed class SshConnector : IEndpointConnector
         var sw = Stopwatch.StartNew();
         await using var op = await _operations.AcquireAsync(command.IdempotencyKey, ct).ConfigureAwait(false);
 
+        using var deadline = Deadline(command.Timeout, ct);
+
         // Held outside the try so the finally can wipe it on every exit, including the throwing ones.
         byte[]? elevation = null;
         try
         {
-            await using var scope = await OpenAsync(target, command.Timeout, ct).ConfigureAwait(false);
+            await using var scope = await OpenAsync(target, command.Timeout, deadline.Token).ConfigureAwait(false);
 
             string line;
             if (command.RequiresElevation && target.PrivilegeCredential is { } privilege)
             {
-                elevation = await ReadElevationSecretAsync(privilege, ct).ConfigureAwait(false);
+                elevation = await ReadElevationSecretAsync(privilege, deadline.Token).ConfigureAwait(false);
                 // -S reads the password from stdin; -p '' suppresses the prompt, which would
                 // otherwise land in stdout and pollute the caller's result.
                 line = $"sudo -S -p '' {command.CommandLine}";
@@ -105,7 +133,7 @@ public sealed class SshConnector : IEndpointConnector
             }
 
             return await scope.Session
-                .RunAsync(line, command.Timeout, elevation ?? ReadOnlyMemory<byte>.Empty, ct)
+                .RunAsync(line, command.Timeout, elevation ?? ReadOnlyMemory<byte>.Empty, deadline.Token)
                 .ConfigureAwait(false);
         }
         catch (ConnectorConnectException ex)
@@ -154,22 +182,25 @@ public sealed class SshConnector : IEndpointConnector
 
         var sw = Stopwatch.StartNew();
         await using var op = await _operations.AcquireAsync(file.IdempotencyKey, ct).ConfigureAwait(false);
+        using var deadline = Deadline(file.Timeout, ct);
         try
         {
-            await using var scope = await OpenAsync(target, file.Timeout, ct).ConfigureAwait(false);
+            await using var scope = await OpenAsync(target, file.Timeout, deadline.Token).ConfigureAwait(false);
             if (push)
             {
                 await using var source = OpenPushSource(file);
-                var written = await scope.Session.UploadAsync(source, file.RemotePath, file.Timeout, ct).ConfigureAwait(false);
+                var written = await scope.Session
+                    .UploadAsync(source, file.RemotePath, file.Timeout, deadline.Token).ConfigureAwait(false);
                 return FileResult.Ok(file.RemotePath, written, sw.Elapsed);
             }
             else
             {
                 using var buffer = new MemoryStream();
-                var read = await scope.Session.DownloadAsync(file.RemotePath, buffer, file.Timeout, ct).ConfigureAwait(false);
+                var read = await scope.Session
+                    .DownloadAsync(file.RemotePath, buffer, file.Timeout, deadline.Token).ConfigureAwait(false);
                 var bytes = buffer.ToArray();
                 if (file.LocalPath is { } localPath)
-                    await File.WriteAllBytesAsync(localPath, bytes, ct).ConfigureAwait(false);
+                    await File.WriteAllBytesAsync(localPath, bytes, deadline.Token).ConfigureAwait(false);
                 return FileResult.Ok(file.RemotePath, read, sw.Elapsed, bytes);
             }
         }
