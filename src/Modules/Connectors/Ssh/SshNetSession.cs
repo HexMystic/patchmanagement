@@ -17,8 +17,19 @@ internal sealed class SshNetSession : ISshSession
     private readonly SshClient _client;
     private readonly ConnectionInfo _effectiveConnectionInfo;
     private readonly IDisposable[] _ownedResources;
+
+    /// <summary>
+    /// Serialises establishment of <see cref="_sftp"/>.
+    ///
+    /// <para>A pooled session is shared by design: <c>SshConnectionPool</c> hands the same
+    /// <see cref="ISshSession"/> to every concurrent borrower, which is the whole reason the pool
+    /// exists. So "two callers are in here at once" is the ordinary case, not an edge case, and the
+    /// lazy initialisation below has to be written for it.</para>
+    /// </summary>
+    private readonly SemaphoreSlim _sftpGate = new(1, 1);
+
     private SftpClient? _sftp;
-    private bool _disposed;
+    private volatile bool _disposed;
 
     public SshNetSession(SshClient client, ConnectionInfo effectiveConnectionInfo, params IDisposable[] ownedResources)
     {
@@ -113,15 +124,65 @@ internal sealed class SshNetSession : ISshSession
         return await CopyCountingAsync(remote, destination, cts.Token).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// The session's SFTP client, established on first use.
+    ///
+    /// <para><b>This was a data race that corrupted concurrent transfers.</b> It read
+    /// <c>_sftp</c>, disposed it, assigned a new client and connected — all unsynchronised. Two
+    /// borrowers of the same pooled session would both see a client that was not connected yet (the
+    /// first borrower's, still mid-handshake), and the second would <b>dispose the client the first
+    /// was still connecting</b>. Both then failed with <c>ObjectDisposedException</c> /
+    /// <c>SshConnectionException: Client not connected</c>, the orphaned client leaked an
+    /// authenticated transport for the process lifetime, and the exception escaped <c>PushAsync</c>
+    /// untyped. Two concurrent pushes to one host is the ordinary shape of a deployment wave.</para>
+    ///
+    /// <para>No test could see it: <c>SessionCapTests</c> gives every operation its own host on
+    /// purpose, and <c>SshFleetTests</c> runs one operation at a time — so the pool's central promise,
+    /// several concurrent operations over one transport, was never exercised. See
+    /// <c>PooledSessionConcurrencyTests</c>.</para>
+    /// </summary>
     private async Task<SftpClient> EnsureSftpAsync(CancellationToken ct)
     {
-        if (_sftp is { IsConnected: true })
-            return _sftp;
+        // Fast path, snapshotted into a local: re-reading the field for the return could hand back a
+        // different client — or null — than the one just tested. An established client is the common
+        // case and must not queue behind the gate.
+        var established = _sftp;
+        if (established is { IsConnected: true }) return established;
 
-        _sftp?.Dispose();
-        _sftp = new SftpClient(_effectiveConnectionInfo);
-        await _sftp.ConnectAsync(ct).ConfigureAwait(false);
-        return _sftp;
+        await _sftpGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            // Re-checked under the gate: whoever held it may have established the client already,
+            // and connecting a second one would leak the first.
+            established = _sftp;
+            if (established is { IsConnected: true }) return established;
+
+            var replacement = new SftpClient(_effectiveConnectionInfo);
+            try
+            {
+                await replacement.ConnectAsync(ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                replacement.Dispose();
+                throw;
+            }
+
+            // Published only once it is CONNECTED, and the old one is disposed only after the swap.
+            // Disposing first left a window in which _sftp pointed at a dead client that another
+            // borrower could pick up off the fast path above.
+            var previous = _sftp;
+            _sftp = replacement;
+            previous?.Dispose();
+
+            return replacement;
+        }
+        finally
+        {
+            _sftpGate.Release();
+        }
     }
 
     private static async Task<long> CopyCountingAsync(Stream source, Stream destination, CancellationToken ct)
@@ -162,6 +223,8 @@ internal sealed class SshNetSession : ISshSession
         SafeDispose(_client);
         foreach (var resource in _ownedResources)
             SafeDispose(resource);
+
+        SafeDispose(_sftpGate);
     }
 
     private static void SafeDispose(IDisposable? d)
