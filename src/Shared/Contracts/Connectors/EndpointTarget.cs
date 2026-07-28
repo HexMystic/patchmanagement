@@ -51,9 +51,21 @@ public sealed record EndpointTarget
     public string? AssetId { get; init; }
 
     /// <summary>
-    /// Whether the connector may attempt onward credential delegation (CredSSP / constrained
-    /// Kerberos) for a WinRM double-hop. Default <c>false</c>: a required second hop is
-    /// <b>surfaced honestly</b> rather than blindly delegated (HARD-PROBLEMS #9).
+    /// Suppresses the double-hop guard. Default <c>false</c>: a command or transfer that needs onward
+    /// authentication is refused as <see cref="ConnectorOutcome.DoubleHopRequired"/> rather than
+    /// attempted (HARD-PROBLEMS #9).
+    ///
+    /// <para><b>It does NOT delegate anything.</b> Despite the name, no CredSSP or constrained-Kerberos
+    /// delegation is configured, negotiated or performed anywhere in this connector — the flag's only
+    /// effect is to skip the refusal. Setting it therefore does not make a second hop work; it
+    /// converts an honest, immediate <c>DoubleHopRequired</c> into whatever the endpoint does with a
+    /// session that cannot authenticate onward, which is the opaque hang or access-denied that
+    /// HARD-PROBLEMS #9 exists to prevent. Leave it <c>false</c> unless you are deliberately trading a
+    /// clear refusal for an unclear failure.</para>
+    ///
+    /// <para>Actually implementing delegation is <b>D-304, owner Phase 8</b>. Until it closes, the
+    /// supported way to avoid a double hop is the one the connector is built around: push the payload
+    /// to the target first, then run it locally.</para>
     /// </summary>
     public bool AllowCredentialDelegation { get; init; }
 

@@ -155,8 +155,8 @@ recorded red values.
 > full file text so a wrapped call cannot slip past. Control: replanting the reviewer's two secrets
 > turns three tests red, one of them behavioural and independent of the scans.
 
-**Counts at close:** Contracts 19 · Connectors unit 113 · IntegrationTests 38 · Vault 80 (unregressed)
-· **Connectors.IntegrationTests 54, zero skipped**. 304 passing, 0 skipped.
+**Counts at close:** Contracts 19 · Connectors unit 120 · IntegrationTests 38 · Vault 80 (unregressed)
+· **Connectors.IntegrationTests 54, zero skipped**. 311 passing, 0 skipped.
 
 > **Correction (cold review R2).** This read "Connectors unit 86 … 267 passing" until the fix pass.
 > No such run existed:
@@ -164,6 +164,22 @@ recorded red values.
 > hung forever rather than failing, so the connector unit project never reached a total. At that
 > commit it held 92 tests; the fix pass took it to 113 and the lab suite from 44 to 54. Every figure
 > above comes from a completed run. Criterion (d) is therefore only now genuinely met.
+
+> **Cold review R3.** Re-ran the suite and confirmed 304/0-skipped was real, then mutation-tested every
+> guarantee the R2 fix pass added — all held. Its 2 mediums and 2 lows are fixed (ROADMAP → "R3
+> dispositions"), taking Connectors unit 113 → 117 and the total to 308. None of it changes the
+> WinRM verification status below.
+
+> **Cold review R4.** Confirmed 308/0-skipped, then broke the #7 guarantee R3 had just rebuilt: a
+> plaintext private key laundered into an immortal managed string through one extracted helper, with
+> all 117 tests green. Flow analysis cannot carry that rule — a parameter is never tainted — so the
+> enforcement model was replaced with a fail-closed capability ban over the four calls in this module
+> that can make text from bytes (`SecretMaterialisationScanner`; ROADMAP → "R4 dispositions",
+> HARD-PROBLEMS §13). Also fixed a check-then-act race in the pool's eviction guard that could
+> terminate the process at shutdown. Connectors unit 117 → 120, total **311**. Behavioural enforcement
+> was built and measured rather than assumed impossible; it is red for correct code and flaky, and the
+> numbers are recorded so it is not re-proposed. **Still no change to the WinRM verification status
+> below** — that remains D-303.
 
 Criterion (f) does **not** claim the `ForwardedPortLocal` binding is exercised — that needs a live SSH
 client and belongs to the lab suite. What is unit-proven is planning, hop ordering, per-hop credential

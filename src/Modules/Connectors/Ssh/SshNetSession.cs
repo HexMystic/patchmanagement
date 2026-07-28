@@ -28,7 +28,19 @@ internal sealed class SshNetSession : ISshSession
     /// </summary>
     private readonly SemaphoreSlim _sftpGate = new(1, 1);
 
-    private SftpClient? _sftp;
+    /// <summary>
+    /// <b>Volatile because the fast path in <see cref="EnsureSftpAsync"/> reads it without taking
+    /// <see cref="_sftpGate"/>.</b> Borrowers that go through the gate get their ordering from the
+    /// semaphore, but the whole point of the fast path is that an established client does not queue —
+    /// so that read has no barrier of its own. Without <c>volatile</c> the publishing write
+    /// (<c>_sftp = replacement</c>, after <c>ConnectAsync</c> returned) and the writes that connected
+    /// it may become visible in either order on a weakly-ordered architecture, letting a reader take
+    /// a client it can see but that is not yet observably connected. Benign on x86/x64, where stores
+    /// are not reordered and where this is only ever run in the lab — which is exactly why it would
+    /// never show up here and would surface first on an ARM64 host.
+    /// </summary>
+    private volatile SftpClient? _sftp;
+
     private volatile bool _disposed;
 
     public SshNetSession(SshClient client, ConnectionInfo effectiveConnectionInfo, params IDisposable[] ownedResources)

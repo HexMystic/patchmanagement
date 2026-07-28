@@ -19,7 +19,7 @@ separate worktrees. **Phase 8 is solo.**
 | 0 | Environment & design | solo | — | **complete** |
 | 1 | Contracts | solo | 0 | **complete** |
 | 2 | Credential vault | parallel | 1 | **complete** |
-| 3 | Endpoint connector | parallel | 1 | **in-progress** — built, 304 green, **unmerged; cold review R2 found 4 criticals, fix pass done, awaiting a THIRD cold review**; SSH verified, WinRM unverified |
+| 3 | Endpoint connector | parallel | 1 | **in-progress** — built, 311 green, **unmerged; cold review R4 found 1 medium + 1 low, both fixed (the #7 enforcement model was replaced), awaiting a FIFTH cold review**; SSH verified, WinRM unverified |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
 | 5 | Content ingestion | parallel | 1 | **in-progress** |
 | 6 | Assessment | solo | 4, 5 | not-started |
@@ -149,7 +149,7 @@ five lab containers against real sshd — no unit stand-in satisfies it.
 > transport defects that way. It proves nothing about how a real WinRM server responds. A green WinRM
 > suite is a statement about this client, not about WinRM. Real-host verification is **D-303 (Phase 8)**.
 
-**Tests: 304 passing, 0 skipped.** Contracts 19 · Connectors unit 113 · IntegrationTests 38 ·
+**Tests: 311 passing, 0 skipped.** Contracts 19 · Connectors unit 120 · IntegrationTests 38 ·
 Vault 80 (unregressed — Phase 3 did not disturb Phase 2) · **Connectors.IntegrationTests 54**.
 
 > **Correction (cold review R2).** This line previously read "267 passing, 0 skipped · Connectors unit
@@ -159,6 +159,118 @@ Vault 80 (unregressed — Phase 3 did not disturb Phase 2) · **Connectors.Integ
 > project **hung instead of finishing** — no run of it has ever produced a total. The project held
 > **92** tests at that point, not 86; it holds 113 now that the fix pass has added coverage. The hang
 > is fixed and every count above is measured from a completed run.
+
+> **Cold review R3 (third pass) — no criticals.** It re-ran the whole suite and confirmed 304/0-skipped
+> was real this time, then broke every guarantee R2's fix pass introduced: the never-log scans (planted
+> secrets in `WinRmConnector` and the real `SshNetSessionFactory` — both went red), the governor's
+> cancel-mid-acquire unwind (deleting either release goes red), and the red-first claims for the stdin
+> and concurrent-transfer fixes (re-run against the pre-fix blobs on the real lab: 3-of-4 and 2-of-3
+> red, with the documented controls staying green). All held. **Its 2 mediums and 2 lows are fixed
+> below; the count moved 304 → 308.**
+
+**R3 dispositions.**
+
+> **Correction (cold review R4).** M1 below claimed the replacement meant "laundering the secret
+> through any number of intermediates is still caught". **That was false, and the phrase has been
+> struck from it.** It held only for straight-line local assignment: `SecretFlowScanner` seeds taint
+> from assignments, and a method parameter is not an assignment, so extracting one helper —
+> `DecodeSecret(byte[] m) => Encoding.UTF8.GetString(m)` — laundered a private key with all 117 tests
+> green. R4 built that exploit in the real `SshNetSessionFactory` and confirmed it. See the R4
+> dispositions below for what now carries the guarantee.
+
+- **M1 — the no-plaintext-string guarantee only covered one syntactic form.** Splitting
+  `Encoding.UTF8.GetString(credential.Secret)` into two statements reintroduced the immortal managed
+  string with all 113 tests green. Replaced the statement-scoped pattern with `SecretFlowScanner`,
+  which follows the bytes through local assignments to a fixpoint (and through `CopyTo` into a
+  buffer). Proven red-first against both forms and a three-hop chain. **The review asked for a behavioural assertion
+  instead; that is not achievable and the attempt was measured, not assumed** —
+  `NetworkCredential` reports a non-null, non-read-only `SecurePassword` of identical length whichever
+  constructor built it, so `Assert.NotNull(SecurePassword)` passes for the defect exactly as it passes
+  for the fix. The managed string is created *before* the credential exists, and a string that is
+  created and later collected is indistinguishable at runtime from one that never existed.
+  `HttpWinRmClientTests` had already recorded this. The old pattern is kept alongside the new one.
+- **M2 — `AllowCredentialDelegation` documented delegation it does not perform.** The flag's only
+  effect is skipping the double-hop refusal; nothing anywhere configures CredSSP or Kerberos. The
+  contract now says so at the property, names the honest-refusal → opaque-failure trade explicitly,
+  and points at **D-304**. Doc-only; the delegation itself stays deferred.
+- **L1 — the pool closed sessions under active borrowers at shutdown.** `DisposeAsync` waited on each
+  entry's gate but never checked `InUse`, and the gate is free while an operation runs — so shutdown
+  disposed live transports and the borrower faulted with `ObjectDisposedException`, which
+  `SshConnector` excludes from `IsTransportFault` as a caller bug and which therefore escaped untyped
+  from a typed-results API. Now "last one out turns off the lights": idle entries are torn down
+  immediately, borrowed ones are handed to the returning lease (gate included, or returning it would
+  fault on a disposed semaphore by a new route). Fixed rather than deferred because it is small and
+  testable, and both halves are mutation-checked. `IsTransportFault` is unchanged — with the race gone,
+  an `ObjectDisposedException` really does mean a disposed connector, which is a caller bug.
+- **L2 — `_sftp` was non-volatile beside a volatile `_disposed`,** and read on the deliberately
+  unsynchronised fast path. Marked `volatile`. No test: the reordering it prevents is unobservable on
+  x86/x64, which is the only architecture the lab runs, so any test would pass for the wrong reason —
+  it would first matter on an ARM64 host.
+
+> **Cold review R4 (fourth pass) — no criticals. 1 medium and 1 low fixed; 1 low deliberately not
+> changed.** It re-ran the whole suite and confirmed 308/0-skipped, then attacked R3's own fixes. Most
+> held: the pool-disposal fix and both its halves survived mutation, the `NetworkCredential`
+> measurement that justified rejecting a behavioural assertion was independently reproduced and is
+> correct, and `AllowCredentialDelegation` was confirmed comment-only against all four usage sites.
+> Two did not — **including the #7 guarantee R3 had just rebuilt, which is why the enforcement model
+> for it changed rather than the pattern.** **Count 308 → 311.**
+
+**R4 dispositions.**
+
+- **F1 (medium) — the #7 guarantee had a hole the size of an extract-method refactor.** R4 planted a
+  real laundering path in `SshNetSessionFactory.ReadPrivateKey` — `var passphrase = DecodeSecret(bytes);`
+  with `DecodeSecret(byte[] m) => Encoding.UTF8.GetString(m)` — and **all 117 tests stayed green** while
+  a plaintext private key sat in an immortal managed string. `SecretFlowScanner` seeds taint from
+  assignments and `CopyTo` only, so a *parameter* is never tainted; lambdas, local functions, extension
+  methods, `out` parameters, instance fields and cross-file helpers all walk past it identically (7 of
+  10 probed shapes undetected).
+  **The fix is a change of enforcement model, not a better analysis.** `SecretMaterialisationScanner`
+  ignores the data entirely and restricts the *capability*: it enumerates every call in the connector
+  surface that can turn bytes or chars into managed text — there are exactly **four** — and the test
+  pins each to a written justification. A fifth is red by default, whichever helper, lambda or field fed
+  it, because the shape is irrelevant to it. Fail-closed where the old check was fail-open. Red-first
+  against R4's exploit verbatim (red at the exact line, with both flow checks staying green, which is
+  the point), green after; mutation-guarded — blinding the scanner turns two tests red, including a
+  stale-allow-list assertion that catches the "scan matches nothing" failure this module shipped twice.
+  `SecretFlowScanner` is **retained behind it** for the one case the ban cannot see: a secret reaching
+  one of the four calls that *are* allowed. The scan also now covers
+  `src/Shared/Contracts/Credentials`, which holds `ResolvedCredential` and was outside every previous
+  scan.
+  **Behavioural enforcement was built and measured, not dismissed** — see HARD-PROBLEMS §13. It cannot
+  work here: SSH.NET leaves 4 managed copies of every key it parses, `NetworkCredential.Password`
+  creates another, and `SecureString.AppendChar` decrypts to append so even the correct first-party path
+  leaves up to 3 transient copies — nondeterministically (1 run in 5 showed them; 4 showed none).
+- **F2 (low/medium) — `EvictIdle`'s `_disposed` guard was check-then-act and did not close the race it
+  documented.** The evictor read the flag, took an entry, and could be descheduled while `DisposeAsync`
+  disposed that entry's gate; `_entries.Clear()` does not help because the evictor already holds the
+  reference. R4 reproduced `ObjectDisposedException` from `EvictIdle` in 150-286 randomised iterations;
+  the committed repro hits it in ~22. Under the real system timer that callback has no caller, so this
+  is process termination at shutdown. **A volatile flag cannot fix this and the flag was already
+  volatile** — the fix is mutual exclusion: the evictor holds a lifetime lock across its *whole* sweep,
+  so either the sweep completes before disposal sets the flag or it starts after and returns at once.
+  Red-first (22 iterations), green across 100,000 verified iterations; mutation-guarded (removing only
+  the evictor's lock goes red at 122, and at 379 after the refinement below).
+  **The sweep takes ownership under the lock and closes transports outside it.** Naively, the lock
+  would be held across `Session.Dispose()` — network I/O that can block — and `AcquireAsync` calls
+  `EvictIdle` on its way in, so a slow close would stall every acquire on the pool. Entries are removed
+  from `_entries` under the lock (which is what makes the deferred close safe: disposal only ever walks
+  `_entries`, so it can never see them) and closed after releasing it.
+  **Residual, not fixed here:** `AcquireAsync` still runs a full sweep on every borrow, now under the
+  lifetime lock, so acquires serialise on an O(entries) scan. That scan predates this fix; the lock
+  makes it serial. The eviction timer already covers quiet pools, so the call from `AcquireAsync` looks
+  redundant — but removing it is a behavioural change to eviction timing and outside R4's scope.
+  Raised as **D-310, owner Phase 4** (which is where pool load first becomes real).
+- **F3 (low) — flow analysis over-reports across methods in a file.** Deliberately **not changed**.
+  It is an over-report, which is the safe direction; it no longer carries the guarantee, so the pressure
+  to weaken it when it fires is gone; and "fixing" it by scoping taint per method would *remove* real
+  coverage, since a secret assigned in one method and used in another is a genuine pattern. What was
+  wrong was the documentation, not the behaviour — corrected below.
+- **Two false claims corrected, which R4 rightly called the worst part.** `SecretFlowScanner`'s own doc
+  argued it "can only report MORE than the truth, whereas an under-report is a guarantee that quietly
+  does not hold" — it under-reports, on the most ordinary refactor there is, and a guard whose docs deny
+  the exact way it fails stops the next reader looking. M1 above claimed "any number of intermediates";
+  true only for straight-line locals. Both struck, with the correction left in place rather than the
+  claim quietly deleted.
 
 The 54 fleet tests are **tests that require the lab fleet**, not optional extras. They hard-fail with
 an actionable message when the fleet is down rather than skipping, because a silently-skipped fleet
@@ -200,6 +312,8 @@ inherits and what it cannot claim until then.
 | **D-306** | Multi-hop (>1) bastion chains | **Phase 4** — topology lives with assets | A two-hop plan is **refused by name**, not silently truncated to the first hop |
 | **D-307** | Passphrase-protected private keys; `CredentialKind` expansion | **Phase 15** (key custody) | `new PrivateKeyFile(stream)` is key-only; an encrypted key fails as `ProtocolError` |
 | **D-308** | Collapse `Vault.Tests/Support` onto the shared `TestSupport` project | **Phase 15** — the next phase to edit vault tests | Two capturing-logger implementations coexist. Kept out of Phase 3 to hold this phase's diff inside its owned paths |
+| **D-310** | `AcquireAsync` runs a full eviction sweep per borrow, now under the pool's lifetime lock | **Phase 4** — where pool load first becomes real | The O(entries) scan predates R4; the lock added to fix the shutdown race makes it serial. The timer already evicts quiet pools, so the call may simply be redundant — but dropping it changes eviction timing, which is outside R4's scope |
+| **D-311** | Extend the text-materialisation ban to `src/Modules/Vault` | **Phase 15** — the next phase to edit vault tests | The ban covers the connector surface only. Phase 2 has two materialising calls (username decode; KEK base64 for the key file) — both legitimate, both already documented, neither enforced. Held out of Phase 3: the vault is Phase 2's owned path and `Connectors.Tests` has no vault dependency by design |
 | **D-309** | SSH password / keyboard-interactive auth | **Phase 8** | Key-only. The lab is key-only by construction, so this is untested either way |
 
 **Also inherited by Phase 8, and worth stating plainly:** the sudo-password path (`sudo -S`) is proven

@@ -20,7 +20,32 @@ internal sealed class SshConnectionPool : IAsyncDisposable
     private readonly ConcurrentDictionary<string, PoolEntry> _entries = new(StringComparer.Ordinal);
     private readonly TimeProvider _time;
     private readonly ITimer _evictionTimer;
-    private bool _disposed;
+
+    /// <summary>
+    /// Makes an eviction sweep and pool disposal mutually exclusive.
+    ///
+    /// <para><b>A flag cannot do this job, and it was already volatile when it failed.</b>
+    /// <c>EvictIdle</c> used to open with <c>if (_disposed) return;</c> — check-then-act. The evictor
+    /// read the flag, took an entry out of the dictionary, and could then be descheduled while
+    /// <see cref="DisposeAsync"/> ran to completion and disposed that entry's gate; the evictor resumed
+    /// and waited on it. Clearing <c>_entries</c> does not close the window, because the evictor is
+    /// already holding the reference. Cold review R4 reproduced it in 150-286 randomised iterations:
+    /// <see cref="ObjectDisposedException"/> out of a timer callback, which under
+    /// <see cref="TimeProvider.System"/> has no caller and terminates the process at shutdown.</para>
+    ///
+    /// <para>The evictor holds this for its ENTIRE sweep, so only two interleavings exist: the sweep
+    /// completes before disposal sets the flag, or it starts afterwards and returns immediately.
+    /// Lock order is always this lock and then an entry gate — the evictor takes gates with
+    /// <c>Wait(0)</c> and never blocks, and disposal waits on gates only after releasing this — so the
+    /// two cannot deadlock.</para>
+    /// </summary>
+    private readonly object _lifetime = new();
+
+    /// <summary>
+    /// Written under <see cref="_lifetime"/>. Volatile only for the advisory fast-path read in
+    /// <see cref="AcquireAsync"/>; the lock, not this flag, is what makes eviction safe.
+    /// </summary>
+    private volatile bool _disposed;
 
     /// <summary>
     /// <paramref name="timeProvider"/> is injected so eviction is testable without waiting in real
@@ -78,17 +103,93 @@ internal sealed class SshConnectionPool : IAsyncDisposable
 
     private void EvictIdle()
     {
-        var cutoff = _time.GetUtcNow() - _options.PooledSessionIdleTimeout;
-        foreach (var (key, entry) in _entries)
-        {
-            if (entry.InUse != 0 || entry.LastUsed > cutoff)
-                continue;
+        // Disposing the timer does not wait for a callback already running, so a tick can still be in
+        // here while DisposeAsync is tearing entries down. The lock is held across the WHOLE sweep —
+        // not just the flag check — because the hazard is the gap between reading the flag and using
+        // an entry, not the read itself. See _lifetime.
+        List<PoolEntry>? doomed = null;
 
-            if (!entry.Gate.Wait(0))
-                continue;
+        lock (_lifetime)
+        {
+            if (_disposed) return;
+
+            var cutoff = _time.GetUtcNow() - _options.PooledSessionIdleTimeout;
+            foreach (var (key, entry) in _entries)
+            {
+                if (entry.InUse != 0 || entry.LastUsed > cutoff)
+                    continue;
+
+                if (!entry.Gate.Wait(0))
+                    continue;
+                try
+                {
+                    // Removing it from _entries under the lock is what makes the deferred close safe:
+                    // DisposeAsync only ever walks _entries, so an entry taken out here can no longer
+                    // be seen — let alone have its gate freed — by a disposal that starts afterwards.
+                    if (entry.InUse == 0 && entry.LastUsed <= cutoff && _entries.TryRemove(key, out _))
+                        (doomed ??= []).Add(entry);
+                }
+                finally
+                {
+                    entry.Gate.Release();
+                }
+            }
+        }
+
+        // Closing a transport is network I/O and can block. Holding the lifetime lock across it would
+        // stall every AcquireAsync on the pool — and connection concurrency, not the database, is the
+        // wall at 10,000 endpoints (CLAUDE.md §2). These entries are already unreachable, so nothing
+        // needs the lock held while they are closed.
+        foreach (var entry in doomed ?? [])
+        {
+            entry.Session?.Dispose();
+            entry.Session = null;
+        }
+    }
+
+    /// <summary>
+    /// Tears the pool down, closing every session nobody is using and handing anything still borrowed
+    /// to the borrower that returns it — "last one out turns off the lights".
+    ///
+    /// <para><b>This used to dispose sessions regardless of <c>InUse</c>.</b> The gate is free while an
+    /// operation runs — <see cref="AcquireAsync"/> releases it before handing back the lease — so
+    /// waiting on it proved nothing, and shutdown closed transports out from under in-flight commands.
+    /// The borrower then faulted on a disposed client with <see cref="ObjectDisposedException"/>, which
+    /// <c>SshConnector</c> deliberately does not treat as a transport fault (it is normally a caller
+    /// bug), so it escaped untyped from an API contracted to return typed results. Eviction had always
+    /// respected <c>InUse</c>; disposal had not.</para>
+    ///
+    /// <para>Handing over rather than waiting is deliberate: draining would make shutdown block on
+    /// however long a remote command takes, and a bounded drain would just make the same race rarer
+    /// instead of removing it.</para>
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        // Taking _lifetime here is what waits out a sweep that is already in flight. Once this returns,
+        // no evictor is running and none can start, so the gates below are safe to free.
+        lock (_lifetime)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
+
+        _evictionTimer.Dispose();
+
+        foreach (var entry in _entries.Values)
+        {
+            await entry.Gate.WaitAsync().ConfigureAwait(false);
+            var handedOver = false;
             try
             {
-                if (entry.InUse == 0 && entry.LastUsed <= cutoff && _entries.TryRemove(key, out _))
+                entry.PoolDisposed = true;
+
+                // Still borrowed: the lease owns the teardown now. Its gate has to outlive this loop,
+                // or returning it would fault on a disposed semaphore — the same escape by a new route.
+                if (entry.InUse != 0)
+                {
+                    handedOver = true;
+                }
+                else
                 {
                     entry.Session?.Dispose();
                     entry.Session = null;
@@ -97,29 +198,10 @@ internal sealed class SshConnectionPool : IAsyncDisposable
             finally
             {
                 entry.Gate.Release();
+                if (!handedOver) entry.Gate.Dispose();
             }
         }
-    }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed) return;
-        _disposed = true;
-        _evictionTimer.Dispose();
-        foreach (var entry in _entries.Values)
-        {
-            await entry.Gate.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                entry.Session?.Dispose();
-                entry.Session = null;
-            }
-            finally
-            {
-                entry.Gate.Release();
-                entry.Gate.Dispose();
-            }
-        }
         _entries.Clear();
     }
 
@@ -133,6 +215,13 @@ internal sealed class SshConnectionPool : IAsyncDisposable
         public int InUse { get; set; }
         public TimeProvider Time => time;
         public DateTimeOffset LastUsed { get; set; } = time.GetUtcNow();
+
+        /// <summary>
+        /// Set once the pool has been disposed while this entry was still borrowed. The last lease to
+        /// return then owns disposing the session and this entry's gate. Written and read only under
+        /// <see cref="Gate"/>.
+        /// </summary>
+        public bool PoolDisposed { get; set; }
     }
 
     /// <summary>A borrowed reference to a shared pooled session. Disposing returns it (does not close it).</summary>
@@ -145,15 +234,28 @@ internal sealed class SshConnectionPool : IAsyncDisposable
         {
             if (Interlocked.Exchange(ref _returned, 1) != 0)
                 return;
+
+            var tearDown = false;
             entry.Gate.Wait();
             try
             {
                 entry.InUse--;
                 entry.LastUsed = entry.Time.GetUtcNow();
+
+                // The pool went away while this operation was running, and this is the last borrower
+                // out — so closing the transport is now this lease's job. Without it a disposed pool
+                // would leak an authenticated session for the lifetime of the process.
+                if (entry.PoolDisposed && entry.InUse == 0)
+                {
+                    entry.Session?.Dispose();
+                    entry.Session = null;
+                    tearDown = true;
+                }
             }
             finally
             {
                 entry.Gate.Release();
+                if (tearDown) entry.Gate.Dispose();
             }
         }
     }
