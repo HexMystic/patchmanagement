@@ -44,8 +44,6 @@ public sealed class KevConnector(IHttpContentFetcher fetcher) : IContentConnecto
                 CveId: cve,
                 DateAdded: v.DateOnlyOrNull("dateAdded"),
                 DueDate: v.DateOnlyOrNull("dueDate"),
-                // The feed spells this "Known" / "Unknown"; anything not clearly "Known" is null,
-                // not false — we do not assert "no ransomware" when the source is silent.
                 KnownRansomwareUse: RansomwareUse(v.StringOrNull("knownRansomwareCampaignUse")),
                 Provenance: new ProvenanceEntry(Feeds.Kev, retrievedAt, SourceRecordId: cve, Url: CatalogUrl)));
         }
@@ -57,10 +55,21 @@ public sealed class KevConnector(IHttpContentFetcher fetcher) : IContentConnecto
         return new NormalizedBatch { KevOverlays = overlays, Cursor = cursor };
     }
 
+    /// <summary>
+    /// Only a confirmed "Known" becomes <c>true</c>. CISA's literal "Unknown" means <em>not
+    /// confirmed</em>, not <em>confirmed absent</em>, so it maps to null alongside absence and any
+    /// unrecognised value — we never assert "no ransomware" on the strength of the source not
+    /// saying so.
+    ///
+    /// <para>This mapping returned <c>false</c> for "Unknown" until it was tested, contradicting the
+    /// comment that sat directly above it. Recording false lets Phase 7 read an absence of evidence
+    /// as evidence of absence — the same mistake the frozen schema already forbids for the sibling
+    /// field, where <c>kev.listed</c>'s description warns that collapsing "not evaluated" into false
+    /// "would let Phase 7 weight a never-run sync identically to a confirmed absence".</para>
+    /// </summary>
     private static bool? RansomwareUse(string? raw) => raw?.ToLowerInvariant() switch
     {
         "known" => true,
-        "unknown" => false,
         _ => null,
     };
 }

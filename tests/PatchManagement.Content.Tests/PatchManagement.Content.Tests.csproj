@@ -3,7 +3,12 @@
   <!--
     Unit suite for the content module. Runs with no infrastructure: no Postgres, no lab fleet, and
     no network — every connector splits fetch from a `public static Parse`, so parsing is driven
-    from recorded payloads under Samples/.
+    from payloads CAPTURED FROM THE LIVE FEEDS and committed under Samples/.
+
+    Read Samples/PROVENANCE.md before adding a fixture. The two that originally sat there were
+    hand-written in the same commit as the parsers they fed, so asserting against them proved only
+    self-consistency; both were deleted. A hand-authored payload must not be reintroduced — if a
+    feed cannot be captured, its connector stays untested and unticked in docs/phases/phase-5.md.
 
     DB-touching content tests do NOT belong here. The catalogue's behavioural contract (row grain,
     idempotent re-ingest, the ADR 0010 role split) is already covered by

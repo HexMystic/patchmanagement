@@ -106,8 +106,8 @@ Each criterion names the test that proves it. **Nothing below is ticked yet.**
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
-| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over recorded payloads in `Samples/` | ☐ connectors written, **no parsing test exists** |
-| b | Refresh is **incremental** — the cursor advances on success and holds on failure | `ContentSyncService` tests over a scripted connector | ☐ |
+| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ◐ **3 of 8** — `nvd`, `kev`, `epss` covered by `NvdParseTests`/`KevParseTests`/`EpssParseTests` against real captures. `usn`, `dsa`, `rhsa`, `msrc`, `wsusscn2` have **no parse test**, and three of those cannot reach their feed at all (section above) |
+| b | Refresh is **incremental** — the cursor advances on success and holds on failure | `ContentSyncService` tests over a scripted connector | ☐ — and note **incrementality is unimplemented**, not just untested: cursors are emitted and persisted but never sent back to any feed |
 | c | Refresh is **idempotent** — the same payload twice writes the same rows | store tests against Postgres | ☐ (grain already pinned by `ContentCatalogueTests`) |
 | d | **Provenance recorded per record**, non-empty, merged rather than overwritten across feeds | store tests asserting the jsonb merge | ☐ |
 | e | Overlays (KEV/EPSS) never insert an advisory and never clobber a publisher's re-sync | store tests | ☐ |
@@ -116,11 +116,58 @@ Each criterion names the test that proves it. **Nothing below is ticked yet.**
 | h | The contract surface carries no database dependency | `ContentContractSurfaceTests` | ☑ |
 | i | The vocabulary matches the frozen schemas | `ContentVocabularyTests` | ☑ (partial — the `AppDbContext` CHECK copy is still independent; ADR 0018 residual, owner Phase 6) |
 
+## ⚠ Three connectors cannot work against their real feeds — found 2026-07-28
+
+Each connector's own `DefaultEndpoint` was requested during parse-slice-1 planning. **Three of the
+seven HTTP connectors do not match reality**, and the failure is not symmetric — one of them
+*reports success*.
+
+| Connector | Its `DefaultEndpoint` | Observed | Consequence |
+|---|---|---|---|
+| `nvd` · `kev` · `epss` | — | **200, shape matches** | tested in slice 1 |
+| `usn` | `usn.ubuntu.com/usn-db/database.json` | **200**, root is the expected map, **260 MB** | usable; slice 2 needs a subsetting decision |
+| **`dsa`** | `security-tracker.debian.org/tracker/data/dsa.json` | **404** | fetch fails loudly. Debian's live data is at `/tracker/data/json` (~80 MB) and is **CVE-keyed, not DSA-keyed** — a different shape, so this is a redesign, not a URL swap |
+| **`rhsa`** | `access.redhat.com/hydra/rest/securitydata/csaf.json` | **200**, but the body is a **JSON array** | `Parse` reads `root.Array("advisories")`; `JsonHelpers.Array` returns `[]` for a non-object receiver, so this yields an **empty batch and a status of `ok`** |
+| **`msrc`** | `api.msrc.microsoft.com/cvrf/v3.0/csaf` | **400 Invalid ID** | fetch fails loudly |
+
+**`rhsa` is the dangerous one and belongs in this project's recurring-hazard list.** It does not
+throw, does not warn, and `ContentSyncService` records `status = 'ok'` with zero rows written and the
+cursor advanced. An operator sees a green sync and an empty catalogue — *reports success while
+untrue*, the same class as Phase 2's `Complete` and Phase 3's checks that could not fire.
+
+**`rhsa` and `msrc` also parse invented envelopes.** `RhsaConnector` expects
+`root.advisories[]` with `.cvss3`/`.affected[]`; real Red Hat CSAF is
+`document.tracking.id` + `vulnerabilities[].product_status.fixed[]` (NEVR strings like
+`8Base-Fast-Datapath:network-scripts-openvswitch2.17-0:2.17.0-148.el8fdp.aarch64`). `MsrcConnector`
+expects `root.vulnerabilities[].remediations[]`; real MSRC serves CVRF/CSAF documents per month.
+Neither resembles the format it claims to consume, so **their `Parse` logic is not merely untested —
+it is written against a format no server produces.** Rewriting each against a real captured payload
+is the entry condition for its slice.
+
+### Also recorded: incrementality is emitted but never consumed
+
+**No connector reads `state.Cursor`.** Every `Parse` computes a cursor and `ContentSyncService`
+persists it (advancing on success, holding on failure), but no `SyncAsync` ever sends it back to the
+feed. Refresh is therefore **idempotent but not incremental** — each run re-fetches the same window.
+`NvdConnector`'s doc comment claimed "Incremental via `lastModStartDate`"; that claim was false and
+has been corrected in place. **NVD pagination is also unimplemented** (`startIndex`/`totalResults`
+never read), so a multi-page response is silently truncated to page 1 — a second silent-truncation
+path. Exit criterion (b) stays unticked because of this, not merely for want of a test.
+
+### One question a fixture must not settle
+
+Every NVD record with no `metrics` at all, in the 300-CVE window sampled, was a **Rejected** CVE.
+`Parse` ingests it as an advisory regardless of `vulnStatus`. Whether a rejected CVE should become an
+advisory row is a real question and is **deliberately not answered by a test fixture** — see
+`tests/PatchManagement.Content.Tests/Samples/PROVENANCE.md`.
+
 ## ⚠ Scope: what has NOT been done
 
-- **No connector has ever run against its live feed.** All eight are written from the published
-  formats and are unverified against real payloads. A green suite here would be a statement about
-  the parser, not about the feed — the same distinction Phase 3 records for WinRM.
+- **No connector has ever run end-to-end against its live feed.** `nvd`, `kev` and `epss` are now
+  proven against **real captured payloads** (`Samples/PROVENANCE.md`), which is a statement about the
+  parser *and* about the shape the feed really serves — but the fetch path itself, and the other five
+  connectors, remain unexercised. The distinction Phase 3 records for WinRM still applies to the
+  remaining five, three of which are worse than untested (see the endpoint section above).
 - **`wsusscn2.cab` has never been expanded.** `ExpandCabPackageSource` shells out to Windows
   `expand.exe` twice and has never been run against the real ~627 MB cab. It also throws
   `PlatformNotSupportedException` off Windows, so a Linux host that syncs this feed fails at call

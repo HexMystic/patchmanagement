@@ -11,12 +11,22 @@ namespace PatchManagement.Content.Connectors;
 /// version RANGES, which HARD-PROBLEMS #2 rejects as an applicability basis (blind to backports)
 /// and ADR 0011 keeps out of that table. Distro advisories (USN/RHSA/DSA) own the fix statements.
 ///
-/// Incremental via <c>lastModStartDate</c>: the cursor is the latest <c>lastModified</c> seen, and
-/// the next run asks NVD only for records changed since. Idempotent: a re-run upserts the same rows.
+/// Idempotent: a re-run upserts the same rows.
+///
+/// <para><b>NOT incremental, despite emitting a cursor.</b> <c>Parse</c> computes the latest
+/// <c>lastModified</c> and <c>ContentSyncService</c> persists it, but <c>SyncAsync</c> never reads
+/// <c>state.Cursor</c> and never appends <c>lastModStartDate</c> to the request — so every run
+/// re-fetches the same window. This doc previously claimed the opposite. <b>Pagination is ignored
+/// too</b>: <c>startIndex</c>/<c>totalResults</c>/<c>resultsPerPage</c> are never read, so a
+/// response spanning more than one page is silently truncated to the first. Both are recorded in
+/// <c>docs/phases/phase-5.md</c>.</para>
 /// </summary>
 public sealed class NvdConnector(IHttpContentFetcher fetcher) : IContentConnector
 {
     public const string DefaultEndpoint = "https://services.nvd.nist.gov/rest/json/cves/2.0";
+
+    /// <summary>The <c>source</c> identifier NVD stamps on scores it computed itself.</summary>
+    private const string NvdScoreSource = "nvd@nist.gov";
 
     public string Kind => Feeds.Nvd;
 
@@ -49,19 +59,22 @@ public sealed class NvdConnector(IHttpContentFetcher fetcher) : IContentConnecto
             if (modified is { } m && (maxModified is null || m > maxModified))
                 maxModified = m;
 
-            var (score, vector, version, severity) = ReadCvss(cve);
+            var cvss = ReadCvss(cve);
 
             advisories.Add(new NormalizedAdvisory
             {
                 Source = Feeds.Nvd,
                 ExternalId = id,
                 Title = FirstEnglishDescription(cve) ?? id,
-                Severity = severity,
+                Severity = cvss.Severity,
                 PublishedAt = cve.DateTimeOffsetOrNull("published"),
-                CvssBaseScore = score,
-                CvssVector = vector,
-                CvssVersion = version,
-                CvssSource = score is null ? null : Feeds.Nvd,
+                CvssBaseScore = cvss.Score,
+                CvssVector = cvss.Vector,
+                CvssVersion = cvss.Version,
+                // Only when NVD authored the chosen metric. A vendor's score is kept above but left
+                // unattributed rather than mislabelled — see ReadCvss.
+                CvssSource = cvss.Score is not null && cvss.FromNvd ? Feeds.Nvd : null,
+                SourceMetadataJson = OriginatorMetadata(cvss),
                 Provenance =
                 [
                     new ProvenanceEntry(
@@ -78,6 +91,16 @@ public sealed class NvdConnector(IHttpContentFetcher fetcher) : IContentConnecto
         };
     }
 
+    /// <summary>
+    /// Records who published a score we could not attribute to one of our own feeds, so nulling
+    /// <c>CvssSource</c> hides the mislabelling without also losing the answer. Serialized rather
+    /// than interpolated so an exotic CNA identifier cannot produce malformed JSON.
+    /// </summary>
+    private static string? OriginatorMetadata(CvssReading cvss) =>
+        cvss.Score is not null && cvss.Originator is { Length: > 0 } originator
+            ? JsonSerializer.Serialize(new { cvssOriginator = originator })
+            : null;
+
     private static string? FirstEnglishDescription(JsonElement cve)
     {
         foreach (var d in cve.Array("descriptions"))
@@ -86,32 +109,109 @@ public sealed class NvdConnector(IHttpContentFetcher fetcher) : IContentConnecto
         return null;
     }
 
-    // Prefer CVSS v3.1, then v3.0, then v2 — the newest metric NVD supplies for this CVE.
-    private static (double? Score, string? Vector, string? Version, string Severity) ReadCvss(JsonElement cve)
+    /// <summary>
+    /// Prefer CVSS v3.1, then v3.0, then v2 — the newest metric family present for this CVE — and
+    /// WITHIN a family prefer the score NVD itself published.
+    ///
+    /// <para>Each family is an ARRAY carrying every scoring party's opinion, and NVD does not
+    /// guarantee its own comes first. Taking <c>[0]</c> imports whichever CNA happens to lead: on
+    /// CVE-2024-0182 that is vuldb at 7.3/HIGH where NVD says 9.8/CRITICAL — a different severity
+    /// band. Across 300 consecutive real CVEs, 125 are shaped that way, so this is the ordinary case
+    /// rather than an edge one.</para>
+    ///
+    /// <para>Attribution follows selection: <c>CvssSource</c> is set to <c>nvd</c> only when the
+    /// chosen metric really is NVD's. When a CVE carries only a vendor's score (Qualcomm on
+    /// CVE-2023-33025) the score is still worth keeping, but it is left UNATTRIBUTED — the schema
+    /// constrains <c>cvss.source</c> to the eight feed names, so the vendor's own identifier cannot
+    /// go there, and claiming <c>nvd</c> would be a provenance lie in the one field whose entire job
+    /// is to say who scored it (CLAUDE.md §4.6).</para>
+    /// </summary>
+    private static CvssReading ReadCvss(JsonElement cve)
     {
         if (cve.Prop("metrics") is not { } metrics)
-            return (null, null, null, "unknown");
+            return CvssReading.None;
 
         foreach (var key in new[] { "cvssMetricV31", "cvssMetricV30", "cvssMetricV2" })
         {
-            foreach (var metric in metrics.Array(key))
-            {
-                if (metric.Prop("cvssData") is not { } data)
-                    continue;
+            // A family may be present but hold nothing scorable (e.g. an entry with no cvssData),
+            // in which case fall through to the next family rather than giving up entirely.
+            if (SelectMetric(metrics.Array(key)) is not { } metric)
+                continue;
 
-                var score = data.DoubleOrNull("baseScore");
-                var vector = data.StringOrNull("vectorString");
-                var version = data.StringOrNull("version");
-                // v3 carries baseSeverity inline; v2 carries it on the metric wrapper.
-                var severity = NormalizeSeverity(data.StringOrNull("baseSeverity")
-                    ?? metric.StringOrNull("baseSeverity")
-                    ?? SeverityFromScore(score));
-                return (score, vector, version, severity);
-            }
+            if (metric.Prop("cvssData") is not { } data)
+                continue;
+
+            var score = data.DoubleOrNull("baseScore");
+            var vector = data.StringOrNull("vectorString");
+            var version = data.StringOrNull("version");
+            // v3 carries baseSeverity inline; v2 carries it on the metric wrapper.
+            var severity = NormalizeSeverity(data.StringOrNull("baseSeverity")
+                ?? metric.StringOrNull("baseSeverity")
+                ?? SeverityFromScore(score));
+
+            var fromNvd = IsNvdAuthored(metric);
+
+            return new CvssReading(
+                score, vector, version, severity, fromNvd,
+                // Only when we could NOT attribute it to a feed — otherwise CvssSource already
+                // carries the answer and this would be noise on every record in the corpus.
+                Originator: fromNvd ? null : metric.StringOrNull("source"));
         }
 
-        return (null, null, null, "unknown");
+        return CvssReading.None;
     }
+
+    /// <summary>
+    /// One CVSS metric, read. <see cref="Originator"/> is the scoring party's own identifier
+    /// (an email or CNA UUID) and is set only when the score is NOT NVD's, because
+    /// <c>advisories.cvss_source</c> is CHECK-constrained to the eight feed names and cannot hold
+    /// it. Preserved in <c>source_metadata</c> so "who scored this?" stays answerable.
+    /// </summary>
+    private readonly record struct CvssReading(
+        double? Score,
+        string? Vector,
+        string? Version,
+        string Severity,
+        bool FromNvd,
+        string? Originator)
+    {
+        public static CvssReading None { get; } = new(null, null, null, "unknown", false, null);
+    }
+
+    /// <summary>
+    /// NVD's own metric if it published one, else the designated Primary, else the first scorable
+    /// entry. Ordering within the array is deliberately NOT used as a tie-break — it is exactly the
+    /// signal that proved unreliable.
+    /// </summary>
+    private static JsonElement? SelectMetric(IEnumerable<JsonElement> family)
+    {
+        JsonElement? primary = null;
+        JsonElement? first = null;
+
+        foreach (var metric in family)
+        {
+            if (metric.Prop("cvssData") is null)
+                continue;
+
+            if (IsNvdAuthored(metric))
+                return metric;
+
+            if (primary is null && metric.StringOrNull("type") == "Primary")
+                primary = metric;
+
+            first ??= metric;
+        }
+
+        return primary ?? first;
+    }
+
+    /// <summary>
+    /// Authorship is the <c>source</c> identifier, not the <c>type</c> flag: NVD marks a metric
+    /// Primary when it adopts a CNA's analysis as authoritative, which is a statement about status,
+    /// not about who computed the score.
+    /// </summary>
+    private static bool IsNvdAuthored(JsonElement metric) =>
+        metric.StringOrNull("source") == NvdScoreSource;
 
     private static string NormalizeSeverity(string? raw) => raw?.ToLowerInvariant() switch
     {

@@ -846,6 +846,88 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
+### 2026-07-29 — Phase 5 PARSE SLICE 1 (nvd · kev · epss) · green at 349 · NOT MERGED
+
+**Three of eight feeds are now parse-tested against REAL captured payloads.** 322 → **349 passing,
+0 skipped, 0 failed** (Contracts 19 · Content **36** · Connectors unit 120 · IntegrationTests 40 ·
+Vault 80 · Connectors.IntegrationTests 54), measured from a completed run with Postgres and the lab
+fleet up. Vault and Connectors unregressed.
+
+**The fixtures on disk were fabrications, and that was the first thing to fix.** `nvd.sample.json`
+and `kev.sample.json` were hand-written **in the same commit as the parsers they fed** — fictional
+vendors (`FooCorp`/`libfoo`), fictional CVE ids, and containing *only* the keys each parser reads. A
+parser asserted against a fixture written to that parser proves self-consistency and nothing else.
+Both deleted and replaced with live captures; `Samples/PROVENANCE.md` records URL, date, size and
+selection reasoning for each, and says plainly that a hand-authored payload must never be
+reintroduced.
+
+**Two real defects, each proven red-first on real data.**
+
+- **NVD imported a third party's CVSS and labelled it as NVD's.** `ReadCvss` took the first entry in
+  a metric family with no preference for who authored it. On `CVE-2024-0182` the leading entry is
+  vuldb's — so the advisory recorded **7.3/HIGH where NVD says 9.8/CRITICAL**, a different severity
+  band, and then set `CvssSource = "nvd"` regardless. Red-first: `Expected: 9.8 / Actual: 7.3`.
+  **This is not an edge case** — a scan of 300 consecutive real CVEs found **125** with a Secondary
+  listed first and disagreeing, roughly 40% of the feed.
+- **KEV asserted "no ransomware" from a source that said "unknown".** `RansomwareUse` mapped
+  `"unknown" => false` two lines below a comment stating the opposite. Red-first:
+  `Expected: null / Actual: False`. CISA's "Unknown" means *not confirmed*, not *confirmed absent*;
+  recording false lets Phase 7 read absence of evidence as evidence of absence — the same mistake
+  the frozen schema already forbids for `kev.listed`.
+
+**The fix was constrained by a frozen contract, which shaped it.** `cvss.source` is
+`$ref: #/$defs/feed` and `advisories.cvss_source` is CHECK-constrained to the eight feed names, so a
+vendor's own identifier cannot go there. Selection now prefers NVD's own metric; attribution is set
+only when NVD really authored it; and the originating party is preserved in `source_metadata`
+(`{"cvssOriginator":"product-security@qualcomm.com"}` on `CVE-2023-33025`) so nulling `CvssSource`
+stops the lie **without losing the answer** — "who scored this 9.8?" stays answerable (CLAUDE.md §4.6).
+
+**Five mutation guards, all confirmed red then reverted** via `scripts/mutation-guard.ps1`: removing
+the Primary/authorship preference · restoring the unconditional `CvssSource = "nvd"` · discarding the
+originator · restoring `"unknown" => false` · and removing `JsonHelpers.DoubleOrNull`'s string branch.
+That last one matters most: **EPSS passed on the first run**, so its tests had never been seen red.
+EPSS sends scores as JSON *strings* (`"0.859740000"`); drop the string branch and `score is null`
+sends every record down a `continue` — **7 EPSS tests go red, and in production it would be an empty
+batch reported as a successful sync.**
+
+**Three of eight connectors cannot work against their real feeds — found by probing each
+`DefaultEndpoint`.** Recorded in `phase-5.md`, each the entry condition for its own slice:
+
+| Feed | Observed | Consequence |
+|---|---|---|
+| `dsa` | **404** | Debian's live data is CVE-keyed at a different path — a redesign, not a URL swap |
+| `msrc` | **400 Invalid ID** | fails loudly |
+| **`rhsa`** | **200, but the body is a JSON array** | `Parse` reads `root.Array("advisories")`; `JsonHelpers.Array` returns `[]` for a non-object receiver → **empty batch, `status = 'ok'`, cursor advanced** |
+
+**`rhsa` belongs in this project's recurring-hazard list**: an operator sees a green sync and an empty
+catalogue. *Reports success while untrue* — the same class as Phase 2's `Complete` and Phase 3's
+checks that could not fire. `rhsa` and `msrc` also parse **invented envelopes** that resemble no real
+Red Hat or Microsoft format, so their logic is not merely untested — it is written against a shape no
+server produces.
+
+**Also corrected: a false doc claim.** `NvdConnector` said "Incremental via `lastModStartDate`". It
+is not. **No connector reads `state.Cursor`** — cursors are computed and persisted but never sent
+back to any feed, so refresh is idempotent but **not incremental**. NVD pagination is unimplemented
+too (`startIndex`/`totalResults` never read), so a multi-page response is **silently truncated to
+page 1** — a second silent-truncation path. Exit criterion (b) stays unticked because the feature is
+missing, not merely untested.
+
+**Carried forward:**
+- **Five feeds have no parse test** — `usn` (endpoint live, 260 MB, slice 2), `dsa`, `rhsa`, `msrc`,
+  `wsusscn2`. Criterion (a) is ticked **3 of 8**, named, not rounded up.
+- **`wsusscn2` still has no fixture and must not be given a hand-written one.** The cab is ~627 MB,
+  gitignored, absent from this worktree, and its expander has never run. Supersedence inversion is
+  the highest-consequence logic in the module; a fabricated `package.xml` would make it look tested.
+- **Whether a Rejected CVE should become an advisory is unanswered.** Every no-metrics NVD record in
+  the sampled window was Rejected, and `Parse` ingests them regardless of `vulnStatus`. Deliberately
+  not settled by a fixture.
+- The two standing items are unchanged: **no phase owns the logging pipeline or deployment
+  packaging**, and the **alpine→Debian(glibc) Postgres revert (ADR 0009)** is required before any
+  perf work or production packaging.
+
+**Not merged, not pushed.** `main` untouched at `614f911`. The branch has diverged from
+`origin/phase/5-content` (rebased), so pushing needs `--force-with-lease`.
+
 ### 2026-07-28 — Phase 5 FOUNDATION · `phase/5-content` rebased onto `main` · green at 322 · NOT MERGED
 
 **Foundation only. No content-parsing work was done, and none is claimed.** `phase/5-content` was

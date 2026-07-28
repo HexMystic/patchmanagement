@@ -1,30 +1,38 @@
 {
   "title": "CISA Catalog of Known Exploited Vulnerabilities",
-  "catalogVersion": "2024.02.01",
-  "dateReleased": "2024-02-01T14:00:00.0000Z",
-  "count": 2,
+  "catalogVersion": "2026.07.27",
+  "dateReleased": "2026-07-27T19:00:15.8632Z",
+  "count": 1655,
   "vulnerabilities": [
     {
-      "cveID": "CVE-2024-0001",
-      "vendorProject": "FooCorp",
-      "product": "libfoo",
-      "vulnerabilityName": "FooCorp libfoo Heap Overflow",
-      "dateAdded": "2024-02-05",
-      "shortDescription": "Exploited in the wild.",
-      "requiredAction": "Apply updates.",
-      "dueDate": "2024-02-19",
+      "cveID": "CVE-2021-40539",
+      "vendorProject": "Zoho",
+      "product": "ManageEngine",
+      "vulnerabilityName": "Zoho ManageEngine ADSelfService Plus Authentication Bypass Vulnerability",
+      "dateAdded": "2021-11-03",
+      "shortDescription": "Zoho ManageEngine ADSelfService Plus contains an authentication bypass vulnerability affecting the REST API URLs which allow for remote code execution.",
+      "requiredAction": "Apply updates per vendor instructions.",
+      "dueDate": "2021-11-17",
       "knownRansomwareCampaignUse": "Known",
-      "notes": ""
+      "notes": "https://nvd.nist.gov/vuln/detail/CVE-2021-40539",
+      "cwes": [
+        "CWE-55"
+      ]
     },
     {
-      "cveID": "CVE-2024-0009",
-      "vendorProject": "BazCorp",
-      "product": "baz",
-      "vulnerabilityName": "BazCorp baz RCE",
-      "dateAdded": "2024-02-06",
-      "dueDate": "2024-02-20",
+      "cveID": "CVE-2020-29583",
+      "vendorProject": "Zyxel",
+      "product": "Multiple Products",
+      "vulnerabilityName": "Zyxel Multiple Products Use of Hard-Coded Credentials Vulnerability",
+      "dateAdded": "2021-11-03",
+      "shortDescription": "Zyxel firewalls (ATP, USG, VM) and AP Controllers (NXC2500 and NXC5500) contain a use of hard-coded credentials vulnerability in an undocumented account (\"zyfwp\") with an unchangeable password.",
+      "requiredAction": "Apply updates per vendor instructions.",
+      "dueDate": "2022-05-03",
       "knownRansomwareCampaignUse": "Unknown",
-      "notes": ""
+      "notes": "https://nvd.nist.gov/vuln/detail/CVE-2020-29583",
+      "cwes": [
+        "CWE-522"
+      ]
     }
   ]
 }
