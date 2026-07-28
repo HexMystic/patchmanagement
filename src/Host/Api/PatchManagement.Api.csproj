@@ -7,6 +7,7 @@
          by scanning PatchManagement.*.dll in the output directory, so a module the host never
          calls directly is still unreachable in production unless it is referenced here. -->
     <ProjectReference Include="..\..\Modules\Vault\PatchManagement.Vault.csproj" />
+    <ProjectReference Include="..\..\Modules\Connectors\PatchManagement.Connectors.csproj" />
   </ItemGroup>
 
   <ItemGroup>

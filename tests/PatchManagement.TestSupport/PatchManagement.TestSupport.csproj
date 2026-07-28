@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Shared test helpers, deliberately NOT a test project: no test SDK, no xunit.
+    Keeping it assertion-free lets every suite consume it without inheriting a
+    runner, and lets helpers return results the caller asserts on.
+
+    It references PatchManagement.Contracts ONLY. It must never reference the
+    Vault or the Connectors module: docs/phases/phase-3.md requires the connector
+    suite to run without the Phase 2 vault existing, and a reference here would
+    quietly put the vault assembly back in every consumer's output directory.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Shared\Contracts\PatchManagement.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

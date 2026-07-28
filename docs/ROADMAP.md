@@ -19,7 +19,7 @@ separate worktrees. **Phase 8 is solo.**
 | 0 | Environment & design | solo | — | **complete** |
 | 1 | Contracts | solo | 0 | **complete** |
 | 2 | Credential vault | parallel | 1 | **complete** |
-| 3 | Endpoint connector | parallel | 1 | **in-progress** |
+| 3 | Endpoint connector | parallel | 1 | **in-progress** — built, 311 green, **unmerged; cold review R4 found 1 medium + 1 low, both fixed (the #7 enforcement model was replaced), awaiting a FIFTH cold review**; SSH verified, WinRM unverified |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
 | 5 | Content ingestion | parallel | 1 | **in-progress** |
 | 6 | Assessment | solo | 4, 5 | not-started |
@@ -122,15 +122,203 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
   recorded as Phase 2 hardening.
 - **Detail:** `docs/phases/phase-2.md`. See `docs/THREAT-MODEL.md`.
 
-## Phase 3 — Endpoint connector  · parallel · Status: in-progress
-- **Goal:** `IEndpointConnector` with WinRM and SSH implementations.
+## Phase 3 — Endpoint connector  · parallel · Status: in-progress (awaiting cold review)
+- **Goal:** `IEndpointConnector` with SSH **and** WinRM implementations. *(As built: the SSH half is
+  verified against the lab fleet; the WinRM half is written and unverified — see the status note
+  below. The goal is not the achievement.)*
 - **Dependencies:** Phase 1.
 - **Exit criteria:** Provider-neutral connector (bastion vs direct is config, not
   code); every operation idempotent + time-bounded with `CancellationToken`;
   connection pooling/concurrency limits (the scaling wall); integration tests
   against the lab fleet over SSH.
-- **Owned paths:** `src/Modules/Connectors`.
+- **Owned paths:** `src/Modules/Connectors`, plus `src/Shared/Contracts/Connectors`
+  ([ADR 0017](adr/0017-connector-contract-surface.md)).
 - **Detail:** `docs/phases/phase-3.md`. See `docs/adr/0003-cloud-agnostic-connector.md`.
+
+### Status at the close of the build — SSH verified, WINDOWS NOT
+
+All six exit criteria (a)–(f) are met **for the SSH/Linux path**, each ticked in `phase-3.md` against
+the specific test that proves it. Criterion (c) is proven only by `SshFleetTests`, a theory over all
+five lab containers against real sshd — no unit stand-in satisfies it.
+
+> **⚠ The Windows path has never run against a Windows host, and this phase does not claim it has.**
+> `WinRmConnector`/`HttpWinRmClient` are **written and unverified**. No Windows target exists here and
+> the guardrail (ADR 0007) denies every WinRM cmdlet from a dev session, so the path is untestable in
+> this repository by construction. The WinRM suite runs against a **scripted HTTP handler**: it proves
+> what the client *sends* and how it reacts to what it is *told*, and it found and fixed four real
+> transport defects that way. It proves nothing about how a real WinRM server responds. A green WinRM
+> suite is a statement about this client, not about WinRM. Real-host verification is **D-303 (Phase 8)**.
+
+**Tests: 311 passing, 0 skipped.** Contracts 19 · Connectors unit 120 · IntegrationTests 38 ·
+Vault 80 (unregressed — Phase 3 did not disturb Phase 2) · **Connectors.IntegrationTests 54**.
+
+> **Correction (cold review R2).** This line previously read "267 passing, 0 skipped · Connectors unit
+> 86". **That number was never observed and could not have been.**
+> `TimeoutTests.The_connectivity_probe_honours_its_configured_budget_rather_than_a_compiled_in_one`
+> awaited a signal that its fake could never raise and carried no timeout, so the connector unit
+> project **hung instead of finishing** — no run of it has ever produced a total. The project held
+> **92** tests at that point, not 86; it holds 113 now that the fix pass has added coverage. The hang
+> is fixed and every count above is measured from a completed run.
+
+> **Cold review R3 (third pass) — no criticals.** It re-ran the whole suite and confirmed 304/0-skipped
+> was real this time, then broke every guarantee R2's fix pass introduced: the never-log scans (planted
+> secrets in `WinRmConnector` and the real `SshNetSessionFactory` — both went red), the governor's
+> cancel-mid-acquire unwind (deleting either release goes red), and the red-first claims for the stdin
+> and concurrent-transfer fixes (re-run against the pre-fix blobs on the real lab: 3-of-4 and 2-of-3
+> red, with the documented controls staying green). All held. **Its 2 mediums and 2 lows are fixed
+> below; the count moved 304 → 308.**
+
+**R3 dispositions.**
+
+> **Correction (cold review R4).** M1 below claimed the replacement meant "laundering the secret
+> through any number of intermediates is still caught". **That was false, and the phrase has been
+> struck from it.** It held only for straight-line local assignment: `SecretFlowScanner` seeds taint
+> from assignments, and a method parameter is not an assignment, so extracting one helper —
+> `DecodeSecret(byte[] m) => Encoding.UTF8.GetString(m)` — laundered a private key with all 117 tests
+> green. R4 built that exploit in the real `SshNetSessionFactory` and confirmed it. See the R4
+> dispositions below for what now carries the guarantee.
+
+- **M1 — the no-plaintext-string guarantee only covered one syntactic form.** Splitting
+  `Encoding.UTF8.GetString(credential.Secret)` into two statements reintroduced the immortal managed
+  string with all 113 tests green. Replaced the statement-scoped pattern with `SecretFlowScanner`,
+  which follows the bytes through local assignments to a fixpoint (and through `CopyTo` into a
+  buffer). Proven red-first against both forms and a three-hop chain. **The review asked for a behavioural assertion
+  instead; that is not achievable and the attempt was measured, not assumed** —
+  `NetworkCredential` reports a non-null, non-read-only `SecurePassword` of identical length whichever
+  constructor built it, so `Assert.NotNull(SecurePassword)` passes for the defect exactly as it passes
+  for the fix. The managed string is created *before* the credential exists, and a string that is
+  created and later collected is indistinguishable at runtime from one that never existed.
+  `HttpWinRmClientTests` had already recorded this. The old pattern is kept alongside the new one.
+- **M2 — `AllowCredentialDelegation` documented delegation it does not perform.** The flag's only
+  effect is skipping the double-hop refusal; nothing anywhere configures CredSSP or Kerberos. The
+  contract now says so at the property, names the honest-refusal → opaque-failure trade explicitly,
+  and points at **D-304**. Doc-only; the delegation itself stays deferred.
+- **L1 — the pool closed sessions under active borrowers at shutdown.** `DisposeAsync` waited on each
+  entry's gate but never checked `InUse`, and the gate is free while an operation runs — so shutdown
+  disposed live transports and the borrower faulted with `ObjectDisposedException`, which
+  `SshConnector` excludes from `IsTransportFault` as a caller bug and which therefore escaped untyped
+  from a typed-results API. Now "last one out turns off the lights": idle entries are torn down
+  immediately, borrowed ones are handed to the returning lease (gate included, or returning it would
+  fault on a disposed semaphore by a new route). Fixed rather than deferred because it is small and
+  testable, and both halves are mutation-checked. `IsTransportFault` is unchanged — with the race gone,
+  an `ObjectDisposedException` really does mean a disposed connector, which is a caller bug.
+- **L2 — `_sftp` was non-volatile beside a volatile `_disposed`,** and read on the deliberately
+  unsynchronised fast path. Marked `volatile`. No test: the reordering it prevents is unobservable on
+  x86/x64, which is the only architecture the lab runs, so any test would pass for the wrong reason —
+  it would first matter on an ARM64 host.
+
+> **Cold review R4 (fourth pass) — no criticals. 1 medium and 1 low fixed; 1 low deliberately not
+> changed.** It re-ran the whole suite and confirmed 308/0-skipped, then attacked R3's own fixes. Most
+> held: the pool-disposal fix and both its halves survived mutation, the `NetworkCredential`
+> measurement that justified rejecting a behavioural assertion was independently reproduced and is
+> correct, and `AllowCredentialDelegation` was confirmed comment-only against all four usage sites.
+> Two did not — **including the #7 guarantee R3 had just rebuilt, which is why the enforcement model
+> for it changed rather than the pattern.** **Count 308 → 311.**
+
+**R4 dispositions.**
+
+- **F1 (medium) — the #7 guarantee had a hole the size of an extract-method refactor.** R4 planted a
+  real laundering path in `SshNetSessionFactory.ReadPrivateKey` — `var passphrase = DecodeSecret(bytes);`
+  with `DecodeSecret(byte[] m) => Encoding.UTF8.GetString(m)` — and **all 117 tests stayed green** while
+  a plaintext private key sat in an immortal managed string. `SecretFlowScanner` seeds taint from
+  assignments and `CopyTo` only, so a *parameter* is never tainted; lambdas, local functions, extension
+  methods, `out` parameters, instance fields and cross-file helpers all walk past it identically (7 of
+  10 probed shapes undetected).
+  **The fix is a change of enforcement model, not a better analysis.** `SecretMaterialisationScanner`
+  ignores the data entirely and restricts the *capability*: it enumerates every call in the connector
+  surface that can turn bytes or chars into managed text — there are exactly **four** — and the test
+  pins each to a written justification. A fifth is red by default, whichever helper, lambda or field fed
+  it, because the shape is irrelevant to it. Fail-closed where the old check was fail-open. Red-first
+  against R4's exploit verbatim (red at the exact line, with both flow checks staying green, which is
+  the point), green after; mutation-guarded — blinding the scanner turns two tests red, including a
+  stale-allow-list assertion that catches the "scan matches nothing" failure this module shipped twice.
+  `SecretFlowScanner` is **retained behind it** for the one case the ban cannot see: a secret reaching
+  one of the four calls that *are* allowed. The scan also now covers
+  `src/Shared/Contracts/Credentials`, which holds `ResolvedCredential` and was outside every previous
+  scan.
+  **Behavioural enforcement was built and measured, not dismissed** — see HARD-PROBLEMS §13. It cannot
+  work here: SSH.NET leaves 4 managed copies of every key it parses, `NetworkCredential.Password`
+  creates another, and `SecureString.AppendChar` decrypts to append so even the correct first-party path
+  leaves up to 3 transient copies — nondeterministically (1 run in 5 showed them; 4 showed none).
+- **F2 (low/medium) — `EvictIdle`'s `_disposed` guard was check-then-act and did not close the race it
+  documented.** The evictor read the flag, took an entry, and could be descheduled while `DisposeAsync`
+  disposed that entry's gate; `_entries.Clear()` does not help because the evictor already holds the
+  reference. R4 reproduced `ObjectDisposedException` from `EvictIdle` in 150-286 randomised iterations;
+  the committed repro hits it in ~22. Under the real system timer that callback has no caller, so this
+  is process termination at shutdown. **A volatile flag cannot fix this and the flag was already
+  volatile** — the fix is mutual exclusion: the evictor holds a lifetime lock across its *whole* sweep,
+  so either the sweep completes before disposal sets the flag or it starts after and returns at once.
+  Red-first (22 iterations), green across 100,000 verified iterations; mutation-guarded (removing only
+  the evictor's lock goes red at 122, and at 379 after the refinement below).
+  **The sweep takes ownership under the lock and closes transports outside it.** Naively, the lock
+  would be held across `Session.Dispose()` — network I/O that can block — and `AcquireAsync` calls
+  `EvictIdle` on its way in, so a slow close would stall every acquire on the pool. Entries are removed
+  from `_entries` under the lock (which is what makes the deferred close safe: disposal only ever walks
+  `_entries`, so it can never see them) and closed after releasing it.
+  **Residual, not fixed here:** `AcquireAsync` still runs a full sweep on every borrow, now under the
+  lifetime lock, so acquires serialise on an O(entries) scan. That scan predates this fix; the lock
+  makes it serial. The eviction timer already covers quiet pools, so the call from `AcquireAsync` looks
+  redundant — but removing it is a behavioural change to eviction timing and outside R4's scope.
+  Raised as **D-310, owner Phase 4** (which is where pool load first becomes real).
+- **F3 (low) — flow analysis over-reports across methods in a file.** Deliberately **not changed**.
+  It is an over-report, which is the safe direction; it no longer carries the guarantee, so the pressure
+  to weaken it when it fires is gone; and "fixing" it by scoping taint per method would *remove* real
+  coverage, since a secret assigned in one method and used in another is a genuine pattern. What was
+  wrong was the documentation, not the behaviour — corrected below.
+- **Two false claims corrected, which R4 rightly called the worst part.** `SecretFlowScanner`'s own doc
+  argued it "can only report MORE than the truth, whereas an under-report is a guarantee that quietly
+  does not hold" — it under-reports, on the most ordinary refactor there is, and a guard whose docs deny
+  the exact way it fails stops the next reader looking. M1 above claimed "any number of intermediates";
+  true only for straight-line locals. Both struck, with the correction left in place rather than the
+  claim quietly deleted.
+
+The 54 fleet tests are **tests that require the lab fleet**, not optional extras. They hard-fail with
+an actionable message when the fleet is down rather than skipping, because a silently-skipped fleet
+looks exactly like a passing one and would quietly corrupt the count above. Run them with the fleet up
+(`docker compose -f lab/docker-compose.yml up -d`, from the main worktree per WORKFLOW §3).
+
+**Notable findings during the build**, each fixed with a red-first test and recorded in its commit:
+
+- **The module could not resolve in the shipped host at all** — connectors registered as singletons
+  captured the scoped `ICredentialProvider`. Found by the host-discovery guard, not by reading.
+- **Two tenants shared one authenticated SSH session.** The pool keyed on `host:port#credentialId`, so
+  isolation held only because credential ids happen to differ per tenant — incidental, not enforced.
+  RLS separates tenants in the database; nothing separated them in the connection pool.
+- **A rejected credential was reported as a timeout.** The lab's sshd takes ~10.15s to reject a key
+  (measured, stock OpenSSH client); a single 15s budget ran out mid-exchange. Reachability and
+  authentication are now budgeted separately — unreachable is detected *faster* and auth rejection is
+  classified correctly.
+- **Host keys were accepted unconditionally** (`e.CanTrust = true`), making every connection
+  interceptable. Now configuration, defaulting to refuse; the lab opts in explicitly.
+- **WinRM double-hop detection was inert** — `\b-ComputerName` can never match, because a word
+  boundary cannot sit between a space and a hyphen. The check HARD-PROBLEMS #9 relies on had never
+  fired.
+- **WinRM calls went out unauthenticated** whenever an `IHttpClientFactory` was registered: the
+  credential was built and then discarded.
+- **The WinRM receive loop was unbounded** — it exhausted the process rather than merely hanging.
+
+### Phase 3 deferrals — every one has a named owner and a gate
+
+`DIFFERENTIATORS.md` forbids deferring without a named owner. Each row states what the owner
+inherits and what it cannot claim until then.
+
+| ID | Deferred | Owner | Gate — what cannot be claimed until it lands |
+|----|----------|-------|----------------------------------------------|
+| **D-301** | Persistent verified-host-key (TOFU) store. The *seam* and reject-by-default ship now | **Phase 4** — it belongs with asset persistence | The connector **cannot be pointed at a real fleet**. `AllowUnknownHostKeys` defaults false, so production either refuses to connect or an operator disables verification wholesale. That flag is the gate, deliberately |
+| **D-302** | Windows facts collection (`WindowsFactsParser`) | **Phase 8** | Inventory over WinRM returns `Unsupported`, test-enforced. Phase 6 assessment cannot cover Windows hosts |
+| **D-303** | **WinRM verification against a real Windows host** | **Phase 8** | **The Windows path is unproven.** Phase 8 inherits an implementation that compiles, has transport-seam coverage, and has never spoken to a Windows machine. It cannot be claimed working — the SOAP envelopes, Negotiate/NTLM, the shell lifecycle and the base64 transfer round-trip are all unobserved. A Windows wave planned on this is planning on untested code |
+| **D-304** | **CredSSP / constrained-Kerberos delegation — the double-hop *solution*** | **Phase 8** | Phase 3 only **surfaces** `DoubleHopRequired` instead of hanging, which is its whole obligation under HARD-PROBLEMS #9. Any Phase 8 flow needing a second hop (an SMB payload fetch, an onward session) will be refused, not silently attempted. `AllowCredentialDelegation` currently only *skips the check* — it delegates nothing |
+| **D-305** | Redis-backed distributed concurrency tokens | **Phase 11** (scheduling) | The budget is per-process. Multi-instance deployments would each hold a full budget. The `IConnectionGovernor` surface is already scheduler-ready, so this is an implementation, not a redesign |
+| **D-306** | Multi-hop (>1) bastion chains | **Phase 4** — topology lives with assets | A two-hop plan is **refused by name**, not silently truncated to the first hop |
+| **D-307** | Passphrase-protected private keys; `CredentialKind` expansion | **Phase 15** (key custody) | `new PrivateKeyFile(stream)` is key-only; an encrypted key fails as `ProtocolError` |
+| **D-308** | Collapse `Vault.Tests/Support` onto the shared `TestSupport` project | **Phase 15** — the next phase to edit vault tests | Two capturing-logger implementations coexist. Kept out of Phase 3 to hold this phase's diff inside its owned paths |
+| **D-310** | `AcquireAsync` runs a full eviction sweep per borrow, now under the pool's lifetime lock | **Phase 4** — where pool load first becomes real | The O(entries) scan predates R4; the lock added to fix the shutdown race makes it serial. The timer already evicts quiet pools, so the call may simply be redundant — but dropping it changes eviction timing, which is outside R4's scope |
+| **D-311** | Extend the text-materialisation ban to `src/Modules/Vault` | **Phase 15** — the next phase to edit vault tests | The ban covers the connector surface only. Phase 2 has two materialising calls (username decode; KEK base64 for the key file) — both legitimate, both already documented, neither enforced. Held out of Phase 3: the vault is Phase 2's owned path and `Connectors.Tests` has no vault dependency by design |
+| **D-309** | SSH password / keyboard-interactive auth | **Phase 8** | Key-only. The lab is key-only by construction, so this is untested either way |
+
+**Also inherited by Phase 8, and worth stating plainly:** the sudo-password path (`sudo -S`) is proven
+only against a fake session. The lab grants `NOPASSWD` sudo with a locked account password, so it
+**structurally cannot** exercise it — a green fleet run says nothing about it.
 
 ## Phase 4 — Discovery & inventory  · parallel · Status: not-started
 - **Goal:** Discover endpoints; build inventory; surface **unmanaged assets**.
@@ -650,7 +838,122 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
-### 2026-07-26 (merge) — Phase 2 MERGED to main · 135 green on main · RESUME HERE
+### 2026-07-28 — Phase 3 cold review R2 + fix pass · STILL NOT MERGED · awaiting a THIRD cold review · RESUME HERE
+
+A genuinely cold review of `phase/3-connector` (no history of the build) returned **four criticals,
+every one verified by execution rather than by reading**, plus five mediums. All are fixed. **`main`
+is still untouched and this must not merge yet** — Phase 2 introduced two of its criticals *in the
+remediation*, and this remediation is larger than that one was.
+
+**The four criticals.**
+
+1. **The unit suite had never completed.** `TimeoutTests.The_connectivity_probe_honours_its_configured_budget`
+   awaited `StallingSshSession.Entered`, but `TestConnectivityAsync` never runs a session operation —
+   reaching an authenticated session *is* the proof — so the signal could not fire, and the test had
+   no timeout. The project hung rather than failed. **"267 passing, 0 skipped" was therefore a number
+   nobody could ever have observed**; the project holds 92 tests, not 86. Fixed with a stalling
+   *factory* (a probe spends its time in connect), a boundary walk from both sides, and a `Timeout`
+   backstop. Counts corrected in both docs, with the false claim left visible below as the record.
+2. **The `sudo -S` path was dead against real SSH.NET.** `SshNetSession.RunAsync` created the input
+   stream *before* starting execution; SSH.NET 2025.1.0 refuses that outright. Every elevated command
+   carrying a sudo password threw `InvalidOperationException` straight out of the connector, past a
+   contract that promises typed results. Invisible because the unit suite stops at
+   `RecordingSshSession` and the lab is NOPASSWD, so **no test had ever written a byte to stdin
+   through SSH.NET**.
+3. **Concurrent transfers over one pooled session corrupted each other.** `EnsureSftpAsync` did
+   check→dispose→assign→connect unsynchronised, so a second borrower disposed the SFTP client the
+   first was still connecting; both failed and the orphan leaked an authenticated transport. Two
+   concurrent pushes to one host is the ordinary shape of a wave. `SessionCapTests` gives every
+   operation its own host *by design*, so the pool's central promise was never exercised.
+4. **The NeverLog guarantee was enforced by nothing.** Every assertion built an `SshConnector` over a
+   stub factory; WinRM and the real SSH factory had no coverage. The reviewer planted a secret in each
+   and the whole suite stayed green.
+
+**Mediums:** #5 the governor's cancel-mid-acquire test could not see a leaked permit (the whole unwind
+could be deleted and it passed); #6 `IOperationCoordinator` was keyed on the raw idempotency key in a
+process-wide singleton, so one tenant could stall another's deployments — the `ConnectionKey` defect,
+unfixed one line away; #7 the WinRM password became an immortal managed string; #8 the WinRM probe used
+a compiled-in 15s; #9 WinRM had no structural deadline.
+
+**Two lessons worth carrying forward.**
+
+- **Disjoint fake and lab coverage is what let #2 and #3 survive.** Neither was subtle; both sat in a
+  seam that one suite stopped short of and the other stepped over. Every fix here is red-first
+  *against the real transport*, and the lab suite grew from 44 to 54 facts because of it.
+- **A test can pass for reasons unrelated to its name.** #1 hung, #5's mutation survived, and the
+  first version of #3's reproduction *passed against the broken code* because the pool's own
+  serialisation hid the race. Each fix is mutation-checked with `scripts/mutation-guard.ps1`, which
+  refuses to run a suite against source the mutation did not actually land in.
+
+**Tests: Contracts 19 · Connectors unit 113 · IntegrationTests 38 · Vault 80 (unregressed) · fleet 54
+= 304, zero skipped.** WinRM remains **written and unverified** — these were transport-seam fixes and
+**D-303 (Phase 8) still owns real-host verification**.
+
+### 2026-07-28 — Phase 3 built to green · NOT MERGED · awaiting a COLD review
+
+`phase/3-connector` rebased onto `main` (zero conflicts — the WIP was one purely additive commit) and
+brought from "module surface only, no tests, not in the .sln" to **267 passing, 0 skipped**.
+
+**⛔ DO NOT MERGE YET.** `main` is untouched. The next step is **one genuinely cold review** — a fresh
+session with **no history of this build**. That is not ceremony: on Phase 2, two of the criticals were
+introduced by the remediation itself and were caught only because someone looked again with fresh
+eyes, and every review before that had run in the same context as the code. The same context that
+wrote this phase must not sign it off.
+
+**Tests: Contracts 19 · Connectors unit 86 · IntegrationTests 38 · Vault 80 · fleet 44 = 267, zero
+skipped.** Vault unregressed. The 44 fleet tests **require the lab fleet** and hard-fail (never skip)
+when it is down. Verified on freshly built assemblies — see the preflight note below.
+
+> **⛔ THE PARAGRAPH ABOVE IS FALSE — left in place as the record of what was claimed.** The connector
+> unit project **hung** and never produced a total (see the 2026-07-28 R2 entry at the top of this log),
+> so "267, zero skipped" was never measured. Real figures: Connectors unit **92**, total **273**.
+
+**Commits (10):** `d78b9b7` solution + first compile → `16cca40` test projects + TestSupport →
+`716fb56` contract surface to Contracts → `9a4607a` credentials + sudo → `b282d1b` governor +
+ConnectionKey (atomic) → `f1c8bcc` TimeProvider deadlines → `88d850c` protocol-keyed resolution +
+bastion → `f349dc3` NeverLog scan → `ae09d20` fleet integration → `e520b2b` budget split →
+`447e63e` WinRM transport defects.
+
+**⚠ THE WINDOWS PATH HAS NEVER RUN AGAINST A WINDOWS HOST.** WinRM is **written and unverified**. No
+Windows target exists here and the guardrail denies every WinRM cmdlet from a dev session, so it is
+untestable in this repo by construction. Its suite runs against a scripted HTTP handler — it proves
+what the client sends and how it reacts to what it is told, and found four real transport defects that
+way. It says nothing about how a real WinRM server responds. **D-303, owner Phase 8.**
+
+**Seven defects that the tests found and reading had not:**
+1. The module **could not resolve in the shipped host at all** — singletons capturing the scoped
+   `ICredentialProvider`. Found by the host-discovery guard.
+2. **Two tenants shared one authenticated SSH session** — the pool key omitted the tenant, so
+   isolation was incidental to credential-id uniqueness. RLS separates tenants in the database;
+   nothing separated them in the pool.
+3. **A rejected credential reported as a timeout** (~10.15s server rejection vs a 15s single budget).
+4. **Host keys accepted unconditionally** — every connection interceptable.
+5. **Double-hop detection inert** — `\b-ComputerName` cannot match; it had never fired.
+6. **WinRM unauthenticated** whenever an `IHttpClientFactory` was registered.
+7. **WinRM receive loop unbounded** — exhausts the process, not merely hangs.
+
+**Three recurrences of one tooling hazard, now mechanised.** Scripted patches that silently fail to
+match and report success bit three times (a regex revert, a log probe, a diagnostic patch). A run
+against unmutated source is indistinguishable from a test that cannot catch the defect.
+`scripts/mutation-guard.ps1` now refuses to proceed unless git sees the file modified **and** the
+marker is present. Related: `scripts/test-preflight.ps1` fails when a stale `testhost` holds the
+output assemblies — that happened once here, and MSBuild reports it as a *warning* under a
+"Build succeeded", so a suite ran against code that was not on disk. Both are the build-layer form of
+this project's characteristic failure: reporting success while untrue.
+
+**Two tests that passed for the wrong reason, found by mutation, not review.** The WinRM receive-loop
+test asserted only that `Timeout` eventually arrived — it passed against the unbounded loop in 95s
+instead of 0.5s. The session-cap test measured live sessions, which for a pooling connector counts
+every session ever created. Both now assert the property that actually matters (elapsed time; peak
+concurrent *operations*). A green test is not evidence until it has been seen red for the right reason.
+
+**For the cold reviewer.** Start at `docs/phases/phase-3.md` — every exit criterion names the test
+that proves it. The highest-value targets: the concurrency governor (fairness ordering, waiter
+accounting, pruning under cancellation), the credential lifecycle on failure paths, and whether the
+NeverLog scans can actually fail. Assume any convention regex is inert until proven otherwise — one
+already was.
+
+### 2026-07-26 (merge) — Phase 2 MERGED to main · 135 green on main
 **`phase/2-vault` is merged.** `--no-ff` at **`19956af`**, pushed (`42529db..19956af`). 24 commits
 plus the merge. **Phase 2 (Credential vault) is `complete`.**
 
