@@ -75,6 +75,38 @@ will not drift, and between them they cover both branches of the ransomware mapp
 intentional twice over: it documents that the array was truncated, and the parser must not depend on
 it. Do not "correct" it to 2.
 
+## USN — `usn.sample.json`
+
+From `https://usn.ubuntu.com/usn-db/database.json` — the connector's own endpoint. Captured
+**2026-07-29 UTC**, when the live file was **339,603,368 bytes** holding **7,678 notices**.
+
+**Truncated, like KEV, and for the same reason.** 339 MB cannot be committed. What was done:
+
+- The root **is** the map, so keeping a subset of keys preserves the document shape exactly — there
+  is no envelope or counter to reconcile (KEV needed its real `count` deliberately left wrong).
+- Two notice objects are retained **complete and unedited** — no key added, removed, reordered or
+  retyped, no value altered. Verified field-identical to the live database at capture time.
+- Every other key was dropped. That is the only edit. (Whitespace differs: the file is re-serialized
+  with two-space indentation, same caveat as KEV.)
+
+| Notice | Bytes | Why this one |
+|---|---|---|
+| `8465-1` | ~2.4 KB | **One package (`mina2`) across THREE releases at THREE different versions** — `jammy` 2.1.5-1ubuntu0.1~esm1, `noble` 2.2.1-3ubuntu0.1~esm1, `resolute` 2.2.1-4ubuntu0.1~esm1. The per-release fan-out in its purest form: identical package name, so a test asserting only the row *count* would pass while every version was wrong. Includes **`resolute` = 26.04 LTS**, the label that matters most in production. |
+| `4123-1` | ~2.6 KB | `bionic` + `disco` for `node-fstream`, versions differing only in the release suffix (`1.0.10-1ubuntu0.18.04.1` vs `…0.19.04.2`). `disco` was **unmapped** in `DistroReleases`, so this is the fixture that proved the codename gap red-first. |
+
+Both `~esm1` suffixes and the `1ubuntu0.19.04.2` revision are asserted verbatim: `fixed_version` is
+stored raw as sourced (ADR 0011) and nothing may parse or canonicalize it.
+
+**Deliberately NOT covered, because real data does not contain it:** a notice with no CVEs. All
+7,678 notices in the live database carry at least one, so `SourceMetadataJson == null` is
+unreachable from captured data and is left untested rather than fabricated. Likewise, all 29
+codenames appearing in the database exist in Ubuntu's published release list, so after the map fix
+the `ubuntu:<codename>` fallback is no longer reachable from real data either — it remains for
+release series that do not exist yet.
+
+**`USN-4147-1` was considered and rejected**: it is a kernel notice weighing **156 KB** on its own,
+more than twenty times the whole committed fixture, and covers nothing the two above do not.
+
 ## Not captured
 
 `wsusscn2.cab` has **no fixture and will not be given a hand-written one.** The cab is ~627 MB, lives

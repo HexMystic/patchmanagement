@@ -1,0 +1,191 @@
+{
+  "8465-1": {
+    "action": "In general, a standard system update will make all the necessary changes.",
+    "cves": [
+      "CVE-2024-52046",
+      "CVE-2026-42779",
+      "CVE-2026-42778",
+      "CVE-2026-47065"
+    ],
+    "description": "It was discovered that Apache MINA lacked an acceptMatchers allowlist\nmechanism to restrict which classes could be deserialized. An attacker\ncould use this to execute arbitrary code. This issue only affected\nUbuntu 22.04 LTS and Ubuntu 24.04 LTS. (CVE-2024-52046)\n\nIt was discovered that Apache MINA's deserialization filter could be\nbypassed via multiple code paths. An attacker could use this to execute\narbitrary code by sending a specially crafted serialized object over the\nnetwork. (CVE-2026-42778, CVE-2026-42779, CVE-2026-47065)",
+    "id": "8465-1",
+    "isummary": "Apache MINA could be made to run programs if it received specially crafted\nnetwork traffic.",
+    "releases": {
+      "jammy": {
+        "allbinaries": {
+          "libmina2-java": {
+            "pocket": "esm-apps",
+            "source": "mina2",
+            "version": "2.1.5-1ubuntu0.1~esm1"
+          },
+          "libmina2-java-doc": {
+            "pocket": "esm-apps",
+            "source": "mina2",
+            "version": "2.1.5-1ubuntu0.1~esm1"
+          }
+        },
+        "binaries": {
+          "libmina2-java": {
+            "pocket": "esm-apps",
+            "version": "2.1.5-1ubuntu0.1~esm1"
+          }
+        },
+        "sources": {
+          "mina2": {
+            "description": "Apache MINA is a network application framework which helps users develop high performance and high scalability network applications easily",
+            "version": "2.1.5-1ubuntu0.1~esm1"
+          }
+        }
+      },
+      "noble": {
+        "allbinaries": {
+          "libmina2-java": {
+            "pocket": "esm-apps",
+            "source": "mina2",
+            "version": "2.2.1-3ubuntu0.1~esm1"
+          }
+        },
+        "binaries": {
+          "libmina2-java": {
+            "pocket": "esm-apps",
+            "version": "2.2.1-3ubuntu0.1~esm1"
+          }
+        },
+        "sources": {
+          "mina2": {
+            "description": "Apache MINA is a network application framework which helps users develop high performance and high scalability network applications easily",
+            "version": "2.2.1-3ubuntu0.1~esm1"
+          }
+        }
+      },
+      "resolute": {
+        "allbinaries": {
+          "libmina2-java": {
+            "pocket": "esm-apps",
+            "source": "mina2",
+            "version": "2.2.1-4ubuntu0.1~esm1"
+          }
+        },
+        "binaries": {
+          "libmina2-java": {
+            "pocket": "esm-apps",
+            "version": "2.2.1-4ubuntu0.1~esm1"
+          }
+        },
+        "sources": {
+          "mina2": {
+            "description": "Apache MINA is a network application framework which helps users develop high performance and high scalability network applications easily",
+            "version": "2.2.1-4ubuntu0.1~esm1"
+          }
+        }
+      }
+    },
+    "summary": "mina2 vulnerabilities",
+    "timestamp": 1782228956.329703,
+    "title": "Apache MINA vulnerabilities"
+  },
+  "4123-1": {
+    "description": "It was discovered that npm/fstream incorrectly handled certain crafted\ntarballs. An attacker could use this vulnerability to write aritrary files to\nthe filesystem.\n",
+    "releases": {
+      "bionic": {
+        "allbinaries": {
+          "node-fstream": {
+            "pocket": "security",
+            "version": "1.0.10-1ubuntu0.18.04.1"
+          }
+        },
+        "binaries": {
+          "node-fstream": {
+            "pocket": "security",
+            "version": "1.0.10-1ubuntu0.18.04.1"
+          }
+        },
+        "archs": {
+          "source": {
+            "urls": {
+              "http://security.ubuntu.com/ubuntu/pool/universe/n/node-fstream/node-fstream_1.0.10-1ubuntu0.18.04.1.debian.tar.xz": {
+                "md5": "a51b070d3bb0600c7005670df650fe83",
+                "size": 3428
+              },
+              "http://security.ubuntu.com/ubuntu/pool/universe/n/node-fstream/node-fstream_1.0.10.orig.tar.gz": {
+                "md5": "174ab2009ef5de45805d05741a8abfba",
+                "size": 17272
+              },
+              "http://security.ubuntu.com/ubuntu/pool/universe/n/node-fstream/node-fstream_1.0.10-1ubuntu0.18.04.1.dsc": {
+                "md5": "60c3400fc27b8fc111a72f72630afe8a",
+                "size": 2184
+              }
+            }
+          },
+          "all": {
+            "urls": {
+              "http://security.ubuntu.com/ubuntu/pool/universe/n/node-fstream/node-fstream_1.0.10-1ubuntu0.18.04.1_all.deb": {
+                "md5": "afa526d7fab29106c1091fec55f87087",
+                "size": 18408
+              }
+            }
+          }
+        },
+        "sources": {
+          "node-fstream": {
+            "version": "1.0.10-1ubuntu0.18.04.1",
+            "description": "Advanced filesystem streaming tools for Node.js"
+          }
+        }
+      },
+      "disco": {
+        "allbinaries": {
+          "node-fstream": {
+            "version": "1.0.10-1ubuntu0.19.04.2"
+          }
+        },
+        "binaries": {
+          "node-fstream": {
+            "version": "1.0.10-1ubuntu0.19.04.2"
+          }
+        },
+        "archs": {
+          "source": {
+            "urls": {
+              "http://security.ubuntu.com/ubuntu/pool/universe/n/node-fstream/node-fstream_1.0.10.orig.tar.gz": {
+                "md5": "174ab2009ef5de45805d05741a8abfba",
+                "size": 17272
+              },
+              "http://security.ubuntu.com/ubuntu/pool/universe/n/node-fstream/node-fstream_1.0.10-1ubuntu0.19.04.2.debian.tar.xz": {
+                "md5": "d750987fffd373e7319016d1ec721abe",
+                "size": 3424
+              },
+              "http://security.ubuntu.com/ubuntu/pool/universe/n/node-fstream/node-fstream_1.0.10-1ubuntu0.19.04.2.dsc": {
+                "md5": "5e678c538a45a2f0d6db93deedcbce8e",
+                "size": 2184
+              }
+            }
+          },
+          "all": {
+            "urls": {
+              "http://security.ubuntu.com/ubuntu/pool/universe/n/node-fstream/node-fstream_1.0.10-1ubuntu0.19.04.2_all.deb": {
+                "md5": "60a488b3433403cd7e6c0d871f92ac34",
+                "size": 18396
+              }
+            }
+          }
+        },
+        "sources": {
+          "node-fstream": {
+            "version": "1.0.10-1ubuntu0.19.04.2",
+            "description": "Advanced filesystem streaming tools for Node.js"
+          }
+        }
+      }
+    },
+    "title": "npm/fstream vulnerability",
+    "timestamp": 1567687326.441789,
+    "summary": "npm/fstream vulnerability",
+    "action": "In general, a standard system update will make all the necessary changes.\n",
+    "isummary": "npm/fstream could be made to overwrite files.\n",
+    "id": "4123-1",
+    "cves": [
+      "CVE-2019-13173"
+    ]
+  }
+}

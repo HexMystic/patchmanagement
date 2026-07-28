@@ -106,7 +106,7 @@ Each criterion names the test that proves it. **Nothing below is ticked yet.**
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
-| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ◐ **3 of 8** — `nvd`, `kev`, `epss` covered by `NvdParseTests`/`KevParseTests`/`EpssParseTests` against real captures. `usn`, `dsa`, `rhsa`, `msrc`, `wsusscn2` have **no parse test**, and three of those cannot reach their feed at all (section above) |
+| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ◐ **4 of 8** — `nvd`, `kev`, `epss`, **`usn`** covered by `NvdParseTests`/`KevParseTests`/`EpssParseTests`/`UsnParseTests` against real captures. `dsa`, `rhsa`, `msrc`, `wsusscn2` have **no parse test**, and all three HTTP ones cannot reach their feed at all (sections above) |
 | b | Refresh is **incremental** — the cursor advances on success and holds on failure | `ContentSyncService` tests over a scripted connector | ☐ — and note **incrementality is unimplemented**, not just untested: cursors are emitted and persisted but never sent back to any feed |
 | c | Refresh is **idempotent** — the same payload twice writes the same rows | store tests against Postgres | ☐ (grain already pinned by `ContentCatalogueTests`) |
 | d | **Provenance recorded per record**, non-empty, merged rather than overwritten across feeds | store tests asserting the jsonb merge | ☐ |
@@ -126,7 +126,7 @@ seven HTTP connectors do not match reality**, and the failure is not symmetric �
 |---|---|---|---|
 | `nvd` · `kev` · `epss` | — | **200, shape matches** | tested in slice 1 |
 | `usn` | `usn.ubuntu.com/usn-db/database.json` | **200**, root is the expected map, **260 MB** | usable; slice 2 needs a subsetting decision |
-| **`dsa`** | `security-tracker.debian.org/tracker/data/dsa.json` | **404** | fetch fails loudly. Debian's live data is at `/tracker/data/json` (~80 MB) and is **CVE-keyed, not DSA-keyed** — a different shape, so this is a redesign, not a URL swap |
+| **`dsa`** | `security-tracker.debian.org/tracker/data/dsa.json` | **404** | fetch fails loudly. **Debian publishes no JSON advisory feed at any URL** — see the exhaustive probe below |
 | **`rhsa`** | `access.redhat.com/hydra/rest/securitydata/csaf.json` | **200**, but the body is a **JSON array** | `Parse` reads `root.Array("advisories")`; `JsonHelpers.Array` returns `[]` for a non-object receiver, so this yields an **empty batch and a status of `ok`** |
 | **`msrc`** | `api.msrc.microsoft.com/cvrf/v3.0/csaf` | **400 Invalid ID** | fetch fails loudly |
 
@@ -143,6 +143,70 @@ expects `root.vulnerabilities[].remediations[]`; real MSRC serves CVRF/CSAF docu
 Neither resembles the format it claims to consume, so **their `Parse` logic is not merely untested —
 it is written against a format no server produces.** Rewriting each against a real captured payload
 is the entry condition for its slice.
+
+### DSA — every candidate source probed, 2026-07-29
+
+`dsa`'s endpoint is not a typo to correct. Every plausible Debian source was requested:
+
+| Source | Result | DSA ids? | Per-suite fixed versions? |
+|---|---|---|---|
+| `tracker/data/dsa.json` *(the connector's endpoint)* | **404** | — | — |
+| `tracker/data/DSA/list` | **404** | — | — |
+| `tracker/data/json` | 200, **80 MB**, package→CVE→releases | **none — the string `DSA-` does not appear** | per-CVE only |
+| `salsa…/security-tracker/raw/master/data/DSA/list` | 200, 1.1 MB, **plain text** | ✅ 6,466 | ✅ |
+| `www.debian.org/security/dsa-long.rdf` | 200, 28 KB | ✅ but only **31** items | ❌ |
+| `www.debian.org/security/oval/oval-definitions-*.xml` | **403** | — | — |
+
+**Debian publishes no JSON advisory feed.** `DebianDsaConnector` expects a JSON root map of
+`DSA-id → {releases: {suite: {packages: {pkg: {version}}}}}`, which matches nothing Debian serves —
+the same invented-envelope defect already recorded for `rhsa` and `msrc`. The only canonical source
+is line-oriented text:
+
+```
+[28 Jul 2026] DSA-6402-1 hplip - security update
+	{CVE-2026-8631 CVE-2026-8632}
+	[trixie] - hplip 3.22.10+dfsg0-8.1+deb13u1
+```
+
+**Deferred to its own slice, deliberately.** Swapping a JSON parser for a text parser, deciding
+whether a `salsa.debian.org` raw-git URL is an acceptable production dependency, and handling 6,466
+advisories of edge cases (`<not-affected>` ×52, `<end-of-life>` ×4, `<unfixed>` ×2, 12 suites back to
+`woody`) is a data-source decision, not a parse test.
+
+**Rejected: sourcing Debian from the CVE-keyed JSON.** It carries no DSA identifiers, so advisories
+would have no `external_id` — breaking the frozen `advisories(source, external_id)` uniqueness — and
+it drops the advisory-level fixed version HARD-PROBLEMS #2 needs for backport detection.
+
+**Debian's codename map is untouched and the DSA slice inherits it as-is:** `DistroReleases.Debian`
+covers `stretch`…`trixie` only. The pre-stretch suites `data/DSA/list` still carries (`woody`,
+`sarge`, `etch`, `lenny`, `squeeze`, `wheezy`, `jessie`) and the forthcoming `forky` all fall through
+to `debian:<codename>`. Pinned by `DistroReleasesTests` so it is a stated starting point rather than
+a surprise.
+
+### The Ubuntu codename map was missing the current LTS — fixed 2026-07-29
+
+`DistroReleases.Ubuntu` held **10** entries and stopped at `oracular` (24.10). Ubuntu's own
+published list (`ubuntu.com/security/releases.json`) has **45**, so **35 were missing** — including
+**`resolute`, 26.04 LTS**, plus `plucky`/`questing`/`stonking` and the interim series
+`disco`/`eoan`/`groovy`/`hirsute`/`impish` that the usn-db still ships notices for.
+
+The fallback meant nothing was dropped, so nothing failed — every fix statement for the current LTS
+was simply filed under `ubuntu:resolute` instead of `ubuntu:26.04`, off the `ubuntu:<version>`
+convention Phase 6 matches assets on. Proven red-first against real USN data:
+
+```
+Expected: ["ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04"]
+Actual:   ["ubuntu:22.04", "ubuntu:24.04", "ubuntu:resolute"]
+```
+
+The map is now transcribed from Ubuntu's published list rather than recalled.
+
+> **This label is part of row identity, so keeping it current is not cosmetic.**
+> `advisory_affects` is unique on `(advisory_id, package_name, ecosystem, platform)`. Once content
+> has been ingested, correcting a codename makes the next sync **INSERT a second row** rather than
+> update the first. Adding a series before its first advisory lands is free; afterwards it is a data
+> migration. Nothing has ingested yet — which is the reason this was fixed now rather than deferred
+> to Phase 6.
 
 ### Also recorded: incrementality is emitted but never consumed
 
@@ -163,11 +227,15 @@ advisory row is a real question and is **deliberately not answered by a test fix
 
 ## ⚠ Scope: what has NOT been done
 
-- **No connector has ever run end-to-end against its live feed.** `nvd`, `kev` and `epss` are now
-  proven against **real captured payloads** (`Samples/PROVENANCE.md`), which is a statement about the
-  parser *and* about the shape the feed really serves — but the fetch path itself, and the other five
-  connectors, remain unexercised. The distinction Phase 3 records for WinRM still applies to the
-  remaining five, three of which are worse than untested (see the endpoint section above).
+- **No connector has ever run end-to-end against its live feed.** `nvd`, `kev`, `epss` and `usn` are
+  now proven against **real captured payloads** (`Samples/PROVENANCE.md`), which is a statement about
+  the parser *and* about the shape the feed really serves — but the fetch path itself, and the other
+  four connectors, remain unexercised. The distinction Phase 3 records for WinRM still applies to the
+  remaining four, three of which are worse than untested (see the endpoint sections above).
+- **One USN branch is unreachable from real data and is left untested rather than faked.** All 7,678
+  notices in the live usn-db carry at least one CVE, so `SourceMetadataJson == null` cannot be
+  exercised by a capture. Likewise every codename in the database now maps, so the
+  `ubuntu:<codename>` fallback is unreachable too — it remains for series that do not exist yet.
 - **`wsusscn2.cab` has never been expanded.** `ExpandCabPackageSource` shells out to Windows
   `expand.exe` twice and has never been run against the real ~627 MB cab. It also throws
   `PlatformNotSupportedException` off Windows, so a Linux host that syncs this feed fails at call

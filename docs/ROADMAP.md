@@ -846,6 +846,85 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
+### 2026-07-29 — Phase 5 PARSE SLICE 2 (usn) · green at 374 · NOT MERGED
+
+**USN is parse-tested against real captures, and the Ubuntu codename map was missing the current
+LTS.** 349 → **374 passing, 0 skipped, 0 failed** (Contracts 19 · Content **61** · Connectors unit
+120 · IntegrationTests 40 · Vault 80 · Connectors.IntegrationTests 54), measured from a completed run
+with Postgres and the lab fleet up. Vault and Connectors unregressed.
+
+**The slice is asymmetric on purpose: DSA is NOT in it.** `DebianDsaConnector`'s endpoint 404s, and
+probing every plausible alternative established that **Debian publishes no JSON advisory feed at any
+URL**:
+
+| Source | Result |
+|---|---|
+| `tracker/data/dsa.json` *(the connector's endpoint)* · `tracker/data/DSA/list` | **404** |
+| `tracker/data/json` | 200, 80 MB, package→CVE→releases — **the string `DSA-` does not appear** |
+| `salsa…/security-tracker/raw/master/data/DSA/list` | 200, 1.1 MB, **plain text**, 6,466 advisories |
+| `dsa-long.rdf` | 200, but **31 items** and no fixed versions |
+| `oval-definitions-*.xml` | **403** |
+
+The connector expects a JSON root map that matches nothing Debian serves — the same invented-envelope
+defect already recorded for `rhsa` and `msrc`. Replacing a JSON parser with a text parser, deciding
+whether a `salsa.debian.org` raw-git URL is an acceptable production dependency, and handling 6,466
+advisories of edge cases is a **data-source decision, not a parse test**, so DSA gets its own slice.
+Sourcing Debian from the CVE-keyed JSON was considered and **rejected**: no DSA identifiers means no
+`external_id`, breaking the frozen `advisories(source, external_id)` uniqueness and dropping the
+advisory-level fixed version HARD-PROBLEMS #2 needs.
+
+**The defect found: the Ubuntu codename map was missing 26.04 LTS.** `DistroReleases.Ubuntu` held
+**10** entries and stopped at `oracular` (24.10); Ubuntu's published list has **45**, so **35 were
+missing** — `resolute` (26.04 LTS), `plucky`/`questing`/`stonking`, and the interim series
+`disco`/`eoan`/`groovy`/`hirsute`/`impish` that the usn-db still ships notices for. Nothing failed,
+because the fallback is not lossy — every fix statement for the current LTS was simply filed under
+`ubuntu:resolute` instead of `ubuntu:26.04`, off the `ubuntu:<version>` convention Phase 6 matches
+assets on. Red-first against real data:
+
+```
+Expected: ["ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04"]
+Actual:   ["ubuntu:22.04", "ubuntu:24.04", "ubuntu:resolute"]
+```
+
+**Why it had to be fixed now rather than in Phase 6.** `advisory_affects` is unique on
+`(advisory_id, package_name, ecosystem, platform)`, so **the label is part of row identity**: once
+content has been ingested, correcting a codename makes the next sync INSERT a second row rather than
+update the first. Nothing has ingested yet, so this was free today and would have been a data
+migration later.
+
+**`UsnConnector` itself needed no change** — the parser was correct as written; the defect was in the
+lookup table it consumes. The entire production diff is one file.
+
+**Fixture: 2 notices out of 7,678, from a 339 MB feed.** Both retained complete and unedited,
+verified field-identical to the live database. Chosen so a row COUNT cannot stand in for a row VALUE:
+`8465-1` ships **one package (`mina2`) across three releases at three different versions**
+(jammy/noble/resolute), so counting rows would pass while every version was wrong; `4123-1`
+(bionic + disco) is what proved the codename gap. `USN-4147-1` was considered and rejected — a 156 KB
+kernel notice, twenty times the whole fixture, covering nothing the other two do not.
+
+**Two branches are unreachable from real data and are left untested rather than faked:** all 7,678
+notices carry at least one CVE, so `SourceMetadataJson == null` cannot be exercised; and every
+codename in the live database now maps, so the `ubuntu:<codename>` fallback is unreachable too. Both
+recorded in `Samples/PROVENANCE.md` — same rule that made slice 1 reject `CVE-2024-3094`.
+
+**Three mutation guards, each confirmed red then reverted:** remove `resolute` → 5 red including the
+LTS case by name · remove `disco` → 2 red · neutralise the `USN-` prefixing → 10 red. That third one
+matters because it passes first time, so like EPSS in slice 1 it had to be *shown* capable of failing.
+
+**Carried forward:**
+- **Criterion (a) is 4 of 8**, named: `nvd`, `kev`, `epss`, `usn`. `dsa`, `rhsa`, `msrc`, `wsusscn2`
+  have no parse test, and all three HTTP ones cannot reach their feed.
+- **Debian's codename map is deliberately untouched** (`stretch`…`trixie` only; `woody`…`jessie` and
+  `forky` unmapped). `DebianPlatform` is called only by the deferred connector, so changing it here
+  would be an untested edit. Pinned by `DistroReleasesTests` so the DSA slice inherits a stated
+  starting point.
+- Unchanged from slice 1: **incrementality is unimplemented** (no connector reads `state.Cursor`),
+  NVD pagination truncates to page 1, `wsusscn2` gets no hand-written fixture, and the two standing
+  items (**no owner for the logging pipeline or deployment packaging**; **alpine→Debian(glibc)
+  Postgres revert, ADR 0009**, before any perf work).
+
+**Not merged, not pushed.** `main` untouched at `614f911`; pushing needs `--force-with-lease`.
+
 ### 2026-07-29 — Phase 5 PARSE SLICE 1 (nvd · kev · epss) · green at 349 · NOT MERGED
 
 **Three of eight feeds are now parse-tested against REAL captured payloads.** 322 → **349 passing,

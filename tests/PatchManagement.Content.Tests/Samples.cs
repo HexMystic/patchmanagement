@@ -42,4 +42,7 @@ internal static class Samples
     public static string Kev() => Read("kev.sample.json");
 
     public static string Epss() => Read("epss.sample.json");
+
+    /// <summary>Two complete notices from the 339 MB usn-db map; see PROVENANCE.md.</summary>
+    public static string Usn() => Read("usn.sample.json");
 }
