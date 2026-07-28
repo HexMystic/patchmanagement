@@ -163,6 +163,76 @@ public sealed class TimeoutTests
         Assert.Equal(ConnectorOutcome.Timeout, result.Outcome);
     }
 
+    /// <summary>
+    /// An unmodelled transport exception is contained as a typed result rather than thrown.
+    ///
+    /// <para>SSH.NET threw <c>InvalidOperationException</c> from the stdin path and it escaped
+    /// <c>RunAsync</c> raw — past a contract that promises typed results, and into ASP.NET's logger
+    /// outside any redaction scope. The ordering bug is fixed, but "the transport only throws what we
+    /// translate" was the assumption that let it out, so the boundary no longer relies on it.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_unmodelled_transport_exception_is_contained_as_a_typed_result()
+    {
+        var harness = ConnectorHarness.Build(
+            session: () => new ThrowingSshSession(new InvalidOperationException("transport misbehaved")));
+
+        var result = await harness.Connector.RunAsync(
+            ConnectorHarness.Target(),
+            new RemoteCommand { CommandLine = "id -u" },
+            CancellationToken.None);
+
+        Assert.Equal(ConnectorOutcome.ProtocolError, result.Outcome);
+        Assert.Equal(ConnectorReason.TransportFault, result.Detail);
+
+        // The exception's own text must not ride along into Detail — a caller logs that, and the
+        // connector cannot know what a transport put in a message.
+        Assert.DoesNotContain("misbehaved", result.Detail ?? string.Empty, StringComparison.Ordinal);
+
+        // ...and the lease is still returned, which is the failure mode that hurts at scale.
+        Assert.Equal(0, harness.Governor.ActiveGlobal);
+    }
+
+    /// <summary>The transfer half of the same guarantee — an SFTP fault must not escape either.</summary>
+    [Fact]
+    public async Task An_unmodelled_transport_exception_during_a_transfer_is_contained_too()
+    {
+        var harness = ConnectorHarness.Build(
+            session: () => new ThrowingSshSession(new InvalidOperationException("sftp misbehaved")));
+
+        var result = await harness.Connector.PushAsync(
+            ConnectorHarness.Target(),
+            new FileTransfer { RemotePath = "/tmp/x.bin", Content = new byte[] { 1, 2, 3 } },
+            CancellationToken.None);
+
+        Assert.Equal(ConnectorOutcome.ProtocolError, result.Outcome);
+        Assert.Equal(ConnectorReason.TransportFault, result.Detail);
+        Assert.Equal(0, harness.Governor.ActiveGlobal);
+    }
+
+    /// <summary>
+    /// The control that keeps the containment honest: caller cancellation is NOT a transport fault and
+    /// must still propagate. A catch-all that swallowed it would turn "I stopped this" into "the
+    /// endpoint misbehaved" — the exact collapse the timeout tests above exist to prevent.
+    /// </summary>
+    [Fact]
+    public async Task Containment_does_not_swallow_caller_cancellation()
+    {
+        var stalled = new StallingSshSession();
+        var harness = ConnectorHarness.Build(session: () => stalled);
+
+        using var cts = new CancellationTokenSource();
+        var running = harness.Connector.RunAsync(
+            ConnectorHarness.Target(),
+            new RemoteCommand { CommandLine = "sleep 600", Timeout = TimeSpan.FromMinutes(10) },
+            cts.Token);
+
+        await stalled.Entered;
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+    }
+
     [Fact]
     public async Task A_command_that_completes_inside_its_budget_is_not_disturbed_by_the_clock()
     {

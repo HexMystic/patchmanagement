@@ -2,7 +2,9 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using PatchManagement.Connectors;
 using PatchManagement.Connectors.Concurrency;
+using PatchManagement.Connectors.Connection;
 using PatchManagement.Connectors.Ssh;
 using PatchManagement.Contracts.Connectors;
 using PatchManagement.Contracts.Credentials;
@@ -106,6 +108,24 @@ public sealed class LabFixture : IAsyncLifetime
                 Reachability = TimeSpan.FromSeconds(5),
                 Authentication = authenticationBudget ?? TimeSpan.FromSeconds(45),
             });
+    }
+
+    /// <summary>
+    /// A real, authenticated <see cref="ISshSession"/> over SSH.NET — no fake anywhere in the path.
+    ///
+    /// <para>The connector's own fakes stop at this interface, which is exactly where the stdin defect
+    /// lived: <c>RecordingSshSession</c> records a buffer and returns, so the transport's own rules
+    /// about <em>when</em> an input stream may be created were never exercised by any test. Anything
+    /// asserting how bytes actually reach a remote command has to start here.</para>
+    /// </summary>
+    internal async Task<ISshSession> OpenRealSessionAsync(LabHost host, CancellationToken ct)
+    {
+        var factory = new SshNetSessionFactory(new ConnectorSecurityOptions { AllowUnknownHostKeys = true });
+        var plan = ConnectionPlanner.Plan(TargetFor(host));
+
+        return await factory
+            .ConnectAsync(plan, Credentials.ResolveAsync, TimeSpan.FromSeconds(30), ct)
+            .ConfigureAwait(false);
     }
 
     public EndpointTarget TargetFor(LabHost host) => new()

@@ -92,6 +92,12 @@ public sealed class SshConnector : IEndpointConnector
         {
             return ConnectivityResult.Failed(ConnectorOutcome.Timeout, "Connectivity probe timed out.", sw.Elapsed);
         }
+        catch (Exception ex) when (IsTransportFault(ex))
+        {
+            LogTransportFault(ex, target, nameof(TestConnectivityAsync));
+            return ConnectivityResult.Failed(
+                ConnectorOutcome.ProtocolError, ConnectorReason.TransportFault, sw.Elapsed);
+        }
     }
 
     public async Task<CommandResult> RunAsync(EndpointTarget target, RemoteCommand command, CancellationToken ct)
@@ -143,6 +149,11 @@ public sealed class SshConnector : IEndpointConnector
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             return CommandResult.Failed(ConnectorOutcome.Timeout, "Command timed out.", sw.Elapsed);
+        }
+        catch (Exception ex) when (IsTransportFault(ex))
+        {
+            LogTransportFault(ex, target, nameof(RunAsync));
+            return CommandResult.Failed(ConnectorOutcome.ProtocolError, ConnectorReason.TransportFault, sw.Elapsed);
         }
         finally
         {
@@ -221,7 +232,48 @@ public sealed class SshConnector : IEndpointConnector
         {
             return FileResult.Failed(ConnectorOutcome.Timeout, file.RemotePath, "Transfer timed out.", sw.Elapsed);
         }
+        catch (Exception ex) when (IsTransportFault(ex))
+        {
+            LogTransportFault(ex, target, push ? nameof(PushAsync) : nameof(PullAsync));
+            return FileResult.Failed(
+                ConnectorOutcome.ProtocolError, file.RemotePath, ConnectorReason.TransportFault, sw.Elapsed);
+        }
     }
+
+    /// <summary>
+    /// Whether an exception is a transport fault the connector should contain rather than let escape.
+    ///
+    /// <para><b>This is containment, not swallowing</b> (CLAUDE.md §5 forbids the latter). The failure
+    /// is still reported — as <see cref="ConnectorOutcome.ProtocolError"/> with a bounded reason code —
+    /// and it is still logged here, inside the module, where the redaction posture is known. What it
+    /// stops is an untyped exception crossing a boundary whose contract is typed results, because
+    /// beyond that boundary it is logged by ASP.NET with no redaction scope at all (ADR 0012's
+    /// residual for Phase 3).</para>
+    ///
+    /// <para>Deliberately NOT total: cancellation is the caller's answer and must propagate, and the
+    /// argument-validation exceptions are programming errors in the caller rather than facts about the
+    /// endpoint. Catching those would turn a bug into a plausible-looking endpoint failure, which is
+    /// the dishonesty the state machine exists to prevent.</para>
+    /// </summary>
+    private static bool IsTransportFault(Exception ex) =>
+        ex is not OperationCanceledException
+        and not ArgumentException
+        and not ObjectDisposedException;
+
+    /// <summary>
+    /// Records that a transport fault was contained.
+    ///
+    /// <para>The exception is passed as the logger's exception argument rather than interpolated into
+    /// the message, and the only structured values are an asset id and an operation name — never the
+    /// command line, the remote path or any resolved material (NEVER #1, ADR 0012 decision C).</para>
+    /// </summary>
+    private void LogTransportFault(Exception ex, EndpointTarget target, string operation) =>
+        _logger.LogError(
+            ex,
+            "SSH transport fault contained during {Operation} on {Asset}; reported as {Reason}.",
+            operation,
+            target.AssetId ?? target.Host,
+            ConnectorReason.TransportFault);
 
     private static Stream OpenPushSource(FileTransfer file)
     {

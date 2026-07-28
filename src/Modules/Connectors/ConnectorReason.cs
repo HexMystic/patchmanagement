@@ -22,6 +22,19 @@ namespace PatchManagement.Connectors;
 /// </summary>
 public static class ConnectorReason
 {
+    /// <summary>
+    /// An unexpected transport-layer exception — one the connector does not model — was contained at
+    /// the connector boundary and turned into a typed result.
+    ///
+    /// <para>It exists because "the transport only throws what we translate" is an assumption, and it
+    /// was wrong: SSH.NET threw <c>InvalidOperationException</c> from the stdin path and it escaped
+    /// <c>RunAsync</c> raw, past a contract that promises typed results (CLAUDE.md §5) and into
+    /// ASP.NET's logger outside any redaction scope (ADR 0012's residual for this phase). The code is
+    /// deliberately bounded and carries none of the exception's text, for the same reason every other
+    /// code here does.</para>
+    /// </summary>
+    public const string TransportFault = "transport-fault";
+
     public const string WinRmUploadFailed = "winrm-upload-failed";
     public const string WinRmDownloadFailed = "winrm-download-failed";
     public const string FactsCommandFailed = "facts-command-failed";
