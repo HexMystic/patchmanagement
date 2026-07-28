@@ -11,13 +11,15 @@ internal sealed class KeyedOperationCoordinator : IOperationCoordinator
 {
     private readonly ConcurrentDictionary<string, Entry> _locks = new(StringComparer.Ordinal);
 
-    public async Task<IAsyncDisposable> AcquireAsync(string? operationKey, CancellationToken ct)
+    public async Task<IAsyncDisposable> AcquireAsync(Guid tenantId, string? operationKey, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(operationKey))
             return NullHandle.Instance;
 
+        var scopedKey = ScopedKey(tenantId, operationKey);
+
         var entry = _locks.AddOrUpdate(
-            operationKey,
+            scopedKey,
             _ => new Entry(),
             (_, existing) => { existing.AddRef(); return existing; });
 
@@ -27,12 +29,21 @@ internal sealed class KeyedOperationCoordinator : IOperationCoordinator
         }
         catch
         {
-            ReleaseRef(operationKey, entry, enteredSemaphore: false);
+            ReleaseRef(scopedKey, entry, enteredSemaphore: false);
             throw;
         }
 
-        return new Handle(this, operationKey, entry);
+        return new Handle(this, scopedKey, entry);
     }
+
+    /// <summary>
+    /// The lock key: tenant first, then the caller's key.
+    ///
+    /// <para>The separator is a character a <see cref="Guid"/> cannot contain, so no pair of
+    /// (tenant, key) values can collide by concatenation — the classic way a composed key silently
+    /// merges two distinct things.</para>
+    /// </summary>
+    internal static string ScopedKey(Guid tenantId, string operationKey) => $"{tenantId:D}|{operationKey}";
 
     private void ReleaseRef(string key, Entry entry, bool enteredSemaphore)
     {

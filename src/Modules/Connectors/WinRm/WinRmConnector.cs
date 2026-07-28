@@ -77,7 +77,8 @@ public sealed class WinRmConnector : IEndpointConnector
             return CommandResult.Failed(ConnectorOutcome.DoubleHopRequired, DoubleHopMessage(hop), TimeSpan.Zero);
 
         var sw = Stopwatch.StartNew();
-        await using var op = await _operations.AcquireAsync(command.IdempotencyKey, ct).ConfigureAwait(false);
+        await using var op = await _operations
+            .AcquireAsync(target.TenantId, command.IdempotencyKey, ct).ConfigureAwait(false);
         await using var lease = await _governor.AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(ConnectionPlanner.Plan(target)), ct).ConfigureAwait(false);
         try
         {
@@ -116,7 +117,8 @@ public sealed class WinRmConnector : IEndpointConnector
         }
 
         var sw = Stopwatch.StartNew();
-        await using var op = await _operations.AcquireAsync(file.IdempotencyKey, ct).ConfigureAwait(false);
+        await using var op = await _operations
+            .AcquireAsync(target.TenantId, file.IdempotencyKey, ct).ConfigureAwait(false);
         await using var lease = await _governor.AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(ConnectionPlanner.Plan(target)), ct).ConfigureAwait(false);
         try
         {

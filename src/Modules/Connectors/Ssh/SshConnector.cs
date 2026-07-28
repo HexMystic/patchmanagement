@@ -112,7 +112,8 @@ public sealed class SshConnector : IEndpointConnector
             return CommandResult.Failed(ConnectorOutcome.DoubleHopRequired, DoubleHopMessage(hop), TimeSpan.Zero);
 
         var sw = Stopwatch.StartNew();
-        await using var op = await _operations.AcquireAsync(command.IdempotencyKey, ct).ConfigureAwait(false);
+        await using var op = await _operations
+            .AcquireAsync(target.TenantId, command.IdempotencyKey, ct).ConfigureAwait(false);
 
         using var deadline = Deadline(command.Timeout, ct);
 
@@ -201,7 +202,8 @@ public sealed class SshConnector : IEndpointConnector
         }
 
         var sw = Stopwatch.StartNew();
-        await using var op = await _operations.AcquireAsync(file.IdempotencyKey, ct).ConfigureAwait(false);
+        await using var op = await _operations
+            .AcquireAsync(target.TenantId, file.IdempotencyKey, ct).ConfigureAwait(false);
         using var deadline = Deadline(file.Timeout, ct);
         try
         {
