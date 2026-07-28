@@ -27,32 +27,61 @@ public sealed class WinRmConnector : IEndpointConnector
     private readonly IConnectionGovernor _governor;
     private readonly IOperationCoordinator _operations;
     private readonly ILogger<WinRmConnector> _logger;
+    private readonly ConnectorTimeoutOptions _timeouts;
+    private readonly TimeProvider _time;
 
     internal WinRmConnector(
         ICredentialProvider credentials,
         IWinRmClient client,
         IConnectionGovernor governor,
         IOperationCoordinator operations,
-        ILogger<WinRmConnector> logger)
+        ILogger<WinRmConnector> logger,
+        ConnectorTimeoutOptions? timeouts = null,
+        TimeProvider? timeProvider = null)
     {
         _credentials = credentials;
         _client = client;
         _governor = governor;
         _operations = operations;
         _logger = logger;
+        _timeouts = timeouts ?? new ConnectorTimeoutOptions();
+        _time = timeProvider ?? TimeProvider.System;
     }
 
     public EndpointProtocol Protocol => EndpointProtocol.WinRm;
+
+    /// <summary>
+    /// The operation's own deadline, linked to the caller's token — the same structural bound
+    /// <see cref="SshConnector"/> applies, and for the same reason.
+    ///
+    /// <para>That reason is stated on the SSH side and applies here verbatim: NEVER #5 forbids an
+    /// unbounded remote wait, and "the client also passes the timeout down" is not the same guarantee.
+    /// This connector claims in its own summary to be structurally identical to the SSH one; on the
+    /// two properties NEVER #5 actually cares about it was not. It trusted <see cref="IWinRmClient"/>
+    /// to bound itself, which the shipped client does — but the interface is a seam, the WinRM path is
+    /// unverified against a real host (D-303), and an implementation that mishandled its budget would
+    /// hang with nothing above it to intervene.</para>
+    /// </summary>
+    private CancellationTokenSource Deadline(TimeSpan budget, CancellationToken ct)
+    {
+        var deadline = new CancellationTokenSource(budget, _time);
+        return CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+    }
 
     public async Task<ConnectivityResult> TestConnectivityAsync(EndpointTarget target, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(target);
         var sw = Stopwatch.StartNew();
-        await using var lease = await _governor.AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(ConnectionPlanner.Plan(target)), ct).ConfigureAwait(false);
+        using var deadline = Deadline(_timeouts.ProbeBudget, ct);
+        await using var lease = await _governor.AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(ConnectionPlanner.Plan(target)), deadline.Token).ConfigureAwait(false);
         try
         {
-            using var credential = await _credentials.ResolveAsync(target.Credential, ct).ConfigureAwait(false);
-            await _client.ProbeAsync(target, credential, TimeSpan.FromSeconds(15), ct).ConfigureAwait(false);
+            using var credential = await _credentials.ResolveAsync(target.Credential, deadline.Token).ConfigureAwait(false);
+
+            // The CONFIGURED budget, not a literal. This was a compiled-in 15 seconds, so the whole
+            // reachability/authentication split in ConnectorTimeoutOptions — which exists because a
+            // single 15s budget reported rejected credentials as timeouts — applied to SSH only.
+            await _client.ProbeAsync(target, credential, _timeouts.ProbeBudget, deadline.Token).ConfigureAwait(false);
             return ConnectivityResult.Reachable(sw.Elapsed);
         }
         catch (ConnectorConnectException ex)
@@ -79,11 +108,12 @@ public sealed class WinRmConnector : IEndpointConnector
         var sw = Stopwatch.StartNew();
         await using var op = await _operations
             .AcquireAsync(target.TenantId, command.IdempotencyKey, ct).ConfigureAwait(false);
-        await using var lease = await _governor.AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(ConnectionPlanner.Plan(target)), ct).ConfigureAwait(false);
+        using var deadline = Deadline(command.Timeout, ct);
+        await using var lease = await _governor.AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(ConnectionPlanner.Plan(target)), deadline.Token).ConfigureAwait(false);
         try
         {
-            using var credential = await _credentials.ResolveAsync(target.Credential, ct).ConfigureAwait(false);
-            return await _client.ExecuteAsync(target, credential, command.CommandLine, command.Timeout, ct).ConfigureAwait(false);
+            using var credential = await _credentials.ResolveAsync(target.Credential, deadline.Token).ConfigureAwait(false);
+            return await _client.ExecuteAsync(target, credential, command.CommandLine, command.Timeout, deadline.Token).ConfigureAwait(false);
         }
         catch (ConnectorConnectException ex)
         {
@@ -119,21 +149,22 @@ public sealed class WinRmConnector : IEndpointConnector
         var sw = Stopwatch.StartNew();
         await using var op = await _operations
             .AcquireAsync(target.TenantId, file.IdempotencyKey, ct).ConfigureAwait(false);
-        await using var lease = await _governor.AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(ConnectionPlanner.Plan(target)), ct).ConfigureAwait(false);
+        using var deadline = Deadline(file.Timeout, ct);
+        await using var lease = await _governor.AcquireAsync(target.TenantId, ConnectionKey.HostKeyFor(ConnectionPlanner.Plan(target)), deadline.Token).ConfigureAwait(false);
         try
         {
-            using var credential = await _credentials.ResolveAsync(target.Credential, ct).ConfigureAwait(false);
+            using var credential = await _credentials.ResolveAsync(target.Credential, deadline.Token).ConfigureAwait(false);
             if (push)
             {
-                var written = await _client.UploadAsync(target, credential, file, ct).ConfigureAwait(false);
+                var written = await _client.UploadAsync(target, credential, file, deadline.Token).ConfigureAwait(false);
                 return FileResult.Ok(file.RemotePath, written, sw.Elapsed);
             }
 
             using var buffer = new MemoryStream();
-            var read = await _client.DownloadAsync(target, credential, file, buffer, ct).ConfigureAwait(false);
+            var read = await _client.DownloadAsync(target, credential, file, buffer, deadline.Token).ConfigureAwait(false);
             var bytes = buffer.ToArray();
             if (file.LocalPath is { } localPath)
-                await File.WriteAllBytesAsync(localPath, bytes, ct).ConfigureAwait(false);
+                await File.WriteAllBytesAsync(localPath, bytes, deadline.Token).ConfigureAwait(false);
             return FileResult.Ok(file.RemotePath, read, sw.Elapsed, bytes);
         }
         catch (ConnectorConnectException ex)

@@ -79,7 +79,11 @@ public static class ConnectorsServiceCollectionExtensions
             sp.GetRequiredService<IWinRmClient>(),
             sp.GetRequiredService<IConnectionGovernor>(),
             sp.GetRequiredService<IOperationCoordinator>(),
-            sp.GetRequiredService<ILogger<WinRmConnector>>()));
+            sp.GetRequiredService<ILogger<WinRmConnector>>(),
+            // Same configured budgets and clock as the SSH connector. These used to be a compiled-in
+            // 15 seconds, so ConnectorTimeoutOptions governed only half the module.
+            sp.GetRequiredService<IOptions<ConnectorTimeoutOptions>>().Value,
+            sp.GetRequiredService<TimeProvider>()));
 
         // Scoped, following the connectors they compose over — a singleton registry would capture
         // the scoped connectors and reintroduce the same captive dependency one level up.

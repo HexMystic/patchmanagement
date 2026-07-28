@@ -167,26 +167,89 @@ public sealed class ConnectionGovernorTests
         Assert.Equal(1, governor.ActiveGlobal);
     }
 
-    [Fact]
+    /// <summary>
+    /// A waiter cancelled <b>after taking its tenant and host permits, while waiting for a global
+    /// one</b> must hand all three back.
+    ///
+    /// <para><b>Cold review R2 finding #5: this test used to prove none of that.</b> It ran with
+    /// <c>global: 1</c> and left the per-tenant and per-host budgets at their 100 default, so the
+    /// waiter blocked on the GLOBAL semaphore — meaning it had never taken a global permit to leak —
+    /// while any tenant or host permit it did leak vanished into 99 spare ones. Deleting the entire
+    /// unwind block from <c>AcquireAsync</c> left this green.</para>
+    ///
+    /// <para>Three things fix that, and the third was not obvious. The budgets are now as small as the
+    /// scenario allows, so ONE leaked permit is the difference between passing and failing; the global
+    /// budget is exhausted by an <em>unrelated</em> tenant, so the waiter reaches the global wait
+    /// holding its tenant and host permits — the state the unwind exists for; and a second lease on
+    /// the same tenant and host is held throughout.</para>
+    ///
+    /// <para><b>That anchor lease is load-bearing.</b> Slots are reference-counted and pruned when the
+    /// last reference goes, so a cancelled waiter that was the ONLY user takes the whole slot —
+    /// semaphore and all — down with it on its way out. The next acquire builds a fresh slot at full
+    /// capacity and the leak is erased. Pruning therefore hides exactly the defect this test is for,
+    /// and a version of this test without the anchor still passed with the entire unwind deleted.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
     public async Task A_cancelled_waiter_leaks_no_permit()
     {
-        using var governor = Governor(global: 1);
+        using var governor = Governor(global: 3, perTenant: 2, perHost: 2);
 
-        var held = await governor.AcquireAsync(TenantA, HostA, CancellationToken.None);
+        // Keeps tenant A's and host A's slots referenced for the whole test, so a leaked permit stays
+        // observable instead of being pruned away with the slot.
+        var anchor = await governor.AcquireAsync(TenantA, HostA, CancellationToken.None);
+
+        // Fill the global budget from another tenant entirely, so tenant A's waiter gets past its own
+        // two dimensions and blocks on the shared one.
+        var filler1 = await governor.AcquireAsync(TenantB, HostB, CancellationToken.None);
+        var filler2 = await governor.AcquireAsync(TenantB, HostB, CancellationToken.None);
+        Assert.Equal(0, governor.AvailableGlobal);
 
         using var cts = new CancellationTokenSource();
         var queued = governor.AcquireAsync(TenantA, HostA, cts.Token);
         await WaitersReach(governor, 1);
-        cts.Cancel();
+
+        // Right now it holds tenant A's second permit and host A's second permit, and wants a global
+        // one. Both of those must come back.
+        Assert.Equal(1, governor.WaitingForTenant(TenantA));
+
+        await cts.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
 
-        await held.DisposeAsync();
+        await filler1.DisposeAsync();
+        await filler2.DisposeAsync();
 
-        // The budget must be whole again. A permit lost to a cancelled waiter is invisible until the
-        // process quietly stops connecting.
+        // Tenant A takes the second of its two permits. With the old 100-wide budgets this could not
+        // fail however many permits had leaked; at 2, with the anchor holding the first, it fails on
+        // the very first one.
+        var second = await Granted(governor, TenantA, HostA, "tenant A's second");
+
+        Assert.Equal(2, governor.ActiveForTenant(TenantA));
+        Assert.Equal(2, governor.ActiveForHost(HostA));
+
+        await anchor.DisposeAsync();
+        await second.DisposeAsync();
         Assert.Equal(0, governor.ActiveGlobal);
-        await using var proof = await governor.AcquireAsync(TenantA, HostA, CancellationToken.None);
-        Assert.Equal(1, governor.ActiveGlobal);
+        Assert.Equal(0, governor.TrackedSlotCount);
+    }
+
+    /// <summary>
+    /// Acquires with a bound, so a leaked permit fails the test by NAME instead of hanging it. An
+    /// unbounded await here would stop the suite rather than fail it — the failure mode that hid the
+    /// probe-budget defect for this whole phase.
+    /// </summary>
+    private static async Task<IConnectionLease> Granted(
+        SemaphoreConnectionGovernor governor, Guid tenantId, string hostKey, string which)
+    {
+        var acquire = governor.AcquireAsync(tenantId, hostKey, CancellationToken.None);
+        var settled = await Task.WhenAny(acquire, Task.Delay(TimeSpan.FromSeconds(5)));
+
+        Assert.True(
+            settled == acquire,
+            $"{which} acquire never completed, so a cancelled waiter leaked a per-tenant or per-host "
+            + "permit: the budget is permanently smaller than it is configured to be, and nothing "
+            + "reconciles it.");
+
+        return await acquire;
     }
 
     [Fact]

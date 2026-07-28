@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Security;
 using System.Text;
 using System.Xml.Linq;
 using PatchManagement.Contracts.Connectors;
@@ -41,17 +42,58 @@ internal sealed class HttpWinRmClient : IWinRmClient
 
     /// <summary>
     /// The production handler. Always carries the credential — there is no branch that can drop it.
+    ///
+    /// <para><b>The password goes in as a <see cref="SecureString"/>, never a <see cref="string"/>.</b>
+    /// This previously did <c>Encoding.UTF8.GetString(credential.Secret)</c> and called the result
+    /// transient. It is not: a .NET string is immutable, so it cannot be zeroed and survives on the
+    /// managed heap until some later GC — visible in a process dump for that whole window, and the GC
+    /// may copy it while compacting, leaving further copies behind. Every other credential path in
+    /// this codebase is built on zeroing in place (<c>CryptographicOperations.ZeroMemory</c> in
+    /// <c>SshConnector</c>, <c>ResolvedCredential.Dispose</c>, <c>Array.Clear</c> after parsing a
+    /// key), and there is a test asserting the sudo stdin buffer is all zeros afterwards. This one
+    /// path silently opted out while its comment claimed the opposite.</para>
+    ///
+    /// <para><c>SecureString</c> is not a strong boundary on its own — the platform decrypts it to
+    /// unmanaged memory at the point of use — but it is what <see cref="NetworkCredential"/> accepts
+    /// for exactly this purpose, and its lifetime is bounded and zeroed rather than left to the
+    /// collector. Bounded and wiped beats indefinite and immutable.</para>
     /// </summary>
     internal static HttpClientHandler BuildAuthenticatedHandler(ResolvedCredential credential) =>
         new()
         {
             Credentials = new NetworkCredential(
                 credential.Username,
-                // Transient: NetworkCredential requires a string. Not logged, not returned, not held
-                // beyond the handler's life (NEVER #1/#2).
-                Encoding.UTF8.GetString(credential.Secret)),
+                ToSecureString(credential.Secret)),
             PreAuthenticate = true,
         };
+
+    /// <summary>
+    /// Copies UTF-8 secret bytes into a <see cref="SecureString"/> without ever materialising a
+    /// managed <see cref="string"/>.
+    ///
+    /// <para>Decoded through a char buffer that is wiped in a <c>finally</c>, because
+    /// <c>Encoding.UTF8.GetString</c> would reintroduce precisely the immortal copy this exists to
+    /// avoid. The buffer is sized by <c>GetMaxCharCount</c> so a multi-byte password cannot overflow
+    /// it — a password is arbitrary user text, not ASCII.</para>
+    /// </summary>
+    private static SecureString ToSecureString(ReadOnlySpan<byte> utf8Secret)
+    {
+        var chars = new char[Encoding.UTF8.GetMaxCharCount(utf8Secret.Length)];
+        try
+        {
+            var written = Encoding.UTF8.GetChars(utf8Secret, chars);
+
+            var secure = new SecureString();
+            for (var i = 0; i < written; i++) secure.AppendChar(chars[i]);
+
+            secure.MakeReadOnly();
+            return secure;
+        }
+        finally
+        {
+            Array.Clear(chars);
+        }
+    }
 
     /// <summary>
     /// Proves the endpoint is reachable AND that the credential is accepted.

@@ -101,6 +101,30 @@ Phase 3's obligation for double-hop is only to **surface** the requirement rathe
 does. Anyone planning a Windows wave should treat this connector as unproven code that compiles and
 has unit coverage — not as a tested transport.
 
+**Cold review R2 fixed three more transport-seam defects here (#7, #8, #9). None of them changes the
+verification status above.**
+
+- **#7 — the password was an immortal managed string.** `BuildAuthenticatedHandler` did
+  `Encoding.UTF8.GetString(credential.Secret)` and described it as transient. A .NET string cannot be
+  zeroed and survives until a later GC, which may also copy it while compacting; every other
+  credential path in this codebase zeroes in place. Now built as a `SecureString` from a char buffer
+  wiped in a `finally`, so no managed string is ever produced. `SecureString` is not a strong boundary
+  by itself — the platform decrypts it at the point of use — but it is what `NetworkCredential` takes
+  for this, and bounded-and-wiped beats indefinite-and-immutable. Enforced by
+  `SecretMaterialConventionTests`, a **scan** rather than a behavioural test because the defect is
+  invisible at runtime: a string that exists and is later collected looks exactly like one that was
+  never created.
+- **#8 — the probe used a compiled-in 15 seconds.** `WinRmConnector` took no
+  `ConnectorTimeoutOptions` at all, so the whole reachability/authentication split — which exists
+  because a single 15s budget reported *rejected credentials* as timeouts — governed SSH only.
+- **#9 — no structural deadline.** The connector's own summary claims it is "structurally identical
+  to `SshConnector`"; on the two properties NEVER #5 cares about it was not. It handed its budget to
+  `IWinRmClient` and trusted it. The shipped client does bound its receive loop, but that is the
+  transport bounding itself — the arrangement the SSH connector's docblock explicitly rejects — and
+  `IWinRmClient` is a seam whose real-host behaviour is unverified. Every operation now carries a
+  `Deadline` linked to the caller's token, proven by `WinRmTimeoutTests` against a client that ignores
+  its budget entirely.
+
 ## Exit criteria — status
 
 Every criterion below names the test that proves it. A criterion with no test named is not met,
@@ -112,20 +136,34 @@ whatever the prose says.
 | **(b)** | Credentials only via the Phase-1 `ICredentialProvider`, with a `FakeCredentialProvider` so the suite runs without the Phase 2 vault | `CredentialLifecycleTests` (5 facts: zeroing on success, auth failure and cancellation; resolution through the provider; lease release on failure) · `FakeCredentialProviderTests` (5) · `SudoTests` (5) · `VaultIndependenceTests.No_vault_assembly_is_loaded_after_exercising_the_connector` · `.The_connector_assembly_does_not_reference_the_vault` |
 | **(c)** | SSH integration against **all five** lab containers — run a command, push and pull a file | `SshFleetTests`, a `[Theory]` over `LabFleet.All` (5 hosts × 8 facts) in **`PatchManagement.Connectors.IntegrationTests`**: `Connectivity_succeeds` · `A_command_runs_and_returns_its_output` · `A_file_round_trips_byte_for_byte` (64 KiB, SHA-256) · `Pushing_the_same_payload_twice_is_safe` · `A_non_zero_exit_is_reported_honestly_rather_than_thrown` · `An_elevated_command_runs_as_root` · `The_endpoint_identifies_itself_as_the_expected_distribution` · `A_wrong_key_maps_to_auth_failed_not_unreachable`. **These run against real sshd; no unit stand-in satisfies this criterion.** `LabFleetManifestTests` pins the fleet table against `lab/docker-compose.yml` and `scripts/verify-env.ps1` |
 | **(d)** | Timeouts enforced; a test proves a hung op is cancelled | `TimeoutTests` (6 facts, all driven by `FakeTimeProvider` — nothing sleeps): command timeout → `Outcome.Timeout`; lease released on timeout; caller cancellation stays `OperationCanceledException` and is **not** collapsed into a timeout; transfer timeout; configurable probe budget (walks the boundary from both sides, stalling the **connect** via `StallingSshSessionFactory` — a probe never runs a session op, which is why the earlier session-stalling version could only hang); plus a control proving an in-budget command is untouched by the clock. Mutation-checked: restoring the compiled-in 15s literal turns the probe fact red |
-| **(e)** | Concurrency limiter caps sessions | `SessionCapTests.The_connector_never_opens_more_concurrent_sessions_than_the_global_budget` (12 concurrent ops against a budget of 3, asserted on a high-water mark) · `ConnectionGovernorTests` (8 facts: global cap, per-tenant independence, per-host cap shared across tenants, `TryAcquire` refusal, cancelled-waiter accounting, slot pruning, double-dispose) |
+| **(e)** | Concurrency limiter caps sessions | `SessionCapTests.The_connector_never_opens_more_concurrent_sessions_than_the_global_budget` (12 concurrent ops against a budget of 3, asserted on a high-water mark) · `ConnectionGovernorTests` (8 facts: global cap, per-tenant independence, per-host cap shared across tenants, `TryAcquire` refusal, cancelled-waiter accounting, slot pruning, double-dispose). `A_cancelled_waiter_leaks_no_permit` is mutation-checked — deleting the unwind block turns it red — which required tightening the budgets to the scenario AND holding an anchor lease, since slot pruning otherwise discards the leaked permit along with the slot · `PooledSessionConcurrencyTests` (3 facts, lab) covers what the cap tests structurally cannot: several concurrent operations sharing ONE pooled session against ONE host · `OperationCoordinationTests` (3 facts: cross-tenant independence, same-tenant serialisation, per-key independence) |
 | **(f)** | Bastion config path in a unit test, no cloud assumption in connector code | `BastionPlanningTests` (5 facts: direct vs single-hop plan, hop ordering, per-hop credential resolved separately, multi-hop rejected by name) · `ProviderNeutralityTests.No_cloud_provider_vocabulary_appears_in_the_connector_or_its_contracts` |
 
-**NeverLog residual (ADR 0012's hand-off to this phase):** `ConnectorLoggingConventionTests` (6) ·
-`ConnectorNeverLogTests` (5, including the live-sink control) · `RemoteOutputContainmentTests` (4).
-Each scan is mutation-checked — see the commit bodies for the recorded red values.
+**NeverLog residual (ADR 0012's hand-off to this phase):** `ConnectorLoggingConventionTests` (8) ·
+`ConnectorNeverLogTests` (9) · `RemoteOutputContainmentTests` (4) · `SshFleetNeverLogTests` (3, lab) ·
+`SecretMaterialConventionTests` (3). Each scan is mutation-checked — see the commit bodies for the
+recorded red values.
 
-**Counts at close:** Contracts 19 · Connectors unit 92 · IntegrationTests 38 · Vault 80 (unregressed)
-· **Connectors.IntegrationTests 44, zero skipped**. 273 passing, 0 skipped.
+> **Corrected by cold review R2 (finding #4).** This previously claimed the scan covered the module.
+> It did not. Every never-log assertion built an `SshConnector` over `StubSshSessionFactory`, so
+> `WinRmConnector`, `HttpWinRmClient` and the real `SshNetSessionFactory` had **no coverage at all** —
+> a secret planted in either passed the whole suite green. What covers them now: WinRM driven end to
+> end over a scripted handler across success, rejected-credential and transfer paths; the real SSH
+> factory driven against a closed port; the lab suite sweeping for the fleet's **actual private key**
+> after a real connect/auth/run/push/pull; and two source rules for what behaviour cannot observe —
+> no logging call handed secret material, and no `Console`/`Debug`/`Trace` writes, both matched over
+> full file text so a wrapped call cannot slip past. Control: replanting the reviewer's two secrets
+> turns three tests red, one of them behavioural and independent of the scans.
+
+**Counts at close:** Contracts 19 · Connectors unit 113 · IntegrationTests 38 · Vault 80 (unregressed)
+· **Connectors.IntegrationTests 54, zero skipped**. 304 passing, 0 skipped.
 
 > **Correction (cold review R2).** This read "Connectors unit 86 … 267 passing" until the fix pass.
-> No such run existed: `TimeoutTests.The_connectivity_probe_honours_its_configured_budget_rather_than_a_compiled_in_one`
-> hung forever rather than failing, so the connector unit project never reached a total. The figures
-> above come from a completed run. Criterion (d) below is therefore only now genuinely met.
+> No such run existed:
+> `TimeoutTests.The_connectivity_probe_honours_its_configured_budget_rather_than_a_compiled_in_one`
+> hung forever rather than failing, so the connector unit project never reached a total. At that
+> commit it held 92 tests; the fix pass took it to 113 and the lab suite from 44 to 54. Every figure
+> above comes from a completed run. Criterion (d) is therefore only now genuinely met.
 
 Criterion (f) does **not** claim the `ForwardedPortLocal` binding is exercised — that needs a live SSH
 client and belongs to the lab suite. What is unit-proven is planning, hop ordering, per-hop credential

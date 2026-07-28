@@ -51,8 +51,71 @@ public sealed class HttpWinRmClientTests
         // unauthenticated and came back 401, i.e. AuthFailed for a perfectly good credential.
         var network = Assert.IsType<NetworkCredential>(handler.Credentials);
         Assert.Equal("Administrator", network.UserName);
-        Assert.Equal("s3cr3t", network.Password);
         Assert.True(handler.PreAuthenticate);
+
+        // The password arrives intact — read back through the SecureString, which is the only place
+        // it now exists. Reading NetworkCredential.Password would materialise the very managed string
+        // the fix exists to avoid, so the assertion goes through the secure form.
+        Assert.Equal("s3cr3t", ReadSecure(network.SecurePassword));
+    }
+
+    /// <summary>
+    /// The password is held as a <see cref="System.Security.SecureString"/>, never a managed string.
+    ///
+    /// <para>Cold review R2 finding #7. This was <c>Encoding.UTF8.GetString(credential.Secret)</c>,
+    /// commented as transient — but a .NET string is immutable, cannot be zeroed, and survives on the
+    /// heap until a later GC, which may also copy it while compacting. Every other credential path
+    /// here zeroes in place; this one opted out while claiming the opposite.</para>
+    /// </summary>
+    [Fact]
+    public void The_password_is_never_materialised_as_a_managed_string()
+    {
+        using var credential = Credential();
+
+        var handler = HttpWinRmClient.BuildAuthenticatedHandler(credential);
+        var network = Assert.IsType<NetworkCredential>(handler.Credentials);
+
+        // NetworkCredential hands back a COPY of its SecureString, so this asserts on shape and
+        // content rather than on the instance the client built — the structural guarantee that no
+        // managed string is ever produced is enforced by SecretMaterialConventionTests, which the
+        // behaviour here cannot observe.
+        Assert.NotNull(network.SecurePassword);
+        Assert.Equal(6, network.SecurePassword.Length);
+        Assert.Equal("s3cr3t", ReadSecure(network.SecurePassword));
+    }
+
+    /// <summary>
+    /// A non-ASCII password survives the byte→char conversion. A fixed-size char buffer sized from
+    /// byte length would truncate or overflow here, and a password is arbitrary user text.
+    /// </summary>
+    [Fact]
+    public void A_multibyte_password_reaches_the_handler_intact()
+    {
+        const string Password = "pa55—wörd-Ω-🔐";
+        using var credential = new ResolvedCredential(
+            CredentialKind.WindowsPassword, Encoding.UTF8.GetBytes(Password), "Administrator");
+
+        var handler = HttpWinRmClient.BuildAuthenticatedHandler(credential);
+        var network = Assert.IsType<NetworkCredential>(handler.Credentials);
+
+        Assert.Equal(Password, ReadSecure(network.SecurePassword));
+    }
+
+    /// <summary>
+    /// Reads a <see cref="System.Security.SecureString"/> back for assertion only. Production code
+    /// never does this — that is the entire point of the type — so it lives in the test.
+    /// </summary>
+    private static string ReadSecure(System.Security.SecureString secure)
+    {
+        var ptr = System.Runtime.InteropServices.Marshal.SecureStringToGlobalAllocUnicode(secure);
+        try
+        {
+            return System.Runtime.InteropServices.Marshal.PtrToStringUni(ptr) ?? string.Empty;
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.ZeroFreeGlobalAllocUnicode(ptr);
+        }
     }
 
     // ---------------------------------------------------------------- defect (d): unauthenticated probe

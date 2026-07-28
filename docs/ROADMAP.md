@@ -19,7 +19,7 @@ separate worktrees. **Phase 8 is solo.**
 | 0 | Environment & design | solo | — | **complete** |
 | 1 | Contracts | solo | 0 | **complete** |
 | 2 | Credential vault | parallel | 1 | **complete** |
-| 3 | Endpoint connector | parallel | 1 | **in-progress** — built, 273 green, **unmerged; cold review R2 found 4 criticals, fix pass done, awaiting a THIRD cold review**; SSH verified, WinRM unverified |
+| 3 | Endpoint connector | parallel | 1 | **in-progress** — built, 304 green, **unmerged; cold review R2 found 4 criticals, fix pass done, awaiting a THIRD cold review**; SSH verified, WinRM unverified |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
 | 5 | Content ingestion | parallel | 1 | **in-progress** |
 | 6 | Assessment | solo | 4, 5 | not-started |
@@ -149,18 +149,18 @@ five lab containers against real sshd — no unit stand-in satisfies it.
 > transport defects that way. It proves nothing about how a real WinRM server responds. A green WinRM
 > suite is a statement about this client, not about WinRM. Real-host verification is **D-303 (Phase 8)**.
 
-**Tests: 273 passing, 0 skipped.** Contracts 19 · Connectors unit 92 · IntegrationTests 38 ·
-Vault 80 (unregressed — Phase 3 did not disturb Phase 2) · **Connectors.IntegrationTests 44**.
+**Tests: 304 passing, 0 skipped.** Contracts 19 · Connectors unit 113 · IntegrationTests 38 ·
+Vault 80 (unregressed — Phase 3 did not disturb Phase 2) · **Connectors.IntegrationTests 54**.
 
 > **Correction (cold review R2).** This line previously read "267 passing, 0 skipped · Connectors unit
 > 86". **That number was never observed and could not have been.**
 > `TimeoutTests.The_connectivity_probe_honours_its_configured_budget_rather_than_a_compiled_in_one`
 > awaited a signal that its fake could never raise and carried no timeout, so the connector unit
-> project **hung instead of finishing** — no run of it has ever produced a total. The project actually
-> contains **92** tests, not 86. The hang is fixed and the counts above are measured from a completed
-> run. See finding #1 in the cold review.
+> project **hung instead of finishing** — no run of it has ever produced a total. The project held
+> **92** tests at that point, not 86; it holds 113 now that the fix pass has added coverage. The hang
+> is fixed and every count above is measured from a completed run.
 
-The 44 fleet tests are **tests that require the lab fleet**, not optional extras. They hard-fail with
+The 54 fleet tests are **tests that require the lab fleet**, not optional extras. They hard-fail with
 an actionable message when the fleet is down rather than skipping, because a silently-skipped fleet
 looks exactly like a passing one and would quietly corrupt the count above. Run them with the fleet up
 (`docker compose -f lab/docker-compose.yml up -d`, from the main worktree per WORKFLOW §3).
@@ -724,7 +724,58 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
-### 2026-07-28 — Phase 3 built to green · NOT MERGED · awaiting a COLD review · RESUME HERE
+### 2026-07-28 — Phase 3 cold review R2 + fix pass · STILL NOT MERGED · awaiting a THIRD cold review · RESUME HERE
+
+A genuinely cold review of `phase/3-connector` (no history of the build) returned **four criticals,
+every one verified by execution rather than by reading**, plus five mediums. All are fixed. **`main`
+is still untouched and this must not merge yet** — Phase 2 introduced two of its criticals *in the
+remediation*, and this remediation is larger than that one was.
+
+**The four criticals.**
+
+1. **The unit suite had never completed.** `TimeoutTests.The_connectivity_probe_honours_its_configured_budget`
+   awaited `StallingSshSession.Entered`, but `TestConnectivityAsync` never runs a session operation —
+   reaching an authenticated session *is* the proof — so the signal could not fire, and the test had
+   no timeout. The project hung rather than failed. **"267 passing, 0 skipped" was therefore a number
+   nobody could ever have observed**; the project holds 92 tests, not 86. Fixed with a stalling
+   *factory* (a probe spends its time in connect), a boundary walk from both sides, and a `Timeout`
+   backstop. Counts corrected in both docs, with the false claim left visible below as the record.
+2. **The `sudo -S` path was dead against real SSH.NET.** `SshNetSession.RunAsync` created the input
+   stream *before* starting execution; SSH.NET 2025.1.0 refuses that outright. Every elevated command
+   carrying a sudo password threw `InvalidOperationException` straight out of the connector, past a
+   contract that promises typed results. Invisible because the unit suite stops at
+   `RecordingSshSession` and the lab is NOPASSWD, so **no test had ever written a byte to stdin
+   through SSH.NET**.
+3. **Concurrent transfers over one pooled session corrupted each other.** `EnsureSftpAsync` did
+   check→dispose→assign→connect unsynchronised, so a second borrower disposed the SFTP client the
+   first was still connecting; both failed and the orphan leaked an authenticated transport. Two
+   concurrent pushes to one host is the ordinary shape of a wave. `SessionCapTests` gives every
+   operation its own host *by design*, so the pool's central promise was never exercised.
+4. **The NeverLog guarantee was enforced by nothing.** Every assertion built an `SshConnector` over a
+   stub factory; WinRM and the real SSH factory had no coverage. The reviewer planted a secret in each
+   and the whole suite stayed green.
+
+**Mediums:** #5 the governor's cancel-mid-acquire test could not see a leaked permit (the whole unwind
+could be deleted and it passed); #6 `IOperationCoordinator` was keyed on the raw idempotency key in a
+process-wide singleton, so one tenant could stall another's deployments — the `ConnectionKey` defect,
+unfixed one line away; #7 the WinRM password became an immortal managed string; #8 the WinRM probe used
+a compiled-in 15s; #9 WinRM had no structural deadline.
+
+**Two lessons worth carrying forward.**
+
+- **Disjoint fake and lab coverage is what let #2 and #3 survive.** Neither was subtle; both sat in a
+  seam that one suite stopped short of and the other stepped over. Every fix here is red-first
+  *against the real transport*, and the lab suite grew from 44 to 54 facts because of it.
+- **A test can pass for reasons unrelated to its name.** #1 hung, #5's mutation survived, and the
+  first version of #3's reproduction *passed against the broken code* because the pool's own
+  serialisation hid the race. Each fix is mutation-checked with `scripts/mutation-guard.ps1`, which
+  refuses to run a suite against source the mutation did not actually land in.
+
+**Tests: Contracts 19 · Connectors unit 113 · IntegrationTests 38 · Vault 80 (unregressed) · fleet 54
+= 304, zero skipped.** WinRM remains **written and unverified** — these were transport-seam fixes and
+**D-303 (Phase 8) still owns real-host verification**.
+
+### 2026-07-28 — Phase 3 built to green · NOT MERGED · awaiting a COLD review
 
 `phase/3-connector` rebased onto `main` (zero conflicts — the WIP was one purely additive commit) and
 brought from "module surface only, no tests, not in the .sln" to **267 passing, 0 skipped**.
