@@ -19,7 +19,7 @@ separate worktrees. **Phase 8 is solo.**
 | 0 | Environment & design | solo | — | **complete** |
 | 1 | Contracts | solo | 0 | **complete** |
 | 2 | Credential vault | parallel | 1 | **complete** |
-| 3 | Endpoint connector | parallel | 1 | **in-progress** — built, 311 green, **unmerged; cold review R4 found 1 medium + 1 low, both fixed (the #7 enforcement model was replaced), awaiting a FIFTH cold review**; SSH verified, WinRM unverified |
+| 3 | Endpoint connector | parallel | 1 | **complete** — merged to `main`, **311 green on `main` post-merge**, 0 skipped. Four review passes. **SSH verified against the lab fleet; WinRM written and unit-proven but NEVER run against a Windows host (D-303)** |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
 | 5 | Content ingestion | parallel | 1 | **in-progress** |
 | 6 | Assessment | solo | 4, 5 | not-started |
@@ -122,7 +122,7 @@ tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or 
   recorded as Phase 2 hardening.
 - **Detail:** `docs/phases/phase-2.md`. See `docs/THREAT-MODEL.md`.
 
-## Phase 3 — Endpoint connector  · parallel · Status: in-progress (awaiting cold review)
+## Phase 3 — Endpoint connector  · parallel · Status: complete (merged, `main` green at 311)
 - **Goal:** `IEndpointConnector` with SSH **and** WinRM implementations. *(As built: the SSH half is
   verified against the lab fleet; the WinRM half is written and unverified — see the status note
   below. The goal is not the achievement.)*
@@ -838,7 +838,59 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
-### 2026-07-28 — Phase 3 cold review R2 + fix pass · STILL NOT MERGED · awaiting a THIRD cold review · RESUME HERE
+### 2026-07-28 — Phase 3 cold review R4 + fix pass · **MERGED to `main`** · `main` green at 311
+
+**Phase 3 is complete and merged.** `main` is at the merge commit with **311 passing, 0 skipped, 0
+failed**, run to completion with the lab fleet up (Contracts 19 · Connectors unit 120 ·
+IntegrationTests 38 · Vault 80 · Connectors.IntegrationTests 54, ~16 min — the fleet suite is slow,
+not hung). Both `main` and `phase/3-connector` are pushed.
+
+**R4 found the #7 guarantee was still fail-open — for the third time.** R3 had replaced a
+statement-scoped regex with flow analysis; R4 walked past that with one extracted helper
+(`DecodeSecret(byte[] m) => Encoding.UTF8.GetString(m)`), laundering a plaintext private key into an
+immortal managed string with all 117 tests green. Taint was seeded from assignments, so a **parameter**
+was never tainted — and lambdas, local functions, extension methods, `out` params, instance fields and
+cross-file helpers all defeated it identically.
+
+**The fix was a change of model, not a better analysis:** stop tracking the data, restrict the
+capability. `SecretMaterialisationScanner` enumerates every call in the connector surface that can make
+text from bytes — there are exactly four — and pins each to a written justification. A fifth is red by
+default whatever shape fed it. The flow scan is kept *behind* it for the one thing the ban cannot see:
+a secret reaching one of the four calls that ARE allowed.
+
+**Behavioural enforcement was built and measured before being rejected**, so this question is now closed
+with numbers (HARD-PROBLEMS §13): SSH.NET leaves 4 managed copies of every key it parses,
+`NetworkCredential.Password` creates another, and `SecureString.AppendChar` decrypts to append — so even
+correct first-party code leaves transient UTF-16 copies, **nondeterministically** (1 run in 5). Red for
+correct code, red for code we cannot change, and flaky.
+
+**The recurring hazard in this phase is A CHECK THAT CANNOT FIRE** — shipped green three times (the
+`-ComputerName` anchor, the statement-scoped regex, the parameter-blind flow analysis). Distinct from
+Phase 2's "reports success while untrue". **And twice the documentation denied the exact failure**: the
+flow scanner's comment argued it "can only report MORE than the truth" while under-reporting on
+extract-method. That sentence is why R3 shipped. Both false claims are struck with the corrections left
+visible.
+
+Also fixed: a check-then-act race in the pool's eviction guard (`ObjectDisposedException` on a timer
+thread = process termination at shutdown; a volatile flag could not fix it and the flag was already
+volatile).
+
+**Carried forward honestly — read before trusting Phase 3:**
+- **WinRM has never touched a Windows host.** It is written and unit-proven against a scripted
+  transport. A green WinRM suite is a statement about this client, not about WinRM. **D-303, Phase 8.**
+- **`AllowCredentialDelegation` delegates nothing** — it only suppresses the double-hop refusal, and now
+  says so at the property itself. **D-304, Phase 8.**
+- **The materialisation ban does NOT cover the vault.** Phase 2 has two materialising calls (username
+  decode; KEK base64 for the key file) — both legitimate, both already documented, neither *enforced*.
+  **D-311, Phase 15.**
+- **D-310, Phase 4:** `AcquireAsync` runs a full eviction sweep per borrow, now serialised by the
+  lifetime lock added for the race fix.
+- Deferrals **D-301 … D-311** all carry owners in the Phase 3 deferral table.
+
+**For the next session:** per WORKFLOW §4 step 3, the remaining worktree **`phase/5-content` should be
+rebased onto the new `main` and re-tested in isolation** before it lands — that has NOT been done here.
+
+### 2026-07-28 — Phase 3 cold review R2 + fix pass · ~~STILL NOT MERGED~~ (superseded: R3 and R4 followed; merged in the R4 entry above)
 
 A genuinely cold review of `phase/3-connector` (no history of the build) returned **four criticals,
 every one verified by execution rather than by reading**, plus five mediums. All are fixed. **`main`

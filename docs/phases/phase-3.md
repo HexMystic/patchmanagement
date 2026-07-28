@@ -158,6 +158,10 @@ recorded red values.
 **Counts at close:** Contracts 19 · Connectors unit 120 · IntegrationTests 38 · Vault 80 (unregressed)
 · **Connectors.IntegrationTests 54, zero skipped**. 311 passing, 0 skipped.
 
+**Merged.** Phase 3 landed on `main` after cold review R4, and the same 311/0-skipped was re-observed
+to completion **on `main` post-merge** — not only on the branch. WinRM's status is unchanged by the
+merge: written, unit-proven, never run against a Windows host (D-303).
+
 > **Correction (cold review R2).** This read "Connectors unit 86 … 267 passing" until the fix pass.
 > No such run existed:
 > `TimeoutTests.The_connectivity_probe_honours_its_configured_budget_rather_than_a_compiled_in_one`
