@@ -55,6 +55,38 @@ public sealed class ConnectorLoggingConventionTests
         "secret|password|passphrase|plaintext|credential|commandline|stdin|payload",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// A logging call whose ARGUMENTS reference secret material.
+    ///
+    /// <para>Cold review R2 finding #4: the scans in this file checked scopes, exception construction
+    /// and record shapes — none of which match the most obvious leak of all, handing a resolved secret
+    /// straight to a logger. The reviewer proved it by planting
+    /// <c>_logger.LogWarning("...{Secret}", credential.Secret.ToArray())</c> in <c>WinRmConnector</c>;
+    /// the entire suite stayed green.</para>
+    ///
+    /// <para>Matched over the FULL FILE TEXT with <c>Singleline</c>, not line by line, because a
+    /// logging call wide enough to carry a secret is exactly the kind a formatter wraps. Scoped to the
+    /// statement with <c>[^;]*</c> so it cannot run past the call it is describing.</para>
+    /// </summary>
+    private static readonly Regex SecretHandedToLogger = new(
+        @"Log(?:Trace|Debug|Information|Warning|Error|Critical)\s*\([^;]*"
+        + @"(?:\.Secret\b|SecurePassword|PrivateKeyBytes|[Pp]laintext|\.Password\b)",
+        RegexOptions.Singleline | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Any write to console/debug/trace from production connector code.
+    ///
+    /// <para>These bypass the logging pipeline completely — no category, no level, no redaction, and
+    /// invisible to every sweep in <c>ConnectorNeverLogTests</c>, which can only observe what reaches
+    /// an <c>ILogger</c>. The reviewer's second plant was exactly this shape
+    /// (<c>Console.WriteLine(Convert.ToBase64String(credential.Secret))</c>) and no behavioural test
+    /// could ever have caught it. A module that never writes to them at all is a much easier rule to
+    /// enforce than one that writes to them carefully.</para>
+    /// </summary>
+    private static readonly Regex ConsoleOrDebugWrite = new(
+        @"(?<![\w.])(?:Console|Debug|Trace)\s*\.\s*(?:Write|WriteLine|Print|Fail)\s*\(",
+        RegexOptions.CultureInvariant);
+
     [Fact]
     public void The_connector_module_creates_no_logging_scopes()
     {
@@ -78,6 +110,32 @@ public sealed class ConnectorLoggingConventionTests
             "An exception message is built from remote output. That message becomes Result.Detail, a "
             + "caller logs it, and remote stderr is arbitrary endpoint-chosen text that routinely "
             + $"quotes back the failing command. Use a ConnectorReason code:{Environment.NewLine}"
+            + string.Join(Environment.NewLine, hits));
+    }
+
+    [Fact]
+    public void No_logging_call_is_handed_secret_material()
+    {
+        var hits = ScannedDirectories.SelectMany(d => SourceScanner.ScanText(d, SecretHandedToLogger)).ToList();
+
+        Assert.True(
+            hits.Count == 0,
+            "A logging call is being handed secret material. It reaches every configured sink, and the "
+            + "structured channel renders a byte[] as base64 rather than hiding it behind "
+            + $"\"System.Byte[]\" (NEVER #1, ADR 0012 decision D):{Environment.NewLine}"
+            + string.Join(Environment.NewLine, hits));
+    }
+
+    [Fact]
+    public void The_connector_module_never_writes_to_console_debug_or_trace()
+    {
+        var hits = ScannedDirectories.SelectMany(d => SourceScanner.ScanText(d, ConsoleOrDebugWrite)).ToList();
+
+        Assert.True(
+            hits.Count == 0,
+            "Connector code writes to console/debug/trace. Those bypass the logging pipeline entirely — "
+            + "no category, no level, no redaction — and are invisible to every never-log sweep, which "
+            + $"can only observe what reaches an ILogger:{Environment.NewLine}"
             + string.Join(Environment.NewLine, hits));
     }
 
@@ -153,6 +211,41 @@ public sealed class ConnectorLoggingConventionTests
         Assert.DoesNotMatch(
             ExceptionFromRemoteOutput,
             "return CommandResult.Ran(exitCode, stdout.ToString(), stderr.ToString(), sw.Elapsed);");
+
+        // ---- The two rules added by cold review R2 finding #4, against the reviewer's ACTUAL plants.
+
+        // Plant 1, verbatim. The whole suite stayed green with this in WinRmConnector.RunAsync.
+        Assert.Matches(
+            SecretHandedToLogger,
+            @"_logger.LogWarning(""winrm auth material {Secret}"", credential.Secret.ToArray());");
+
+        // ...and wrapped across lines, which is how it would really be written once the argument list
+        // grows. A line-scoped scan misses this entirely — hence SourceScanner.ScanText.
+        Assert.Matches(
+            SecretHandedToLogger,
+            """
+            _logger.LogWarning(
+                "winrm auth material {Secret}",
+                credential.Secret.ToArray());
+            """);
+
+        // Plant 2, verbatim: no logger involved, so no behavioural sweep could ever see it.
+        Assert.Matches(
+            ConsoleOrDebugWrite,
+            @"Console.WriteLine(""ssh key material {0}"", Convert.ToBase64String(credential.Secret));");
+        Assert.Matches(ConsoleOrDebugWrite, "Debug.WriteLine(secret);");
+        Assert.Matches(ConsoleOrDebugWrite, "Trace.Write(key);");
+
+        // ...and neither may fire on the legitimate diagnostics this module actually contains, or the
+        // rule gets suppressed rather than obeyed.
+        Assert.DoesNotMatch(
+            SecretHandedToLogger,
+            @"_logger.LogInformation(""Connectivity probe to {Asset} failed: {Outcome}"", target.AssetId ?? target.Host, ex.Outcome);");
+        Assert.DoesNotMatch(
+            SecretHandedToLogger,
+            @"_logger.LogError(ex, ""SSH transport fault contained during {Operation} on {Asset}."", operation, target.AssetId);");
+        Assert.DoesNotMatch(ConsoleOrDebugWrite, "await destination.WriteAsync(bytes, ct);");
+        Assert.DoesNotMatch(ConsoleOrDebugWrite, "await input.WriteAsync(stdin, cts.Token);");
 
         // Vocabulary: matches the member names it is for, in any casing.
         foreach (var name in new[] { "Secret", "password", "Passphrase", "CommandLine", "Stdin", "Payload" })
