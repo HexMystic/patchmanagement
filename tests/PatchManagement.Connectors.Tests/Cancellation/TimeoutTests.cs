@@ -107,13 +107,28 @@ public sealed class TimeoutTests
         Assert.Equal(0, harness.Governor.ActiveGlobal);
     }
 
-    [Fact]
+    /// <summary>
+    /// The probe's budget comes from configuration, and the stall is in the CONNECT — which is where
+    /// a probe actually spends its time.
+    ///
+    /// <para><b>This test used to hang forever.</b> It stalled the <em>session</em> and awaited
+    /// <see cref="StallingSshSession.Entered"/>, but <c>TestConnectivityAsync</c> never runs a session
+    /// operation — reaching an authenticated session IS the proof — so that signal could never fire.
+    /// It had no timeout either, so the suite did not fail, it stopped: the whole connector project
+    /// never reached a result, and the phase's recorded "267 passing, 0 skipped" described a run that
+    /// cannot have happened. A hanging test is worse than a failing one precisely because it reads as
+    /// broken infrastructure. Hence <c>Timeout</c> below, and a fake that can hold a probe open.</para>
+    ///
+    /// <para>The budget is walked from both sides — not yet expired, then expired — so the assertion
+    /// is about the boundary rather than about eventually finishing.</para>
+    /// </summary>
+    [Fact(Timeout = 10000)]
     public async Task The_connectivity_probe_honours_its_configured_budget_rather_than_a_compiled_in_one()
     {
         var time = new FakeTimeProvider();
-        var stalled = new StallingSshSession();
+        var factory = new StallingSshSessionFactory();
         var harness = ConnectorHarness.Build(
-            session: () => stalled,
+            sessionFactory: factory,
             timeProvider: time,
             timeouts: new ConnectorTimeoutOptions
             {
@@ -123,11 +138,26 @@ public sealed class TimeoutTests
 
         var probing = harness.Connector.TestConnectivityAsync(ConnectorHarness.Target(), CancellationToken.None);
 
-        await stalled.Entered;
+        await factory.Entered; // the probe is genuinely mid-connect
 
-        // Two seconds is enough for the CONFIGURED budget but nowhere near the 15 seconds that used
-        // to be compiled in. If the literal were still there this would not complete.
-        time.Advance(TimeSpan.FromSeconds(3));
+        // Still INSIDE the configured 2s ProbeBudget: abandoning here would mean the connector is
+        // enforcing some shorter budget of its own rather than the configured one.
+        time.Advance(TimeSpan.FromMilliseconds(1_500));
+        Assert.False(probing.IsCompleted, "the probe gave up before its configured budget elapsed");
+
+        // Past it.
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        // Bounded, and the bound is load-bearing rather than belt-and-braces: with a compiled-in
+        // literal the fake clock never reaches the deadline, so `await probing` would simply never
+        // return. Without this the failure is a bare "test execution timed out", which names neither
+        // the guarantee nor the cause; with it, the assertion says which budget is being enforced.
+        var settled = await Task.WhenAny(probing, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.True(
+            settled == probing,
+            "The probe did not expire after its configured 2s budget elapsed on the fake clock, so the "
+            + "budget it enforces is not the configured one — which is exactly how a compiled-in "
+            + "literal behaves.");
 
         var result = await probing;
         Assert.Equal(ConnectorOutcome.Timeout, result.Outcome);

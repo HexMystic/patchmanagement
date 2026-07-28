@@ -19,7 +19,7 @@ separate worktrees. **Phase 8 is solo.**
 | 0 | Environment & design | solo | — | **complete** |
 | 1 | Contracts | solo | 0 | **complete** |
 | 2 | Credential vault | parallel | 1 | **complete** |
-| 3 | Endpoint connector | parallel | 1 | **in-progress** — built, 267 green, **unmerged, awaiting cold review**; SSH verified, WinRM unverified |
+| 3 | Endpoint connector | parallel | 1 | **in-progress** — built, 273 green, **unmerged; cold review R2 found 4 criticals, fix pass done, awaiting a THIRD cold review**; SSH verified, WinRM unverified |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
 | 5 | Content ingestion | parallel | 1 | **in-progress** |
 | 6 | Assessment | solo | 4, 5 | not-started |
@@ -149,8 +149,16 @@ five lab containers against real sshd — no unit stand-in satisfies it.
 > transport defects that way. It proves nothing about how a real WinRM server responds. A green WinRM
 > suite is a statement about this client, not about WinRM. Real-host verification is **D-303 (Phase 8)**.
 
-**Tests: 267 passing, 0 skipped.** Contracts 19 · Connectors unit 86 · IntegrationTests 38 ·
+**Tests: 273 passing, 0 skipped.** Contracts 19 · Connectors unit 92 · IntegrationTests 38 ·
 Vault 80 (unregressed — Phase 3 did not disturb Phase 2) · **Connectors.IntegrationTests 44**.
+
+> **Correction (cold review R2).** This line previously read "267 passing, 0 skipped · Connectors unit
+> 86". **That number was never observed and could not have been.**
+> `TimeoutTests.The_connectivity_probe_honours_its_configured_budget_rather_than_a_compiled_in_one`
+> awaited a signal that its fake could never raise and carried no timeout, so the connector unit
+> project **hung instead of finishing** — no run of it has ever produced a total. The project actually
+> contains **92** tests, not 86. The hang is fixed and the counts above are measured from a completed
+> run. See finding #1 in the cold review.
 
 The 44 fleet tests are **tests that require the lab fleet**, not optional extras. They hard-fail with
 an actionable message when the fleet is down rather than skipping, because a silently-skipped fleet
@@ -730,6 +738,10 @@ wrote this phase must not sign it off.
 **Tests: Contracts 19 · Connectors unit 86 · IntegrationTests 38 · Vault 80 · fleet 44 = 267, zero
 skipped.** Vault unregressed. The 44 fleet tests **require the lab fleet** and hard-fail (never skip)
 when it is down. Verified on freshly built assemblies — see the preflight note below.
+
+> **⛔ THE PARAGRAPH ABOVE IS FALSE — left in place as the record of what was claimed.** The connector
+> unit project **hung** and never produced a total (see the 2026-07-28 R2 entry at the top of this log),
+> so "267, zero skipped" was never measured. Real figures: Connectors unit **92**, total **273**.
 
 **Commits (10):** `d78b9b7` solution + first compile → `16cca40` test projects + TestSupport →
 `716fb56` contract surface to Contracts → `9a4607a` credentials + sudo → `b282d1b` governor +

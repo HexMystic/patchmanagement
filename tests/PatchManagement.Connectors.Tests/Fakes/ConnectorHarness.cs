@@ -22,13 +22,24 @@ internal sealed class ConnectorHarness
 
     public required FakeCredentialProvider Credentials { get; init; }
     public required RecordingCredentialProvider Recorder { get; init; }
-    public required StubSshSessionFactory SessionFactory { get; init; }
     public required SemaphoreConnectionGovernor Governor { get; init; }
     public required SshConnector Connector { get; init; }
+
+    private StubSshSessionFactory? Stub { get; init; }
+
+    /// <summary>
+    /// The stub factory the harness built. Throws rather than returning null when the caller supplied
+    /// its own factory, so a test asserting on <c>ConnectAttempts</c> against a harness that has no
+    /// stub fails by saying so instead of by NullReferenceException three frames away.
+    /// </summary>
+    public StubSshSessionFactory SessionFactory =>
+        Stub ?? throw new InvalidOperationException(
+            "This harness was built with a custom ISshSessionFactory, so there is no stub to inspect.");
 
     public static ConnectorHarness Build(
         Func<ISshSession>? session = null,
         Exception? connectThrows = null,
+        ISshSessionFactory? sessionFactory = null,
         Action<FakeCredentialProvider>? configureCredentials = null,
         Action<ConnectorConcurrencyOptions>? configureConcurrency = null,
         TimeProvider? timeProvider = null,
@@ -45,9 +56,16 @@ internal sealed class ConnectorHarness
         var wrapped = Options.Create(options);
 
         var governor = new SemaphoreConnectionGovernor(wrapped);
-        var factory = connectThrows is not null
-            ? new StubSshSessionFactory(connectThrows)
-            : new StubSshSessionFactory(session ?? (() => new RecordingSshSession()));
+
+        StubSshSessionFactory? stub = null;
+        if (sessionFactory is null)
+        {
+            stub = connectThrows is not null
+                ? new StubSshSessionFactory(connectThrows)
+                : new StubSshSessionFactory(session ?? (() => new RecordingSshSession()));
+        }
+
+        var factory = sessionFactory ?? stub!;
 
         var connector = new SshConnector(
             recorder,
@@ -63,9 +81,9 @@ internal sealed class ConnectorHarness
         {
             Credentials = credentials,
             Recorder = recorder,
-            SessionFactory = factory,
             Governor = governor,
             Connector = connector,
+            Stub = stub,
         };
     }
 
