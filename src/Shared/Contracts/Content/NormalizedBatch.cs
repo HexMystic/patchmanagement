@@ -1,4 +1,4 @@
-namespace PatchManagement.Content.Model;
+namespace PatchManagement.Contracts.Content;
 
 /// <summary>
 /// The full result of one connector run: everything to persist plus the new incremental

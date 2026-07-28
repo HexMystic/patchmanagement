@@ -1,4 +1,4 @@
-namespace PatchManagement.Content.Model;
+namespace PatchManagement.Contracts.Content;
 
 /// <summary>
 /// A publisher-side advisory ready to upsert into <c>advisories</c> (+ its <c>advisory_affects</c>

@@ -1,4 +1,4 @@
-namespace PatchManagement.Content.Model;
+namespace PatchManagement.Contracts.Content;
 
 /// <summary>
 /// The frozen content vocabulary (Phase 1, ADR 0010). These strings are the ONLY legal values for

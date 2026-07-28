@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using PatchManagement.Content.Abstractions;
-using PatchManagement.Content.Model;
+using PatchManagement.Contracts.Content;
 
 namespace PatchManagement.Content.Ingestion;
 

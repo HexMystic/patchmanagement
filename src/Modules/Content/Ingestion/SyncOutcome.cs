@@ -1,4 +1,4 @@
-namespace PatchManagement.Content.Model;
+namespace PatchManagement.Content.Ingestion;
 
 /// <summary>
 /// The honest result of one feed sync — what was written and whether it worked. Mirrors what lands

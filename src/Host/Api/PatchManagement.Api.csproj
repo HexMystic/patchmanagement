@@ -8,6 +8,7 @@
          calls directly is still unreachable in production unless it is referenced here. -->
     <ProjectReference Include="..\..\Modules\Vault\PatchManagement.Vault.csproj" />
     <ProjectReference Include="..\..\Modules\Connectors\PatchManagement.Connectors.csproj" />
+    <ProjectReference Include="..\..\Modules\Content\PatchManagement.Content.csproj" />
   </ItemGroup>
 
   <ItemGroup>

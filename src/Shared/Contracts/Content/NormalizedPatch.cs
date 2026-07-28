@@ -1,4 +1,4 @@
-namespace PatchManagement.Content.Model;
+namespace PatchManagement.Contracts.Content;
 
 /// <summary>
 /// An installable patch ready to upsert into <c>patches</c>. Produced by the USN / RHSA / MSRC /

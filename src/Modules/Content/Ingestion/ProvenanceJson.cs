@@ -1,5 +1,5 @@
 using System.Text.Json;
-using PatchManagement.Content.Model;
+using PatchManagement.Contracts.Content;
 
 namespace PatchManagement.Content.Ingestion;
 

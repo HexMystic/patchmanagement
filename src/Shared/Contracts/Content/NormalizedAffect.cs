@@ -1,4 +1,4 @@
-namespace PatchManagement.Content.Model;
+namespace PatchManagement.Contracts.Content;
 
 /// <summary>
 /// One fix statement, normalized for <c>advisory_affects</c>: "package <see cref="PackageName"/>

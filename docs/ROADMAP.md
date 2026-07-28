@@ -335,8 +335,16 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
 - **Exit criteria:** Connectors for NVD, CISA KEV, EPSS, Ubuntu USN, **Debian DSA**, RHSA,
   MSRC, and `wsusscn2.cab`; normalized into the Phase-1 content schema; incremental &
   idempotent refresh; provenance recorded per record.
-- **Owned paths:** `src/Modules/Content`.
+- **Owned paths:** `src/Modules/Content`, plus `src/Shared/Contracts/Content`
+  ([ADR 0018](adr/0018-content-contract-surface.md)) and `tests/PatchManagement.Content.Tests`.
+- **Detail:** `docs/phases/phase-5.md`.
 - **See:** `docs/HARD-PROBLEMS.md` (wsusscn2.cab vs MSRC CSAF; #2/#3 require Debian DSA).
+- **Foundation landed; no content-parsing work is done.** The module is now *reachable* — it was
+  not. `PatchManagement.Api` never referenced it, so `ContentRegistrar` could not be discovered and
+  all 2,197 lines were dead in the shipped app: **the third occurrence of that one defect** after
+  the Vault (`a50d9ec`) and Phase 3's WIP. The guard now covers it and was proven red-first.
+  **No connector has ever run against its live feed and no parsing test exists** — every
+  feed-related exit criterion in `phase-5.md` is deliberately unticked.
 - **Content vocabulary is frozen in Phase 1** (`advisories.source`, `patches.source`,
   `content_sources.kind`, `ecosystem`) and covers every feed above plus the lab fleet
   (Ubuntu→USN, Debian→DSA, Rocky/Alma→RHSA, Windows→MSRC+wsusscn2). Two deferred, both
@@ -837,6 +845,86 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
+
+### 2026-07-28 — Phase 5 FOUNDATION · `phase/5-content` rebased onto `main` · green at 322 · NOT MERGED
+
+**Foundation only. No content-parsing work was done, and none is claimed.** `phase/5-content` was
+rebased onto `main` (`614f911`) and taken from "full module, no tests, not in the host" to **322
+passing, 0 skipped, 0 failed**, run to completion with Postgres and the lab fleet up.
+
+**Tests: 322** — Contracts 19 · Connectors unit 120 · **IntegrationTests 40** (was 38: +2 discovery
+facts) · Vault 80 · Connectors.IntegrationTests 54 · **Content.Tests 9 (new)**. Vault and Connectors
+are unregressed, which is not a formality here — the contract move touches the shared Contracts
+assembly every module references. Fleet suite ~12m49s; that is slow, not hung.
+
+**The module could not run in the shipped app — the THIRD time this exact defect has shipped.**
+`PatchManagement.Api` never referenced `PatchManagement.Content`, so `CompositionRoot`'s
+base-directory scan could not find `ContentRegistrar` and all 2,197 lines were unreachable in
+production. The Vault did this at `a50d9ec`; Phase 3's WIP did it again; Phase 5's WIP did it a
+third time. `HostModuleDiscoveryTests` existed to catch it and had **no Content case** — so nothing
+would have noticed while feed-parsing logic was written to green against a dead module.
+
+**Proven red-first, and the red run is the point.** Both new facts failed before the
+`ProjectReference` existed — `deps.json` lists no `PatchManagement.Content`, and the real host
+container returns an empty `IContentConnector` set — while **the four Vault/Connectors facts stayed
+green in the same run**, which is what shows the failure was Content-specific and not a broken
+harness. One `ProjectReference` line is the entire delta between red and green.
+
+**Writing the guard required a contract move — [ADR 0018](adr/0018-content-contract-surface.md),
+following ADR 0017 exactly.** The behavioural half must assert through a type the integration-test
+project already has; referencing the module instead puts its DLL in the TEST output, lets the
+base-directory scan succeed on that copy, and makes the guard **incapable of failing** — this
+project's characteristic defect. Content had no such type. `IContentConnector`, `ContentSourceState`,
+the `Normalized*` records, `ProvenanceEntry`, both overlays, `Feeds` and `Ecosystems` moved to
+`src/Shared/Contracts/Content`. `IContentStore`/`IContentConnectionFactory` deliberately did **not**
+— they carry `NpgsqlConnection`/`NpgsqlTransaction`, and a database driver in Contracts would make
+Phases 6 and 7 inherit Npgsql to read a CVSS score. Two tests pin both halves of that split.
+
+The guard resolves the connector **set**, not the store: `IContentStore` depends on
+`ConnectionStrings:Content`, so resolving it would report a *configuration* gap in the language of a
+*wiring* gap. The set also asserts all eight feed `Kind`s by name rather than by count — a count
+passes for the wrong reason the moment one connector is registered twice.
+
+**Also landed:** `ConnectionStrings:Content` now exists (`appsettings.json`, `.env.example`) — the
+`patchmgmt_content` role was in `db/roles.sql` all along but nothing surfaced it, so the module
+would have shipped discoverable and unable to write a row, failing only on the first sync via a
+deferred throw · `InternalsVisibleTo` on the module csproj, and its odd `9.0.4` pins aligned to the
+`9.0.0` house style · **`docs/phases/phase-5.md` written** (phases 1–4 had one; Phase 5 did not,
+so there was nothing to read at session start) with **every feed-related exit criterion explicitly
+unticked** · `SyncOutcome` moved to `Ingestion/`, the only type the contract move left behind.
+
+**The 9 seed tests are foundation, not parsing.** They pin `Feeds`/`Ecosystems` against the JSON
+schema enums — including the asymmetry that KEV/EPSS/wsusscn2 are not advisory publishers and NVD
+is not a patch publisher — and they are mutation-checked: adding a ninth feed constant the schemas
+do not know about turns 2 red.
+
+**Carried forward honestly — read before trusting Phase 5:**
+- **No connector has ever run against its live feed.** All eight are written from published formats
+  and unverified against real payloads. A green parse suite would be a statement about the parser,
+  not the feed — the same distinction Phase 3 records for WinRM (D-303).
+- **`wsusscn2.cab` has never been expanded.** `ExpandCabPackageSource` shells out to Windows
+  `expand.exe` and has never seen the real ~627 MB cab; it throws `PlatformNotSupportedException`
+  off Windows at *call* time, not startup.
+- **Nothing can start a sync.** No Hangfire job, no endpoint, no scheduler — the host discovers the
+  module but cannot ingest. Identical in shape to the Phase 2 rotation trigger, whose owner is
+  **Phase 11**; this needs the same decision and does not yet have an owner.
+- **The vocabulary is still duplicated twice.** `Feeds` is now pinned to the schemas, but
+  `AppDbContext`'s CHECK arrays remain an independent copy. Collapsing them changes what a migration
+  emits — a frozen-contract question under NEVER #6. Recorded in ADR 0018, **owner Phase 6**.
+
+**Two standing items, restated so they do not get lost — neither is Phase 5 work:**
+- **No phase owns the logging pipeline or deployment packaging.** H4/H5 are parked as "Phase 2
+  hardening" only because Phase 2 accepts them; Phase 8 deploys *patches to endpoints* and Phase 0
+  is complete. Naming an owner for logging/telemetry and deployment packaging is still a decision
+  someone has to make (see the standing note in the Phase 2 follow-ups above).
+- **The alpine→Debian(glibc) Postgres revert ([ADR 0009](adr/0009-postgres-alpine-dev-image.md)) is
+  required before any perf work or production packaging.** Alpine is musl and its libc collation
+  differs; Alpine is not the prod baseline.
+
+**For the next session:** the branch is **not merged** and `main` is untouched at `614f911`. The
+local branch has diverged from `origin/phase/5-content` (rebased), so pushing needs
+`--force-with-lease`. The next slice is the actual content work — start at `docs/phases/phase-5.md`,
+where each exit criterion names the test that will prove it.
 
 ### 2026-07-28 — Phase 3 cold review R4 + fix pass · **MERGED to `main`** · `main` green at 311
 

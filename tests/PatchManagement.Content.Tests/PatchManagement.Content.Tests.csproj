@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Unit suite for the content module. Runs with no infrastructure: no Postgres, no lab fleet, and
+    no network — every connector splits fetch from a `public static Parse`, so parsing is driven
+    from recorded payloads under Samples/.
+
+    DB-touching content tests do NOT belong here. The catalogue's behavioural contract (row grain,
+    idempotent re-ingest, the ADR 0010 role split) is already covered by
+    tests/PatchManagement.IntegrationTests/ContentCatalogueTests.cs against PostgresFixture, and the
+    host-discovery guard lives in that project too — deliberately, because it must not reference
+    this module (docs/adr/0018-content-contract-surface.md).
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="9.0.4" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Modules\Content\PatchManagement.Content.csproj" />
+    <ProjectReference Include="..\..\src\Shared\Contracts\PatchManagement.Contracts.csproj" />
+    <ProjectReference Include="..\PatchManagement.TestSupport\PatchManagement.TestSupport.csproj" />
+  </ItemGroup>
+
+</Project>

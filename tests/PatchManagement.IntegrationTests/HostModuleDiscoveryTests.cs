@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using PatchManagement.Contracts.Connectors;
+using PatchManagement.Contracts.Content;
 using PatchManagement.Contracts.Credentials;
 
 namespace PatchManagement.IntegrationTests;
@@ -113,6 +114,67 @@ public sealed class HostModuleDiscoveryTests
         Assert.Contains(
             connectors,
             c => c.GetType().Assembly.GetName().Name == "PatchManagement.Connectors");
+    }
+
+    /// <summary>
+    /// Same guard, for the Content module — the THIRD occurrence of one defect. The Vault shipped
+    /// unreferenced at <c>a50d9ec</c>, Phase 3's WIP repeated it, and Phase 5's WIP repeated it
+    /// again: a complete module, eight feed connectors, an upsert store, 2,197 lines, and no path
+    /// by which <c>ContentRegistrar</c> could ever be discovered in the shipped app.
+    /// </summary>
+    [Fact]
+    public void Api_project_ships_the_content_module()
+    {
+        var deps = ApiDepsJsonPath();
+        Assert.True(File.Exists(deps), $"Expected the API's build output at '{deps}'.");
+
+        Assert.True(
+            File.ReadAllText(deps).Contains("PatchManagement.Content", StringComparison.Ordinal),
+            "PatchManagement.Api.deps.json does not list PatchManagement.Content, so the module "
+            + "never reaches the host output and CompositionRoot cannot discover ContentRegistrar "
+            + "— every feed connector would be unreachable in production. Add "
+            + @"<ProjectReference Include=""..\..\Modules\Content\PatchManagement.Content.csproj"" /> "
+            + $"to src/Host/Api/PatchManagement.Api.csproj.{Environment.NewLine}Checked: {deps}");
+    }
+
+    /// <summary>
+    /// The behavioural half for Content. Asserted through <see cref="IContentConnector"/>, which
+    /// ADR 0018 moved into PatchManagement.Contracts precisely so this project still needs no
+    /// reference to the module — the property that makes the test capable of failing (see the class
+    /// remarks).
+    ///
+    /// <para>Resolved deliberately as the connector SET rather than through <c>IContentStore</c> or
+    /// <c>IContentConnectionFactory</c>: both depend on <c>ConnectionStrings:Content</c>, so
+    /// resolving them would report a configuration gap in the language of a wiring gap. The set
+    /// also proves all eight feeds registered, and — because the factory validates scopes — would
+    /// catch the captive-dependency class of bug that sank the Connectors module.</para>
+    /// </summary>
+    [Fact]
+    public void Real_host_container_resolves_the_content_module()
+    {
+        using var factory = new WebApplicationFactory<Program>();
+        using var scope = factory.Services.CreateScope();
+
+        var connectors = scope.ServiceProvider.GetServices<IContentConnector>().ToList();
+
+        Assert.True(connectors.Count > 0,
+            "The real host's container has no IContentConnector — ContentRegistrar was not "
+            + "discovered by CompositionRoot, so the Content module is not loaded in the shipped app.");
+
+        // Compared as a string so this project needs no compile-time reference to the module.
+        Assert.Contains(
+            connectors,
+            c => c.GetType().Assembly.GetName().Name == "PatchManagement.Content");
+
+        // All eight feeds of the Phase 5 exit criteria, by Kind rather than by count — a count
+        // passes for the wrong reason the moment a ninth connector is registered twice.
+        Assert.Equal(
+            new SortedSet<string>
+            {
+                Feeds.Nvd, Feeds.Kev, Feeds.Epss, Feeds.Usn,
+                Feeds.Dsa, Feeds.Rhsa, Feeds.Msrc, Feeds.Wsusscn2,
+            },
+            new SortedSet<string>(connectors.Select(c => c.Kind), StringComparer.Ordinal));
     }
 
     /// <summary>Path to the API's own build output, matching this test run's configuration.</summary>

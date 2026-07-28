@@ -1,5 +1,5 @@
 using Npgsql;
-using PatchManagement.Content.Model;
+using PatchManagement.Contracts.Content;
 
 namespace PatchManagement.Content.Abstractions;
 

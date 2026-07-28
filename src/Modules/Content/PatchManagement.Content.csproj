@@ -1,5 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!--
+    Phase 5 content ingestion. The connector interface and the normalized model live in
+    PatchManagement.Contracts (docs/adr/0018-content-contract-surface.md); what stays here is the
+    machinery — the eight feed connectors, the Npgsql upsert store, and the sync orchestrator.
+    Npgsql is a module-level dependency by design: IContentStore and IContentConnectionFactory
+    carry NpgsqlConnection/NpgsqlTransaction, and Contracts must take no database dependency.
+  -->
+
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -11,9 +19,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
     <PackageReference Include="Npgsql" Version="9.0.3" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.4" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The test project needs the internal registrar, the JsonElement helpers and the
+         codename→release map (ContentRegistrar, JsonHelpers, DistroReleases). -->
+    <InternalsVisibleTo Include="PatchManagement.Content.Tests" />
   </ItemGroup>
 
 </Project>

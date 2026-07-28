@@ -1,4 +1,4 @@
-namespace PatchManagement.Content.Model;
+namespace PatchManagement.Contracts.Content;
 
 /// <summary>
 /// A FIRST EPSS enrichment for the advisory (or advisories) whose <c>external_id</c> equals

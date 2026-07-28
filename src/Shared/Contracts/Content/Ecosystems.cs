@@ -1,4 +1,4 @@
-namespace PatchManagement.Content.Model;
+namespace PatchManagement.Contracts.Content;
 
 /// <summary>
 /// The three implemented version-comparator ecosystems (HARD-PROBLEMS #3). CHECK-constrained on

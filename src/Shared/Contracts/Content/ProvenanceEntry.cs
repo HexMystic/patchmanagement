@@ -1,4 +1,4 @@
-namespace PatchManagement.Content.Model;
+namespace PatchManagement.Contracts.Content;
 
 /// <summary>
 /// One provenance record: "feed <see cref="Source"/> contributed to this advisory/patch, retrieved

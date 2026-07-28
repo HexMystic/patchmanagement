@@ -4,6 +4,7 @@ using PatchManagement.Content.Abstractions;
 using PatchManagement.Content.Connectors;
 using PatchManagement.Content.Http;
 using PatchManagement.Content.Ingestion;
+using PatchManagement.Contracts.Content;
 using PatchManagement.Contracts.Modules;
 
 namespace PatchManagement.Content;
@@ -16,7 +17,7 @@ namespace PatchManagement.Content;
 /// </summary>
 public static class ContentModule
 {
-    public static IServiceCollection AddContent(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddContentModule(this IServiceCollection services, IConfiguration configuration)
     {
         // Public feeds — a bounded timeout keeps every fetch time-bound (NEVER #5). No auth handlers:
         // the feeds are public and this client must never carry a secret that could be logged (NEVER #1).
@@ -60,9 +61,19 @@ public static class ContentModule
     }
 }
 
-/// <summary>Discovery half of the module convention (reflected by the host composition root).</summary>
+/// <summary>
+/// Discovery half of the module convention: the host's composition root finds this by reflection
+/// and invokes it, so enabling the Content module needs no edit to any shared registration file.
+/// Internal + parameterless so it is instantiated via
+/// <c>Activator.CreateInstance(type, nonPublic: true)</c> and stays encapsulated.
+///
+/// <para>Discovery only reaches this class if <c>PatchManagement.Content.dll</c> is in the host's
+/// output directory, which requires a <c>ProjectReference</c> from <c>PatchManagement.Api</c>.
+/// That reference is load-bearing and is asserted by <c>HostModuleDiscoveryTests</c> — this module
+/// shipped without it once already.</para>
+/// </summary>
 internal sealed class ContentRegistrar : IModuleRegistrar
 {
     public void Register(IServiceCollection services, IConfiguration configuration) =>
-        services.AddContent(configuration);
+        services.AddContentModule(configuration);
 }

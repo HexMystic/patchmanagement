@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Xml.Linq;
 using PatchManagement.Content.Abstractions;
-using PatchManagement.Content.Model;
+using PatchManagement.Contracts.Content;
 
 namespace PatchManagement.Content.Connectors;
 
