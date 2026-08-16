@@ -53,3 +53,22 @@ latest integrated state before it lands.
 - Set the phase **Status → complete** in `docs/ROADMAP.md`; note anything deferred.
 - If the phase produced a significant decision, add an ADR under `docs/adr/`.
 - If it changed a contract, that required a prior explicit ask (CLAUDE.md §6) — record it.
+- **Push** (see §6).
+
+## 6. Remote state — end every slice pushed
+
+Sections 1–5 were entirely local. That is how four commits across three sessions came to
+exist on one disk while `origin/phase/5-content` still pointed at a superseded WIP —
+found 2026-08-16, after a 19-day gap. The merge sequence protects `main` from bad code;
+nothing was protecting the work itself from the machine.
+
+- **Push the phase branch at the end of every slice**, not only at phase close. If a
+  change is worth committing it is worth surviving the disk.
+- A rebased branch needs **`--force-with-lease`**, never bare `--force`. The lease is
+  what refuses the push when the remote moved under you — exactly the case bare `--force`
+  destroys silently.
+- **`main` is pushed as soon as a merge lands** (§4 step 2), so `origin/main` is always
+  the last green integration point.
+- **Pushing is not merging.** A pushed phase branch is a backup, not a claim that it is
+  ready; `ROADMAP.md`'s status is what says that. Branch names and commit messages
+  already say `NOT MERGED` where it matters — keep that true rather than avoiding the push.
