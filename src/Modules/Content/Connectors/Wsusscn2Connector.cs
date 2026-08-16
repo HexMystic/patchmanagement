@@ -12,14 +12,28 @@ namespace PatchManagement.Content.Connectors;
 /// <c>SupersededBy</c> revisions are inverted into "the newer patch supersedes this older one", so
 /// Phase 6 can resolve a missing patch to its effective head (HARD-PROBLEMS #4).
 ///
-/// SCOPE / HONESTY: the valuable, testable part — turning the catalogue XML into patches + edges —
-/// is implemented here and fully covered by tests against a sample <c>package.xml</c>. Physically
-/// decompressing the ~627&#160;MB nested CAB (<c>wsusscn2.cab</c> → <c>package.cab</c> →
-/// <c>package.xml</c>) is delegated to <see cref="IWsusPackageSource"/>; the production extractor
-/// (<see cref="PatchManagement.Content.Http.ExpandCabPackageSource"/>) shells out to Windows
-/// <c>expand.exe</c> and has NOT been exercised against the full cab in this slice — see its TODO.
-/// Localized update TITLES live in per-language cabs inside the package and are not read here; a KB
-/// or UpdateId identifies each patch, and richer titles are a documented follow-up.
+/// <para><b>⚠ THIS PARSER IS WRITTEN AGAINST A SCHEMA THAT DOES NOT EXIST. It returns an EMPTY
+/// BATCH against the real catalogue, and the sync reports <c>ok</c>.</b> Do not build on it — see
+/// `docs/phases/phase-5.md` "wsusscn2 — the cab was opened for the first time" and <b>D-504</b>.</para>
+///
+/// <para><b>Correction (2026-08-16).</b> This comment previously claimed the normalization was
+/// "fully covered by tests against a sample <c>package.xml</c>". <b>That was false.</b> No
+/// wsusscn2 test and no <c>package.xml</c> sample have ever existed in this repository;
+/// <see cref="Parse(System.Xml.Linq.XDocument, DateTimeOffset)"/> has zero coverage. The claim is
+/// struck rather than quietly deleted, because a doc asserting a guarantee it does not have is what
+/// stops the next reader from looking.</para>
+///
+/// <para>Measured against the real 658&#160;MB <c>lab/content/wsusscn2.cab</c>: <c>package.xml</c>
+/// holds 136,965 <c>&lt;Update&gt;</c> elements and contains <b>zero</b> occurrences of
+/// <c>KBArticleID</c>, <c>Title</c>, <c>RebootBehavior</c> or <c>Uninstallable</c>, and zero
+/// <c>IsSoftware="true"</c> (all 4,206 are <c>"false"</c>). The first filter below therefore skips
+/// every update. Those fields are real but live in the <c>package2..75.cab</c> shards —
+/// <c>KBArticleID</c> in <c>x/&lt;n&gt;</c>, <c>Title</c> in <c>l/&lt;lang&gt;/&lt;n&gt;</c>, and the
+/// software/category discriminator is <c>c/&lt;n&gt;</c>'s <c>Properties/@UpdateType</c>.</para>
+///
+/// <para>What IS correct against real data and should survive the rewrite: the
+/// <c>SupersededBy → Revision/@Id</c> inversion, the <c>UpdateId</c>/<c>RevisionId</c> attributes,
+/// and <c>PackageId</c> as the cursor.</para>
 /// </summary>
 public sealed class Wsusscn2Connector(IWsusPackageSource packageSource) : IContentConnector
 {

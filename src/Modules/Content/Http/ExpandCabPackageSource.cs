@@ -10,12 +10,28 @@ namespace PatchManagement.Content.Http;
 /// for this slice). The cab nests: <c>wsusscn2.cab → package.cab → package.xml</c>, so two expand
 /// passes are needed. Time-bounded via the process wait + the caller's token (NEVER #5).
 ///
-/// TODO(phase-5-followup): this path is IMPLEMENTED but NOT yet exercised against the real ~627&#160;MB
-/// <c>lab/content/wsusscn2.cab</c> in this session — the ~1&#160;GB uncompressed package.xml and
-/// Windows-only <c>expand.exe</c> dependency make it an integration concern to validate on a Windows
-/// runner. The connector's XML normalization (<see cref="PatchManagement.Content.Connectors.Wsusscn2Connector"/>)
-/// is fully tested independently of this extractor. Alternatives to weigh then: WiX DTF
-/// (<c>Microsoft.Deployment.Compression.Cab</c>) for a managed, cross-platform reader.
+/// <para><b>⚠ BROKEN — THIS CANNOT EXTRACT THE REAL CAB. Confirmed 2026-08-16 against the real
+/// 658&#160;MB <c>lab/content/wsusscn2.cab</c>; do not assume it works.</b></para>
+///
+/// <para><b>Defect 1 — the destination must be a directory.</b> <c>wsusscn2.cab</c> is a
+/// <i>multi-file</i> cab, and <c>expand.exe</c> refuses a file destination for one:
+/// <c>"Destination directory required for a multi-file CAB."</c> (exit 2). <see cref="RunExpandAsync"/>
+/// passes a file path, so the <b>first</b> call fails every time and this throws
+/// <c>expand.exe failed extracting 'package.cab' (exit 2)</c>. The inner <c>package.cab</c> IS
+/// single-file, so the second call's file destination is correct — only the outer call is wrong.</para>
+///
+/// <para><b>Defect 2 — one cab of 75.</b> The real cab holds <c>index.xml</c> plus
+/// <c>package.cab</c> and <c>package2..75.cab</c>. <c>index.xml</c> is Microsoft's manifest
+/// (<c>&lt;CAB NAME= RANGESTART= /&gt;</c>) and is never read. <c>package.xml</c> alone is the update
+/// graph only: KB numbers, titles and the software/category flag all live in the shards.</para>
+///
+/// <para><b>Correction.</b> The previous TODO said the normalization was "fully tested independently
+/// of this extractor". It is not tested at all — see
+/// <see cref="PatchManagement.Content.Connectors.Wsusscn2Connector"/>.</para>
+///
+/// <para>Rewrite owner <b>D-504</b>. Weigh WiX DTF (<c>Microsoft.Deployment.Compression.Cab</c>) for
+/// managed random access instead of expanding gigabytes to disk — and note that a managed reader
+/// would also drop the Windows-only constraint below.</para>
 /// </summary>
 public sealed class ExpandCabPackageSource : IWsusPackageSource
 {

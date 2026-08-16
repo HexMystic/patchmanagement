@@ -194,6 +194,93 @@ covers `stretch`…`trixie` only. The pre-stretch suites `data/DSA/list` still c
 to `debian:<codename>`. Pinned by `DistroReleasesTests` so it is a stated starting point rather than
 a surprise.
 
+### wsusscn2 — the cab was opened for the first time, 2026-08-16
+
+The real `lab/content/wsusscn2.cab` (658 MB, fetched Phase 0) had **never been opened**. It was
+opened on this Windows box using `C:\Windows\System32\expand.exe`. **No Windows target, VM or WinRM
+is needed** — this is a local file, not an endpoint operation, which is why it was reachable now
+rather than at Phase 8. Four defects, each confirmed against the real cab.
+
+**1 — `ExpandCabPackageSource` cannot run at all.** `expand.exe` refuses the exact invocation the
+code issues:
+
+```
+lab/content/wsusscn2.cab: Destination directory required for a multi-file CAB.   (exit 2)
+```
+
+`RunExpandAsync` passes a **file** path as the destination. `wsusscn2.cab` is a multi-file cab, so
+the **first** call fails, every time, and the code throws `expand.exe failed extracting
+'package.cab' (exit 2)`. A directory destination works. The inner `package.cab` is single-file, so
+the second call's file destination is fine — the bug is specific to the outer cab.
+
+**2 — the catalogue is sharded; only 1 of 75 cabs is read.** `index.xml` is Microsoft's own manifest:
+
+```xml
+<INDEX VERSION="1"><CABLIST XOR="0">
+  <CAB NAME="package.cab" />
+  <CAB NAME="package2.cab" RANGESTART="0" FILESDIR="1" />
+  <CAB NAME="package3.cab" RANGESTART="627" />
+  …  <CAB NAME="package75.cab" … />
+```
+
+`ExpandCabPackageSource` extracts `package.cab` only and never reads `index.xml`.
+
+**3 — the parse envelope is invented. This is the fourth feed with that defect.** `package.xml`
+(114.7 MB, **136,965** `<Update>` elements) carries the update **graph** and nothing else. The
+complete set of `<Update>` attributes is `CreationDate, DefaultLanguage, DeploymentAction, IsBundle,
+IsLeaf, IsSoftware, RevisionId, RevisionNumber, UpdateId`. Measured occurrences across the whole file:
+
+| Field `Wsusscn2Connector.Parse` reads | Occurrences |
+|---|---|
+| `KBArticleID` | **0** |
+| `Title` | **0** |
+| `RebootBehavior` | **0** |
+| `Uninstallable` | **0** |
+| `IsSoftware="true"` | **0** (all 4,206 are `"false"`) |
+
+**4 — therefore it yields an empty batch and reports `ok`.** The first filter is
+`if (kb is empty && isSoftware != "true") continue;`. `KBArticleID` never exists and `IsSoftware` is
+never `"true"`, so **all 136,965 updates are skipped**. `ContentSyncService` then records
+`status = 'ok'`, 0 patches, and advances the cursor to `PackageId`. Identical in shape to the `rhsa`
+defect above, on the feed ADR 0008 designates as the Windows **applicability engine** — and it would
+also discard the 14,242 `SupersededBy` blocks / 293,457 `Revision` references that are the entire
+Windows half of the HARD-PROBLEMS #4 supersedence DAG.
+
+**What is actually correct** and should be kept: the `SupersededBy → Revision/@Id` inversion matches
+the real shape exactly; `UpdateId`/`RevisionId` are real attributes; `PackageId` is a real root
+attribute and a sound cursor.
+
+**The real format, mapped** — so the rewrite starts from fact:
+
+```
+wsusscn2.cab                     multi-file cab → destination MUST be a directory
+├── index.xml                    CABLIST: package.cab + package2..75.cab with RANGESTART offsets
+├── package.cab  →  package.xml  the update GRAPH: UpdateId, RevisionId, IsLeaf/IsBundle,
+│                                Prerequisites, SupersededBy/Revision/@Id, Categories
+└── package2..75.cab             per-update detail, sharded by RANGESTART:
+      c/<n>                      <Properties UpdateType="Software|Category">,
+                                 <Relationships><SupersededUpdates><UpdateIdentity UpdateID=…>
+      l/<lang>/<n>               <LocalizedProperties><Title>… (KB5087058)</Title><Description>
+      x/<n>                      <ExtendedProperties MsrcSeverity="Critical">
+                                   <KBArticleID>5087058</KBArticleID>
+```
+
+So the three fields the parser wanted **do exist — in the shards, not in `package.xml`**:
+`KBArticleID` → `x/<n>`; `Title` → `l/<lang>/<n>`; and the software-vs-category discriminator is
+`c/<n>`'s `Properties/@UpdateType`, **not** `package.xml`'s `IsSoftware` (which is `"false"`
+throughout). `MsrcSeverity` in `x/<n>` is a bonus the current design does not use.
+
+**Not found in the sampled blobs:** `RebootBehavior` and `Uninstallable`. Sample was small — `c/1`,
+`c/7`, `x/1`, `l/en/1` — so this is "must be located", not "does not exist". Until located,
+`requires_reboot` and `reversible` would be `false` for every Windows patch, which is the unsafe
+direction for a maintenance window (DIFFERENTIATORS #3) and gates rollback off (#1).
+
+**Deferred to its own slice, deliberately — this is a data-source decision, not a parse fix**, the
+same call made for DSA. It requires: reading `index.xml`; expanding 75 cabs (~658 MB → GBs); joining
+three blob families per update by shard-relative index; and deciding whether a full expansion is
+even the right ingestion model versus WiX DTF (`Microsoft.Deployment.Compression.Cab`) for random
+access without materialising everything. **Recorded as D-504.**
+
 ### The Ubuntu codename map was missing the current LTS — fixed 2026-07-29
 
 `DistroReleases.Ubuntu` held **10** entries and stopped at `oracular` (24.10). Ubuntu's own
@@ -263,6 +350,7 @@ inherits and what it cannot claim until then.
 |----|----------|-------|----------------------------------------------|
 | **D-501** | `ContentPostgresFixture` duplicates the shape of `PatchManagement.IntegrationTests.PostgresFixture` | **Phase 6** — the next phase to add a DB-backed suite | Two ephemeral-database fixtures coexist. Neither can simply consume the other: `TestSupport` is documented as referencing Contracts ONLY (a Persistence reference there would put EF in every consumer's output), and referencing the sibling test project would drag the API host in. A third consumer is the point at which the shared home has to be built rather than argued about |
 | **D-502** | A KEV sync that records **"evaluated and absent"** | **Phase 7** — the consumer that would be misled | `advisories.kev_listed` is three-valued by design (NULL = not evaluated, false = evaluated and absent, true = listed) and `ContentCatalogueTests` pins that contract, but **the ingestion path can only ever write `true`**. After a complete KEV sync every CVE that is not known-exploited is still NULL, indistinguishable from a catalogue where KEV never ran. Phase 7 **cannot treat NULL as "not exploited"** until a sweep marks the complement — which needs a decision about what the complement means for a partial or failed run, since a KEV that fetched half its list must not mark the other half absent. Pinned by `A_kev_sync_cannot_currently_record_evaluated_and_absent` |
+| **D-504** | **`wsusscn2` rewrite against the real cab format** — the extractor cannot run (multi-file cab needs a directory destination), reads 1 of 75 cabs, and the parser's fields do not exist in `package.xml` | **Phase 5** — its own slice, next | **The Windows applicability engine currently ingests NOTHING and reports `ok`.** ADR 0008 makes this the source of truth for "what is missing on this host", so until it lands **no Windows assessment is possible at all** and the Windows half of the HARD-PROBLEMS #4 supersedence DAG (14,242 `SupersededBy` blocks) is absent. Criterion (a) cannot count `wsusscn2`. The real format is mapped in the section above so the rewrite starts from fact, not from a guess |
 | **D-503** | Cycle detection over `patch_supersedence` | **Phase 6** — HARD-PROBLEMS #4 assigns cycle-breaking to assessment | `ck_patch_supersedence_no_self_loop` and the store's `older.id <> newer.id` filter catch a **1-cycle only**. A 2-cycle (A supersedes B, B supersedes A) inserts cleanly, and the effective-head walk does not terminate on it. Phase 5 deliberately does not reject it — a real feed can contradict itself and good content must not be refused over it — so **Phase 6's effective-head resolution cannot be claimed until it terminates on a cyclic graph**. Pinned by `A_two_patch_cycle_is_accepted_today_and_the_graph_is_not_provably_acyclic`, and the test helper's own walk is depth-capped for exactly this reason |
 
 ## ⚠ Scope: what has NOT been done
