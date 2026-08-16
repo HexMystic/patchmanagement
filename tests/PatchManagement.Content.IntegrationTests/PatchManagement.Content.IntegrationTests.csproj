@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Integration suite for the content STORE: real Npgsql against the compose Postgres, driving
+    ContentStore rather than raw SQL. Requires the root stack to be up
+    (docker compose up -d, from the MAIN worktree per WORKFLOW.md section 3).
+
+    When Postgres is down these tests FAIL rather than skip, matching PostgresFixture and
+    LabFixture. ROADMAP.md records suite sizes as absolute counts that silent skips would
+    quietly corrupt.
+
+    WHY THIS PROJECT EXISTS AT ALL — it is the only place these tests can live:
+
+      - PatchManagement.Content.Tests references the module but is deliberately infrastructure-free
+        (61 tests in under a second); its csproj says DB-touching tests do not belong there.
+      - PatchManagement.IntegrationTests has PostgresFixture but MUST NOT reference the Content
+        module: HostModuleDiscoveryTests only works because the module's ONLY path into that
+        project's output is the API's own ProjectReference. A direct reference would create a
+        second path and make the guard incapable of failing (docs/adr/0018-content-contract-surface.md).
+
+    Exit criteria (c)-(f) need Postgres AND ContentStore, so they need a third project. Same split,
+    and same reasoning, as PatchManagement.Connectors.Tests / .Connectors.IntegrationTests.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="Npgsql" Version="9.0.3" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Modules\Content\PatchManagement.Content.csproj" />
+    <ProjectReference Include="..\..\src\Infrastructure\Persistence\PatchManagement.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\Shared\Contracts\PatchManagement.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

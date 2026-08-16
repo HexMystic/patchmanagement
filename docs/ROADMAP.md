@@ -336,15 +336,24 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   MSRC, and `wsusscn2.cab`; normalized into the Phase-1 content schema; incremental &
   idempotent refresh; provenance recorded per record.
 - **Owned paths:** `src/Modules/Content`, plus `src/Shared/Contracts/Content`
-  ([ADR 0018](adr/0018-content-contract-surface.md)) and `tests/PatchManagement.Content.Tests`.
+  ([ADR 0018](adr/0018-content-contract-surface.md)), `tests/PatchManagement.Content.Tests` and
+  `tests/PatchManagement.Content.IntegrationTests`.
 - **Detail:** `docs/phases/phase-5.md`.
 - **See:** `docs/HARD-PROBLEMS.md` (wsusscn2.cab vs MSRC CSAF; #2/#3 require Debian DSA).
-- **Foundation landed; no content-parsing work is done.** The module is now *reachable* — it was
-  not. `PatchManagement.Api` never referenced it, so `ContentRegistrar` could not be discovered and
-  all 2,197 lines were dead in the shipped app: **the third occurrence of that one defect** after
-  the Vault (`a50d9ec`) and Phase 3's WIP. The guard now covers it and was proven red-first.
-  **No connector has ever run against its live feed and no parsing test exists** — every
-  feed-related exit criterion in `phase-5.md` is deliberately unticked.
+- **Progress: 7 of 9 exit criteria ticked, and the two that remain are the two that gate shipping.**
+  Three slices so far — foundation (module reachability, the *third* occurrence of the
+  unreferenced-module defect after the Vault at `a50d9ec` and Phase 3's WIP), two parse slices
+  (`nvd`/`kev`/`epss`/`usn` against real captured payloads), and the store slice (criteria c–f
+  against real Postgres). What is left:
+  - **(a) is 4 of 8 feeds**, and the gap is not "untested" — `dsa`, `rhsa` and `msrc` parse
+    **envelopes no server produces**, and `rhsa` is the dangerous one: it returns a JSON array where
+    the parser expects an object, so it yields an empty batch, a green status and an advanced
+    cursor. A green sync over an empty catalogue. `wsusscn2` has never expanded its cab.
+  - **(b) incrementality is unimplemented, not untested.** No connector reads `state.Cursor`;
+    NVD pagination truncates to page 1. The cursor's advance-on-success / hold-on-failure half *is*
+    proven.
+  - **Nothing invokes `ContentSyncService`** — no job, no endpoint. Same shape as the Phase 2
+    rotation trigger, and it needs the same decision (owner: Phase 11).
 - **Content vocabulary is frozen in Phase 1** (`advisories.source`, `patches.source`,
   `content_sources.kind`, `ecosystem`) and covers every feed above plus the lab fleet
   (Ubuntu→USN, Debian→DSA, Rocky/Alma→RHSA, Windows→MSRC+wsusscn2). Two deferred, both
@@ -845,6 +854,62 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
+
+### 2026-08-16 — Phase 5 STORE SLICE (criteria c–f) · green at 402 · NOT MERGED
+
+**Tests: 374 → 402 passing, 0 skipped, 0 failed**, measured from a completed run of the whole
+solution with Postgres and the lab fleet up (Contracts 19 · Content 61 · Connectors unit 120 ·
+**Content.IntegrationTests 28** · IntegrationTests 40 · Vault 80 · Connectors.IntegrationTests 54,
+~14 min). Vault and Connectors unregressed. `IntegrationTests` still passes at 40, which is the
+check that matters for the paragraph below: the host-discovery guard is intact.
+
+
+**The store's four behavioural criteria are proven against real Postgres, and two real gaps were
+found and given owners.** Exit criteria (c) idempotence, (d) provenance merge, (e) overlay safety
+and (f) supersedence chains are now ticked in `phase-5.md`, each against a named test —
+**7 of 9 criteria ticked**. The two still open are the two that matter most for shipping: **(a)** is
+4 of 8 feeds, and **(b)** is half-*built*, not half-tested.
+
+**A third test project had to be created, and the reason is a landmine worth knowing.** The store
+criteria need Postgres AND `ContentStore`, and neither existing project can host both:
+`Content.Tests` is deliberately infrastructure-free (61 tests, under a second), and
+`PatchManagement.IntegrationTests` — which owns `PostgresFixture` — **must never reference the
+Content module**. `HostModuleDiscoveryTests` only works because the module's *sole* path into that
+project's output is the API's own `ProjectReference`; adding a direct one creates a second path and
+the guard silently stops being able to fail (ADR 0018). So the suite lives in a new
+`PatchManagement.Content.IntegrationTests`, the same split Phase 3 made for connectors.
+
+**Two gaps found, both pinned by characterization test, neither fixed here** — each belongs to a
+later phase and each is now gated rather than merely noted:
+
+- **D-502 — a KEV sync cannot record "evaluated and absent".** `advisories.kev_listed` is
+  three-valued by design (NULL = not evaluated, false = evaluated and absent, true = listed) and
+  `ContentCatalogueTests` pins that contract — but **the ingestion path can only ever write `true`**.
+  After a complete KEV sync every CVE that is not known-exploited is still NULL, indistinguishable
+  from a catalogue where KEV never ran. This is precisely the dishonesty HARD-PROBLEMS #8 exists to
+  prevent, surviving in the one place nothing was asserting it. **Phase 7 cannot treat NULL as "not
+  exploited"** until a sweep marks the complement — which needs a decision about partial and failed
+  runs, since a KEV that fetched half its list must not mark the other half absent.
+- **D-503 — the supersedence DAG accepts a 2-cycle.** The CHECK and the store's `older.id <> newer.id`
+  filter catch a 1-cycle only; A-supersedes-B plus B-supersedes-A inserts cleanly, and an
+  effective-head walk does not terminate on it. Deliberately **not** rejected at ingest — a real feed
+  can contradict itself and good content must not be refused over it — so **Phase 6's effective-head
+  resolution cannot be claimed until it terminates on a cyclic graph**.
+
+**Also proven, without ticking (b):** the cursor advances on success, holds on failure, and is handed
+back to the next run; and a record the database refuses rolls back **every record beside it**, so a
+failed feed leaves nothing partial behind. (b) stays unticked because no connector ever *sends* a
+cursor to a feed — unchanged from slice 2.
+
+**All four guarantees passed first time, so each was shown capable of failing.** Four mutations, each
+modelling a mistake an ordinary edit could make rather than blinding the test, each confirmed via
+`scripts/mutation-guard.ps1` and reverted the same way. Every one turned **exactly one** test red and
+left the other 27 green — so the suite localises a regression rather than merely detecting one:
+provenance-merge → overwrite (`Collection: ["nvd"] / Not found: "kev"`); the publisher upsert also
+writing `kev_listed`/`epss_score`, which is the exact edit that method's own NOTE warns against;
+the two-pass patch/edge loop collapsed into one; and the affects upsert weakened to `DO NOTHING`.
+
+**Not merged, not pushed.** `main` untouched at `614f911`; pushing still needs `--force-with-lease`.
 
 ### 2026-07-29 — Phase 5 PARSE SLICE 2 (usn) · green at 374 · NOT MERGED
 

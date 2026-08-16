@@ -97,21 +97,32 @@ self-healing, not a bug: it succeeds again once the publisher's advisory is inge
 
 ## Owned paths
 
-`src/Modules/Content`, plus `src/Shared/Contracts/Content` ([ADR 0018](../adr/0018-content-contract-surface.md))
-and `tests/PatchManagement.Content.Tests`.
+`src/Modules/Content`, plus `src/Shared/Contracts/Content` ([ADR 0018](../adr/0018-content-contract-surface.md)),
+`tests/PatchManagement.Content.Tests` and `tests/PatchManagement.Content.IntegrationTests`.
+
+> **Why there are two test projects.** `Content.Tests` is deliberately infrastructure-free — no
+> Postgres, no fleet, no network — and runs 61 tests in under a second. The store criteria (c)–(f)
+> need Postgres *and* `ContentStore`, and neither existing project can host that:
+> `PatchManagement.IntegrationTests` has `PostgresFixture` but **must never reference the Content
+> module**, because `HostModuleDiscoveryTests` only works while the module's sole path into that
+> project's output is the API's own `ProjectReference` (ADR 0018). So the store suite gets its own
+> project, exactly as Phase 3 split `Connectors.Tests` from `Connectors.IntegrationTests`.
 
 ## Exit criteria — status
 
-Each criterion names the test that proves it. **Nothing below is ticked yet.**
+Each criterion names the test that proves it. **7 of 9 ticked** as of 2026-08-16 (the store slice).
+The two that are not are the two that matter most for shipping: **(a)** is 4 of 8 feeds, and half the
+remainder parse envelopes no server produces; **(b)** is half-built rather than half-tested.
+A criterion is ticked only when a named test proves it — never because the code looks right.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
 | a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ◐ **4 of 8** — `nvd`, `kev`, `epss`, **`usn`** covered by `NvdParseTests`/`KevParseTests`/`EpssParseTests`/`UsnParseTests` against real captures. `dsa`, `rhsa`, `msrc`, `wsusscn2` have **no parse test**, and all three HTTP ones cannot reach their feed at all (sections above) |
-| b | Refresh is **incremental** — the cursor advances on success and holds on failure | `ContentSyncService` tests over a scripted connector | ☐ — and note **incrementality is unimplemented**, not just untested: cursors are emitted and persisted but never sent back to any feed |
-| c | Refresh is **idempotent** — the same payload twice writes the same rows | store tests against Postgres | ☐ (grain already pinned by `ContentCatalogueTests`) |
-| d | **Provenance recorded per record**, non-empty, merged rather than overwritten across feeds | store tests asserting the jsonb merge | ☐ |
-| e | Overlays (KEV/EPSS) never insert an advisory and never clobber a publisher's re-sync | store tests | ☐ |
-| f | Supersedence chains resolve, including the both-patches-required ordering | store tests | ☐ |
+| b | Refresh is **incremental** — the cursor advances on success and holds on failure | `ContentSyncServiceTests` over a scripted connector | ◐ — the **advance-or-hold half is proven** (`A_failed_sync_holds_the_cursor_and_records_the_failure_on_the_feed_row`, `A_successful_sync_advances_the_cursor_and_hands_it_to_the_next_run`). Stays unticked because **incrementality is unimplemented**, not untested: cursors are emitted, persisted and handed back, but no connector ever sends one to a feed |
+| c | Refresh is **idempotent** — the same payload twice writes the same rows | `ContentIdempotencyTests` (7) + `ContentSyncServiceTests` atomicity | ☑ — advisories, affects, patches, feed rows and supersedence edges each re-ingested; ids proven **stable**, not merely unduplicated. Includes the NULL-platform case, which is the only proof the store's arbiter resolves to the `NULLS NOT DISTINCT` index rather than silently inserting a duplicate per refresh |
+| d | **Provenance recorded per record**, non-empty, merged rather than overwritten across feeds | `ContentProvenanceTests` (5) | ☑ — an advisory touched by nvd+kev+epss keeps all three; a publisher re-sync replaces **only its own** entry and neither drops the others nor appends a second of its own |
+| e | Overlays (KEV/EPSS) never insert an advisory and never clobber a publisher's re-sync | `ContentOverlayTests` (6) | ☑ — an overlay for an unpublished CVE writes nothing and self-heals; a publisher re-sync leaves `kev_*`/`epss_*` intact. **See D-502**: a related gap this criterion does not cover |
+| f | Supersedence chains resolve, including the both-patches-required ordering | `ContentSupersedenceTests` (6) | ☑ — the ordering case is asserted through `ContentSyncService` with the superseding patch **first** in the batch, so a one-pass implementation fails it; a three-patch chain walks to a single head. **See D-503**: cycles |
 | g | The module is **reachable in the shipped host** | `HostModuleDiscoveryTests.Api_project_ships_the_content_module` + `Real_host_container_resolves_the_content_module` | ☑ **proven red-first**, both failed before the API's `ProjectReference` existed |
 | h | The contract surface carries no database dependency | `ContentContractSurfaceTests` | ☑ |
 | i | The vocabulary matches the frozen schemas | `ContentVocabularyTests` | ☑ (partial — the `AppDbContext` CHECK copy is still independent; ADR 0018 residual, owner Phase 6) |
@@ -224,6 +235,35 @@ Every NVD record with no `metrics` at all, in the 300-CVE window sampled, was a 
 `Parse` ingests it as an advisory regardless of `vulnStatus`. Whether a rejected CVE should become an
 advisory row is a real question and is **deliberately not answered by a test fixture** — see
 `tests/PatchManagement.Content.Tests/Samples/PROVENANCE.md`.
+
+### The store guarantees were shown capable of failing — 2026-08-16
+
+Criteria (c)–(f) all passed first time, which by this project's rule means they had to be
+*demonstrated* red before they could be trusted — the same standard applied to EPSS in parse slice 1
+and to the `USN-` prefixing in slice 2. Each mutation below models a mistake an ordinary edit could
+introduce, rather than blinding the test; each was confirmed present via `scripts/mutation-guard.ps1`
+and reverted the same way.
+
+| Mutation | Where | Result |
+|---|---|---|
+| Provenance merge → `provenance = EXCLUDED.provenance` (plain overwrite) | `ContentStore.UpsertAdvisoryAsync` | **1 red** — `A_publisher_resync_replaces_only_its_own_provenance_entry`, with `Collection: ["nvd"] / Not found: "kev"`. An NVD refresh had erased KEV's attribution |
+| Publisher upsert also writes `kev_listed` / `epss_score` from `EXCLUDED` | `ContentStore.UpsertAdvisoryAsync` | **1 red** — `A_publisher_resync_does_not_reset_an_applied_overlay`. This is the exact edit the method's own NOTE warns against, and nothing but that column list prevents it |
+| Two-pass patch/edge loop collapsed into one | `ContentSyncService.RunAsync` | **1 red** — `An_edge_resolves_when_the_superseded_patch_appears_later_in_the_same_batch`. The fixture orders the superseding patch first precisely so a one-pass implementation cannot pass |
+| Affects `DO UPDATE` → `DO NOTHING` | `ContentStore.UpsertAffectAsync` | **1 red** — `A_fix_statement_with_no_platform_is_updated_rather_than_duplicated` |
+
+Each mutation turned **exactly one** test red and left the other 27 green, so the suite localises a
+regression rather than merely detecting one.
+
+## Phase 5 deferrals — every one has a named owner and a gate
+
+`DIFFERENTIATORS.md` forbids deferring without a named owner. Each row states what the owner
+inherits and what it cannot claim until then.
+
+| ID | Deferred | Owner | Gate — what cannot be claimed until it lands |
+|----|----------|-------|----------------------------------------------|
+| **D-501** | `ContentPostgresFixture` duplicates the shape of `PatchManagement.IntegrationTests.PostgresFixture` | **Phase 6** — the next phase to add a DB-backed suite | Two ephemeral-database fixtures coexist. Neither can simply consume the other: `TestSupport` is documented as referencing Contracts ONLY (a Persistence reference there would put EF in every consumer's output), and referencing the sibling test project would drag the API host in. A third consumer is the point at which the shared home has to be built rather than argued about |
+| **D-502** | A KEV sync that records **"evaluated and absent"** | **Phase 7** — the consumer that would be misled | `advisories.kev_listed` is three-valued by design (NULL = not evaluated, false = evaluated and absent, true = listed) and `ContentCatalogueTests` pins that contract, but **the ingestion path can only ever write `true`**. After a complete KEV sync every CVE that is not known-exploited is still NULL, indistinguishable from a catalogue where KEV never ran. Phase 7 **cannot treat NULL as "not exploited"** until a sweep marks the complement — which needs a decision about what the complement means for a partial or failed run, since a KEV that fetched half its list must not mark the other half absent. Pinned by `A_kev_sync_cannot_currently_record_evaluated_and_absent` |
+| **D-503** | Cycle detection over `patch_supersedence` | **Phase 6** — HARD-PROBLEMS #4 assigns cycle-breaking to assessment | `ck_patch_supersedence_no_self_loop` and the store's `older.id <> newer.id` filter catch a **1-cycle only**. A 2-cycle (A supersedes B, B supersedes A) inserts cleanly, and the effective-head walk does not terminate on it. Phase 5 deliberately does not reject it — a real feed can contradict itself and good content must not be refused over it — so **Phase 6's effective-head resolution cannot be claimed until it terminates on a cyclic graph**. Pinned by `A_two_patch_cycle_is_accepted_today_and_the_graph_is_not_provably_acyclic`, and the test helper's own walk is depth-capped for exactly this reason |
 
 ## ⚠ Scope: what has NOT been done
 
