@@ -12,6 +12,22 @@ do the work to its exit criteria, then update its **Status** (see
 contracts or are inherently sequential). `parallel` phases can run concurrently in
 separate worktrees. **Phase 8 is solo.**
 
+## ⚠ IN-FLIGHT WORK LIVES ON A BRANCH — READ THIS BEFORE TRUSTING ANYTHING BELOW
+
+**This file forks per branch.** It is declared the single source of truth, but a phase in flight
+updates *its branch's* copy, so `main`'s copy goes stale for as long as that phase runs — and
+Phase 5 has run three sessions across three weeks. A fresh session that reads only `main` gets a
+picture that is weeks old. Audit 2026-08-18 found exactly that. The table below is now kept
+current on `main` per slice; the detail stays on the branch.
+
+| Branch | State | Where its detail lives |
+|---|---|---|
+| `phase/5-content` | **6 commits ahead of `main`, and ahead of `origin` too** — three slices landed (module reachability, two parse slices, the store slice) plus the wsusscn2 audit. Solution green at **402**. | that branch's `docs/ROADMAP.md` session log + `docs/phases/phase-5.md` |
+
+**Unpushed work is a standing risk.** `origin/phase/5-content` still points at a superseded WIP
+commit (`3a24ccd`); replacing it needs `--force-with-lease`, which the repo guardrail deliberately
+denies to tooling, so a human must run it (WORKFLOW §6).
+
 ## Phase summary
 
 | # | Phase | Mode | Depends on | Status |
@@ -21,7 +37,7 @@ separate worktrees. **Phase 8 is solo.**
 | 2 | Credential vault | parallel | 1 | **complete** |
 | 3 | Endpoint connector | parallel | 1 | **complete** — merged to `main`, **311 green on `main` post-merge**, 0 skipped. Four review passes. **SSH verified against the lab fleet; WinRM written and unit-proven but NEVER run against a Windows host (D-303)** |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
-| 5 | Content ingestion | parallel | 1 | **in-progress** |
+| 5 | Content ingestion | parallel | 1 | **in-progress — 7 of 9 exit criteria** (on `phase/5-content`, not merged). Store criteria (c)–(f) proven against real Postgres. **(a) is 4 of 8 feeds**: `nvd`/`kev`/`epss`/`usn` work; **`rhsa`, `msrc`, `dsa`, `wsusscn2` parse envelopes no server produces** — `rhsa` and `wsusscn2` return an empty batch and report `ok`. **(b) incrementality is unimplemented**, not untested |
 | 6 | Assessment | solo | 4, 5 | not-started |
 | 7 | Risk scoring | parallel | 6 | not-started |
 | 8 | Deployment engine | **SOLO** | 6 | not-started |
@@ -32,6 +48,48 @@ separate worktrees. **Phase 8 is solo.**
 | 13 | Audit, compliance, evidence | parallel | 6 | not-started |
 | 14 | Identity & access (authN/authZ) | parallel | 1 | not-started |
 | 15 | Key custody & KMS providers | parallel | 2 | not-started |
+| 16 | **Third-party application patching** | parallel | 1, 5 | **not-started — PLACED 2026-08-18 by the repo audit.** The largest competitive gap; needs a **frozen-vocabulary decision before Phase 6**. See "The market gap" below |
+
+## The market gap — third-party application patching (found by the 2026-08-18 audit)
+
+**Every content feed on this roadmap is an OS-vendor feed.** NVD, KEV, EPSS, USN, DSA, RHSA, MSRC,
+wsusscn2 — all of them answer "which *operating-system* updates are missing". Nothing in the repo
+patches **Chrome, Firefox, Adobe Reader, Java, Zoom, 7-Zip, Notepad++, VLC** or any other
+third-party application. The words do not appear anywhere in the docs.
+
+**Why this matters to the stated goal.** CLAUDE.md §1 aims at a product "inspired by Ivanti
+Security Controls" and better than what is on the market. Third-party application patching is
+precisely what Ivanti Security Controls sells *against WSUS/SCCM*, and it is the headline feature of
+Automox, Action1, NinjaOne and PDQ. **OS-only patching is what WSUS already does for free.** Every
+designed-in differentiator we have — auto-rollback, blast-radius simulation, explainable risk,
+unmanaged-asset discovery — is real, but they differentiate *within* a category this product does
+not yet compete in. On a feature-comparison sheet against the named inspiration, we would lose on
+the first row.
+
+**It is also the most expensive thing to add late, which is the actual reason it is placed now.**
+The Phase-1 vocabulary is frozen and OS-shaped, and a third-party catalogue does not fit any of it:
+
+| Frozen CHECK | Current values | Problem |
+|---|---|---|
+| `advisories.source` | nvd, usn, rhsa, msrc, dsa | no vendor-advisory source for an application |
+| `patches.source` | usn, rhsa, msrc, wsusscn2, dsa | no source for an application installer |
+| `content_sources.kind` | nvd, kev, epss, usn, rhsa, msrc, wsusscn2, dsa | no feed kind to register one under |
+| `advisory_affects.ecosystem` | deb, rpm, windows | a Chrome MSI/EXE is not any of these, and `Ecosystems` states a fourth ecosystem needs a **comparator** before it needs a row (HARD-PROBLEMS #3) |
+
+Adding it therefore means changing **four frozen contracts** — a NEVER #6 change requiring an
+explicit ask. `DIFFERENTIATORS.md`'s cross-cutting rule exists for exactly this case: *every field a
+later phase cannot cheaply add must exist in the contract before that phase starts.* Nothing owned
+this, so nothing enforced it.
+
+**The gate.** The decision must be taken **before Phase 6 (Assessment)** freezes correlation and
+version-comparison around three OS ecosystems, and before Phase 8 builds deployment around
+OS-package installers. Taking it after either is a schema migration plus a rewrite of the comparator
+layer. Taking it now is four CHECK edits and one ADR.
+
+**Not decided here.** Whether to build Phase 16 at all is a product call — a defensible answer is
+"OS-only v1, applications in v2", but that answer has to be *made and recorded*, because the cost of
+reversing it rises steeply from Phase 6 onward. What the audit asserts is only that the gap was
+**unrecorded and unowned**, which it no longer is.
 
 > **Numbering note.** Phases 14 and 15 are appended to avoid renumber churn, but the number is a
 > label, not a build-order rank — order is set by the *Depends on* column. Identity depends only on
@@ -529,6 +587,35 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
 - **See:** [ADR 0016](adr/0016-single-process-vault.md), [ADR 0002](adr/0002-key-provider.md),
   [ADR 0015](adr/0015-kek-file-durability.md), `docs/THREAT-MODEL.md`.
 
+## Phase 16 — Third-party application patching · parallel · Status: not-started
+- **Goal:** Assess and patch **applications**, not just operating systems — Chrome, Firefox, Adobe
+  Reader, Java, Zoom, 7-Zip and the rest of the long tail that OS vendor feeds never cover.
+- **Dependencies:** Phase 1 (the vocabulary it must extend) and Phase 5 (the ingestion machinery it
+  reuses — `IContentConnector`, `IContentStore`, the provenance merge, the supersedence DAG).
+- **Why it exists:** placed by the 2026-08-18 repo audit. See "The market gap" above — this is the
+  feature the named inspiration sells against WSUS, and its absence is the one gap that would lose a
+  head-to-head comparison outright.
+- **The decision that must come first, and its deadline.** Extending the frozen vocabulary
+  (`advisories.source`, `patches.source`, `content_sources.kind`, `advisory_affects.ecosystem`) is a
+  **NEVER #6 change requiring an explicit ask**. It must be settled **before Phase 6**, which freezes
+  correlation and version comparison around three OS ecosystems. Cheap now; a migration plus a
+  comparator rewrite later.
+- **Exit criteria** *(indicative — to be firmed once the vocabulary decision is taken)*:
+  - A third-party application catalogue source, with the same honesty rules Phase 5 learned the hard
+    way: **real captured payloads only**, provenance per record, and a connector that fails loudly
+    rather than returning an empty batch with `status = 'ok'`.
+  - An application **version comparator** behind the existing `IVersionComparator` seam
+    (HARD-PROBLEMS #3), because application versioning is neither dpkg nor rpm nor a Windows build.
+  - Detection of installed applications during Phase 4 inventory (registry / `Get-Package` on
+    Windows; package manager plus filesystem probes on Linux) — agentless, per CLAUDE.md §2.
+  - Deployment over the existing connector, honouring the same reversible/irreversible and
+    reboot-required flags Phase 8 uses.
+- **Owned paths:** `src/Modules/Content` (additional connectors), plus whatever the vocabulary
+  decision adds to `src/Shared/Contracts/Content`.
+- **Honest risk:** third-party installers are the least uniform surface in the whole product —
+  silent-install switches differ per vendor, per version. This phase is likely larger than it looks,
+  which is another reason to decide its scope early rather than discover it at Phase 8.
+
 ---
 
 ## Phase 1 review — follow-ups
@@ -837,6 +924,54 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
+
+### 2026-08-18 — FULL REPO AUDIT · no code written · three governance defects fixed
+
+A whole-repo review against the CLAUDE.md §1 goal, requested because the work had been idle and the
+picture had drifted. **No feature code was written.** Findings, worst first.
+
+**1 — `main`'s ROADMAP was three weeks stale, and it is the file every session is told to read
+first.** WORKFLOW §1 says "Open `docs/ROADMAP.md`; pick the next phase". On `main` that file's newest
+session-log entry was **2026-07-28**, before all three Phase 5 slices. A fresh session would not have
+known that Phase 5 is at 7 of 9, that four feeds parse envelopes no server produces, that
+`wsusscn2` is broken in four ways, or that D-501…D-504 exist. **Root cause: ROADMAP.md is declared
+the single source of truth but is a per-branch file, so truth forks the moment a phase runs long** —
+and Phase 5 has run three sessions across three weeks. Same shape as the push gap that produced
+WORKFLOW §6: a process guarantee that nothing structurally enforced. Fixed by an in-flight banner at
+the top of `main`'s copy plus a live status column, both kept current per slice.
+
+**2 — the biggest competitive gap in the product was unrecorded and unowned: third-party
+application patching.** Every feed on the roadmap is an OS-vendor feed. Chrome, Firefox, Adobe, Java,
+Zoom, 7-Zip appear **nowhere in the repo**. This is the feature Ivanti Security Controls — the named
+inspiration — sells *against WSUS/SCCM*, and the headline of Automox, Action1, NinjaOne and PDQ.
+OS-only patching is what WSUS already does for free, so the four designed-in differentiators, all
+real, currently differentiate inside a category the product does not compete in. Worse, it is the
+most expensive thing to add late: it needs **four frozen CHECK constraints** changed
+(`advisories.source`, `patches.source`, `content_sources.kind`, `advisory_affects.ecosystem`), which
+is a NEVER #6 change, and `DIFFERENTIATORS.md`'s cross-cutting rule exists precisely to prevent this
+class of late discovery. **Placed as Phase 16 with a gate: the vocabulary decision must be taken
+before Phase 6**, which freezes correlation and version comparison around three OS ecosystems.
+Whether to *build* it is a product call and is deliberately left open; what the audit fixes is that
+it was invisible.
+
+**3 — H5 remains open and is a live contradiction, not a nit.** `api/openapi.yaml` declared itself
+*"regenerated code-first once controllers exist"* while CLAUDE.md §4.5 lists OpenAPI as a **frozen
+contract** and NEVER #6 forbids changing it without an ask. Both cannot be true — a file regenerated
+from code is an output, not a contract, and nothing can be frozen that a build step rewrites. **And
+no test guards it**: nothing in `tests/` reads `api/openapi.yaml`, so the one frozen contract with no
+enforcement is also the one that contradicts itself. The false claim is struck **in the file**, with
+the open decision recorded there rather than only here; the decision itself is deliberately not taken
+— it needs an ADR choosing design-first (the file is authoritative, controllers conform, drift fails
+a test) or code-first (CLAUDE.md §4.5 drops OpenAPI from the frozen list). **Resolve before adding
+resource endpoints**; each one added meanwhile deepens the inconsistency.
+
+**What the audit found healthy, stated because a review that only lists problems is not honest:**
+zero `TODO`/`FIXME`/`HACK` in `src/`; zero skipped tests; every internal documentation link resolves;
+the test-to-source ratio is ~1:1 (13.2k / 14k lines); `main` is fully pushed and green; the guardrail
+correctly refused the force-push it was asked for. The engineering discipline is not the problem.
+
+**Unchanged and still outstanding:** `phase/5-content` is **6 commits ahead of `origin`**, which
+still points at superseded WIP `3a24ccd`. Needs `--force-with-lease`, run by a human (WORKFLOW §6).
 
 ### 2026-07-28 — Phase 3 cold review R4 + fix pass · **MERGED to `main`** · `main` green at 311
 

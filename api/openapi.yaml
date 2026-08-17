@@ -5,7 +5,19 @@ info:
   description: >
     Phase 1 contract skeleton. Defines the error envelope and the two endpoints that
     exist today (/health and the RLS diagnostic /diag/assets). Real resource endpoints
-    are added by later phases; this file is regenerated code-first once controllers exist.
+    are added by later phases.
+
+    UNRESOLVED CONTRADICTION - review finding H5, open since Phase 1, re-flagged by the
+    2026-08-18 audit. The line that used to sit here said this file "is regenerated
+    code-first once controllers exist". CLAUDE.md section 4.5 lists OpenAPI as a FROZEN
+    contract and NEVER #6 forbids changing a frozen contract without an explicit ask.
+    Both cannot be true: a file regenerated from code is an output, not a contract, and
+    nothing can be frozen that a build step rewrites. The claim is struck rather than
+    silently deleted, because the decision has not been made. Whoever resolves it must
+    pick one and record an ADR - design-first (this file is authoritative, controllers
+    conform, drift fails a test) or code-first (CLAUDE.md section 4.5 drops OpenAPI from
+    the frozen list). Do not add resource endpoints until it is picked; every endpoint
+    added meanwhile deepens the inconsistency.
 
 servers:
   - url: http://localhost:5080
