@@ -33,8 +33,14 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     /// <c>dsa</c> = Debian Security Advisory: required by HARD-PROBLEMS #2/#3 and by the Debian 12
     /// member of the lab fleet.
     /// </summary>
+    /// <para><c>vendor</c> (ADR 0019) is the GENERIC third-party application feed kind. It is
+    /// deliberately not per-vendor: <c>content_sources.instance</c> already separates one feed from
+    /// the next (UNIQUE (kind, instance)), so 'google-chrome' and 'adobe-reader' are instances of
+    /// kind 'vendor', never kinds of their own. Widening this list also widens
+    /// <c>ck_advisories_cvss_source</c> below, which reads it — intentional: a vendor advisory that
+    /// carries its own CVSS score must be able to say so.</para>
     private static readonly string[] ContentSourceKinds =
-        ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2", "dsa"];
+        ["nvd", "kev", "epss", "usn", "rhsa", "msrc", "wsusscn2", "dsa", "vendor"];
 
     /// <summary>
     /// Sources that PUBLISH advisories. Excludes kev/epss (scoring overlays that enrich an
@@ -45,7 +51,11 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     /// ingest against the lab's Debian 12 box. Rocky/Alma are RHEL rebuilds assessed via
     /// <c>rhsa</c> (see phase-1.md); native RLSA/ALSA is a deferred Phase-5/6 precision decision.
     /// </summary>
-    private static readonly string[] AdvisorySources = ["nvd", "usn", "rhsa", "msrc", "dsa"];
+    /// <para>Includes <c>vendor</c> (ADR 0019): a third-party application vendor publishing its own
+    /// advisory. Generic by design — see <see cref="ContentSourceKinds"/>. Phase 16 must namespace
+    /// <c>external_id</c> per vendor, because UNIQUE (source, external_id) no longer gets vendor
+    /// separation for free once every vendor shares one source value.</para>
+    private static readonly string[] AdvisorySources = ["nvd", "usn", "rhsa", "msrc", "dsa", "vendor"];
 
     /// <summary>
     /// Sources that publish installable updates. NVD describes vulnerabilities, not fixes.
@@ -53,7 +63,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     /// package version", so if Phase 5 models USN updates as patches it models DSA the same way —
     /// permitting the value here avoids a day-one amend.
     /// </summary>
-    private static readonly string[] PatchSources = ["usn", "rhsa", "msrc", "wsusscn2", "dsa"];
+    /// <para><c>vendor</c> (ADR 0019) covers a third-party application installer — an MSI, EXE, PKG
+    /// or DMG the vendor ships. Same namespacing caveat as <see cref="AdvisorySources"/>: UNIQUE
+    /// (source, vendor_id) means Phase 16 qualifies <c>vendor_id</c> per vendor.</para>
+    private static readonly string[] PatchSources = ["usn", "rhsa", "msrc", "wsusscn2", "dsa", "vendor"];
 
     /// <summary>
     /// NOT NULL on a jsonb column still accepts '[]', and an empty provenance array is an
@@ -304,7 +317,11 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.ToTable("advisory_affects", t =>
                 t.HasCheckConstraint(
                     "ck_advisory_affects_ecosystem",
-                    InList("ecosystem", ["deb", "rpm", "windows"])));
+                    // 'app' (ADR 0019) is the generic fourth ecosystem: a third-party application
+                    // installer is not a dpkg package, not an rpm, and not a Windows build
+                    // threshold, so without it a third-party fix statement has no representable
+                    // row. The vendor's name belongs in package_name, never here.
+                    InList("ecosystem", ["deb", "rpm", "windows", "app"])));
             e.HasKey(x => x.Id);
             e.Property(x => x.PackageName).IsRequired();
             e.Property(x => x.Ecosystem).IsRequired();

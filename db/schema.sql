@@ -61,13 +61,13 @@ CREATE TABLE public.advisories (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_advisories_cvss_base_score CHECK (((cvss_base_score IS NULL) OR ((cvss_base_score >= (0)::double precision) AND (cvss_base_score <= (10)::double precision)))),
-    CONSTRAINT ck_advisories_cvss_source CHECK (((cvss_source IS NULL) OR (cvss_source = ANY (ARRAY['nvd'::text, 'kev'::text, 'epss'::text, 'usn'::text, 'rhsa'::text, 'msrc'::text, 'wsusscn2'::text, 'dsa'::text])))),
+    CONSTRAINT ck_advisories_cvss_source CHECK (((cvss_source IS NULL) OR (cvss_source = ANY (ARRAY['nvd'::text, 'kev'::text, 'epss'::text, 'usn'::text, 'rhsa'::text, 'msrc'::text, 'wsusscn2'::text, 'dsa'::text, 'vendor'::text])))),
     CONSTRAINT ck_advisories_cvss_version CHECK (((cvss_version IS NULL) OR (cvss_version = ANY (ARRAY['2.0'::text, '3.0'::text, '3.1'::text, '4.0'::text])))),
     CONSTRAINT ck_advisories_epss_percentile CHECK (((epss_percentile IS NULL) OR ((epss_percentile >= (0)::double precision) AND (epss_percentile <= (1)::double precision)))),
     CONSTRAINT ck_advisories_epss_score CHECK (((epss_score IS NULL) OR ((epss_score >= (0)::double precision) AND (epss_score <= (1)::double precision)))),
     CONSTRAINT ck_advisories_provenance_non_empty CHECK (((jsonb_typeof(provenance) = 'array'::text) AND (jsonb_array_length(provenance) >= 1))),
     CONSTRAINT ck_advisories_severity CHECK ((severity = ANY (ARRAY['none'::text, 'low'::text, 'medium'::text, 'high'::text, 'critical'::text, 'unknown'::text]))),
-    CONSTRAINT ck_advisories_source CHECK ((source = ANY (ARRAY['nvd'::text, 'usn'::text, 'rhsa'::text, 'msrc'::text, 'dsa'::text])))
+    CONSTRAINT ck_advisories_source CHECK ((source = ANY (ARRAY['nvd'::text, 'usn'::text, 'rhsa'::text, 'msrc'::text, 'dsa'::text, 'vendor'::text])))
 );
 
 
@@ -84,7 +84,7 @@ CREATE TABLE public.advisory_affects (
     fixed_version text,
     backported boolean NOT NULL,
     created_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_advisory_affects_ecosystem CHECK ((ecosystem = ANY (ARRAY['deb'::text, 'rpm'::text, 'windows'::text])))
+    CONSTRAINT ck_advisory_affects_ecosystem CHECK ((ecosystem = ANY (ARRAY['deb'::text, 'rpm'::text, 'windows'::text, 'app'::text])))
 );
 
 
@@ -162,7 +162,7 @@ CREATE TABLE public.content_sources (
     last_error text,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_content_sources_kind CHECK ((kind = ANY (ARRAY['nvd'::text, 'kev'::text, 'epss'::text, 'usn'::text, 'rhsa'::text, 'msrc'::text, 'wsusscn2'::text, 'dsa'::text]))),
+    CONSTRAINT ck_content_sources_kind CHECK ((kind = ANY (ARRAY['nvd'::text, 'kev'::text, 'epss'::text, 'usn'::text, 'rhsa'::text, 'msrc'::text, 'wsusscn2'::text, 'dsa'::text, 'vendor'::text]))),
     CONSTRAINT ck_content_sources_last_status CHECK ((last_status = ANY (ARRAY['ok'::text, 'failed'::text, 'never-run'::text])))
 );
 
@@ -273,7 +273,7 @@ CREATE TABLE public.patches (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_patches_provenance_non_empty CHECK (((jsonb_typeof(provenance) = 'array'::text) AND (jsonb_array_length(provenance) >= 1))),
-    CONSTRAINT ck_patches_source CHECK ((source = ANY (ARRAY['usn'::text, 'rhsa'::text, 'msrc'::text, 'wsusscn2'::text, 'dsa'::text])))
+    CONSTRAINT ck_patches_source CHECK ((source = ANY (ARRAY['usn'::text, 'rhsa'::text, 'msrc'::text, 'wsusscn2'::text, 'dsa'::text, 'vendor'::text])))
 );
 
 
