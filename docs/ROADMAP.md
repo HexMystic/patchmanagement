@@ -28,6 +28,13 @@ current on `main` per slice; the detail stays on the branch.
 `--force-with-lease` that replaced superseded WIP `3a24ccd` has been run by a human (WORKFLOW §6).
 The 2026-08-18 session-log entry below still records the gap as open — that is history, not status.
 
+**⚠ Known merge hazard for `phase/5-content` (added 2026-08-20).** `Ecosystems.cs` and `Feeds.cs` on
+`phase/5-content` need `'app'`/`'vendor'` added when that branch merges, or `ContentVocabularyTests`
+will fail against the now-widened JSON schemas. Those two constant files exist only on that branch,
+so [ADR 0019](adr/0019-third-party-application-vocabulary.md) could not update them — `main` widened
+`schemas/*.json` and the CHECK constraints, and the C# constants are the fourth copy that has to
+catch up. Not a defect in either branch; a merge task with nothing yet enforcing it.
+
 ## Phase summary
 
 | # | Phase | Mode | Depends on | Status |
