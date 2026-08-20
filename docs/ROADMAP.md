@@ -28,6 +28,21 @@ current on `main` per slice; the detail stays on the branch.
 `--force-with-lease` that replaced superseded WIP `3a24ccd` has been run by a human (WORKFLOW §6).
 The 2026-08-18 session-log entry below still records the gap as open — that is history, not status.
 
+**CAB reader licensing — RESOLVED 2026-08-20.** The managed cabinet reader **D-504** needs is
+vendored WiX DTF source under **MS-RL**, not the NuGet package: WiX v6's Open Source Maintenance Fee
+applies to **binary releases** at or above US$10,000 annual revenue, and this product is sold.
+Rejected on the ADR 0005 precedent. The OSMF EULA v1.1 §4 states in writing that the agreement
+"applies only to the Binary Release" and does not limit use of the source — so compiling it
+ourselves is upstream's documented path, not a loophole. **MS-RL's reciprocal obligation is
+file-scoped, not project-wide** (§3(A)): our own files stay under our own terms, and the boundary to
+police is *copying* DTF code, never *calling* it. Vendored at `third_party/wix-dtf/` from tag
+`v7.0.0`. See [ADR 0020](adr/0020-cab-reader-licensing.md). **Release-gate item, not a build
+blocker:** the obligation analysis is a reading of quoted licence text by an engineer, not legal
+advice — **counsel should confirm the file-scoped reading, and check the customer EULA does not
+contradict MS-RL §3(E), before the first commercial ship.** A third-party notices file and a route
+for customers to obtain the vendored source do not exist yet; both belong to the packaging work,
+which is still unowned. **This unblocks D-504; it does not start it — nothing consumes the code yet.**
+
 **⚠ Known merge hazard for `phase/5-content` (added 2026-08-20).** `Ecosystems.cs` and `Feeds.cs` on
 `phase/5-content` need `'app'`/`'vendor'` added when that branch merges, or `ContentVocabularyTests`
 will fail against the now-widened JSON schemas. Those two constant files exist only on that branch,
