@@ -48,7 +48,7 @@ The 2026-08-18 session-log entry below still records the gap as open — that is
 | 13 | Audit, compliance, evidence | parallel | 6 | not-started |
 | 14 | Identity & access (authN/authZ) | parallel | 1 | not-started |
 | 15 | Key custody & KMS providers | parallel | 2 | not-started |
-| 16 | **Third-party application patching** | parallel | 1, 5 | **not-started — PLACED 2026-08-18 by the repo audit.** The largest competitive gap; needs a **frozen-vocabulary decision before Phase 6**. See "The market gap" below |
+| 16 | **Third-party application patching** | parallel | 1, 5 | **not-started — in scope, DECIDED 2026-08-20.** The vocabulary gate is closed ([ADR 0019](adr/0019-third-party-application-vocabulary.md)); the build is unscheduled and gated on Phase 6. See "The market gap" below |
 
 ## The market gap — third-party application patching (found by the 2026-08-18 audit)
 
@@ -86,10 +86,21 @@ version-comparison around three OS ecosystems, and before Phase 8 builds deploym
 OS-package installers. Taking it after either is a schema migration plus a rewrite of the comparator
 layer. Taking it now is four CHECK edits and one ADR.
 
-**Not decided here.** Whether to build Phase 16 at all is a product call — a defensible answer is
-"OS-only v1, applications in v2", but that answer has to be *made and recorded*, because the cost of
-reversing it rises steeply from Phase 6 onward. What the audit asserts is only that the gap was
-**unrecorded and unowned**, which it no longer is.
+**DECIDED 2026-08-20 — third-party application patching is IN SCOPE for the product**, at the
+schema level, taken before the Phase 6 gate the audit set. The vocabulary is widened by two
+**generic** values — `app` (the fourth `advisory_affects.ecosystem`) and `vendor` (an
+`advisories.source`, `patches.source` and `content_sources.kind`) — and **no vendor is enumerated**:
+vendor identity rides on `content_sources.instance`, `package_name`, `external_id` and `vendor_id`,
+all of which are already free-form and already unique-keyed. See
+[ADR 0019](adr/0019-third-party-application-vocabulary.md).
+
+**What this decision is not.** It commits no build capacity — Phase 16 stays `not-started` and
+unscheduled, gated on Phase 6 — and it claims nothing works: no connector produces these values, no
+comparator consumes them, no assessment path understands them. It buys the *option* for one additive
+migration, which was the whole point of taking it before Phase 6 rather than after. The obligation it
+does create lands on **Phase 6**, which must build its comparator layer ecosystem-extensible rather
+than hardcoded to three (`docs/phases/phase-6.md`), and on **Phase 16**, which must namespace
+`external_id`/`vendor_id` per vendor now that one `source` value covers every vendor.
 
 > **Numbering note.** Phases 14 and 15 are appended to avoid renumber churn, but the number is a
 > label, not a build-order rank — order is set by the *Depends on* column. Identity depends only on
@@ -414,9 +425,14 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   risk-acceptance workflow** (HARD-PROBLEMS #7) — first-class `exceptions` (scope:
   finding/asset/group; reason; approver; **expiry**) that move a finding out of
   actionable **without deleting it**, **auto-reopen on expiry**, and are **audited via
-  the Phase-1 `IAuditLog`**.
+  the Phase-1 `IAuditLog`**. **Plus, from [ADR 0019](adr/0019-third-party-application-vocabulary.md):
+  the comparator layer must be ecosystem-EXTENSIBLE** — comparators resolve by ecosystem and an
+  unregistered one (`app`) fails loudly instead of falling back to string compare. Implementing an
+  `app` comparator is Phase 16's job; not foreclosing it is this phase's.
 - **Owned paths:** `src/Modules/Assessment`.
-- **See:** `docs/HARD-PROBLEMS.md`.
+- **Entry blockers:** **M1** (exception/superseded conflated with `assessed-compliant`) and
+  **D-503** (the supersedence DAG accepts a 2-cycle) — both detailed in `docs/phases/phase-6.md`.
+- **See:** `docs/phases/phase-6.md` · `docs/HARD-PROBLEMS.md`.
 
 ## Phase 7 — Risk scoring  · parallel · Status: not-started
 - **Goal:** Explainable per-finding risk score.
@@ -595,11 +611,13 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
 - **Why it exists:** placed by the 2026-08-18 repo audit. See "The market gap" above — this is the
   feature the named inspiration sells against WSUS, and its absence is the one gap that would lose a
   head-to-head comparison outright.
-- **The decision that must come first, and its deadline.** Extending the frozen vocabulary
-  (`advisories.source`, `patches.source`, `content_sources.kind`, `advisory_affects.ecosystem`) is a
-  **NEVER #6 change requiring an explicit ask**. It must be settled **before Phase 6**, which freezes
-  correlation and version comparison around three OS ecosystems. Cheap now; a migration plus a
-  comparator rewrite later.
+- **The decision that had to come first — TAKEN 2026-08-20, before the Phase 6 gate.** Extending the
+  frozen vocabulary was a **NEVER #6 change requiring an explicit ask**; the ask was made and
+  granted. `advisories.source`, `patches.source` and `content_sources.kind` now admit `vendor`,
+  `advisory_affects.ecosystem` admits `app`, and `advisories.cvss_source` widened with the feed list
+  it reads. Additive migration `20260820144646_ThirdPartyApplicationVocabulary`. No vendor is
+  enumerated — see [ADR 0019](adr/0019-third-party-application-vocabulary.md). **This phase is no
+  longer gated on a decision; it is gated on Phase 6 completion and on capacity.**
 - **Exit criteria** *(indicative — to be firmed once the vocabulary decision is taken)*:
   - A third-party application catalogue source, with the same honesty rules Phase 5 learned the hard
     way: **real captured payloads only**, provenance per record, and a connector that fails loudly
