@@ -7,17 +7,18 @@ info:
     exist today (/health and the RLS diagnostic /diag/assets). Real resource endpoints
     are added by later phases.
 
-    UNRESOLVED CONTRADICTION - review finding H5, open since Phase 1, re-flagged by the
-    2026-08-18 audit. The line that used to sit here said this file "is regenerated
-    code-first once controllers exist". CLAUDE.md section 4.5 lists OpenAPI as a FROZEN
-    contract and NEVER #6 forbids changing a frozen contract without an explicit ask.
-    Both cannot be true: a file regenerated from code is an output, not a contract, and
-    nothing can be frozen that a build step rewrites. The claim is struck rather than
-    silently deleted, because the decision has not been made. Whoever resolves it must
-    pick one and record an ADR - design-first (this file is authoritative, controllers
-    conform, drift fails a test) or code-first (CLAUDE.md section 4.5 drops OpenAPI from
-    the frozen list). Do not add resource endpoints until it is picked; every endpoint
-    added meanwhile deepens the inconsistency.
+    FROZEN AND AUTHORITATIVE - CLAUDE.md section 4.5, resolved by ADR 0021 (2026-08-20),
+    closing review finding H5. This file is HAND-AUTHORED AND REVIEWED. It is never generated,
+    and no build step rewrites it: a file regenerated from code is an output, not a contract.
+    The direction of authority is design-first - the host conforms to THIS FILE, not the reverse.
+
+    Enforced, not merely asserted: OpenApiContractTests compares this file against the real
+    endpoint table of a composed host, in BOTH directions. A route the host serves that is absent
+    here fails the suite, and so does a path promised here that no route implements. Changing this
+    file is a frozen-contract change under NEVER #6 and needs an explicit ask.
+
+    Adding an endpoint therefore starts here: specify it in this file first - which turns the
+    suite RED - then implement it until it goes green.
 
 servers:
   - url: http://localhost:5080

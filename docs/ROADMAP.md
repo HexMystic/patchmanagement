@@ -138,9 +138,12 @@ complete for Phase 5's day-one needs. **Phases 2, 3, and 5 are now unblocked** (
 parallel fan-out; see WORKFLOW.md).
 
 **Still open from the review — tracked, none blocking the 2/3/5 fan-out:** **H1** is now **placed**
-as **Phase 14 (Identity & access)** — a prerequisite of Phase 12, not yet built; **H5** (OpenAPI
-freeze inversion), **M1** (a Phase-6-entry decision), **M5**, and **M8/M9 for the 8 pre-existing
-tables** remain. The cheap M5/M8/M9 hardening can ride alongside the fan-out or as its own slice.
+as **Phase 14 (Identity & access)** — a prerequisite of Phase 12, not yet built; **M1** (a
+Phase-6-entry decision), **M5**, and **M8/M9 for the 8 pre-existing tables** remain. The cheap
+M5/M8/M9 hardening can ride alongside the fan-out or as its own slice. **H5 (OpenAPI freeze
+inversion) is CLOSED 2026-08-20** — resolved design-first, and the contract now has the drift test it
+never had ([ADR 0021](adr/0021-openapi-design-first.md)). `db/schema.sql` (**L4**) is now the one
+frozen artifact still guarded by nothing.
 
 ---
 
@@ -705,7 +708,7 @@ approved decision — the real gap was that `DIFFERENTIATORS.md`'s gate wasn't a
 | H2 | `advisory.schema.json` is closed (`additionalProperties:false`) and cannot carry KEV/EPSS/CVSS provenance; `severity` has no `unknown`; no **patch** schema at all | Phase 1 amend / Phase 5 | closed by C1 slice |
 | H3 | **Zero foreign keys** — incl. no `tenant_id → tenants(id)`; permits cross-tenant dangling refs and phantom tenants. Wants composite `(tenant_id, id)` FKs + `UNIQUE (tenant_id, id)` parents | Phase 1 (cheap now) | closed by C1 slice |
 | H4 | **No test enforces the RLS convention** on tables later phases add (ENABLE+FORCE+policy+grants); no `ALTER DEFAULT PRIVILEGES` | Phase 1 (`pg_class`/`pg_policies` test) | closed by C1 slice (`RlsConventionTests`) |
-| H5 | OpenAPI is an empty skeleton that declares itself **regenerated code-first**, inverting the freeze CLAUDE.md §4.5 defines | Reconcile CLAUDE.md ↔ `api/openapi.yaml` | OPEN |
+| H5 | OpenAPI is an empty skeleton that declares itself **regenerated code-first**, inverting the freeze CLAUDE.md §4.5 defines | Reconciled **design-first**: the file is authoritative and hand-authored, the host conforms, and `OpenApiContractTests` fails on drift in both directions — [ADR 0021](adr/0021-openapi-design-first.md) | **CLOSED 2026-08-20** |
 
 ### Medium / Low (detail in the review)
 `M1` exception/superseded conflated with `assessed-compliant` — **Phase-6-entry decision** ·

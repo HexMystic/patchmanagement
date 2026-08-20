@@ -11,6 +11,9 @@
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
     <PackageReference Include="JsonSchema.Net" Version="9.3.0" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="9.0.16" />
+    <!-- Reads api/openapi.yaml in OpenApiContractTests (ADR 0021). TEST-ONLY: the shipped API
+         project must never take an OpenAPI package — the spec is hand-authored, not generated. -->
+    <PackageReference Include="Microsoft.OpenApi.Readers" Version="1.6.24" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="Npgsql" Version="9.0.3" />
     <PackageReference Include="xunit" Version="2.9.2" />
