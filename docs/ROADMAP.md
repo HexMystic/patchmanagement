@@ -50,6 +50,34 @@ so [ADR 0019](adr/0019-third-party-application-vocabulary.md) could not update t
 `schemas/*.json` and the CHECK constraints, and the C# constants are the fourth copy that has to
 catch up. Not a defect in either branch; a merge task with nothing yet enforcing it.
 
+**⚠ Second merge note — DSA (added 2026-08-20).** `phase/5-content`'s `docs/phases/phase-5.md` still
+records the Debian source as an **open question** — its eight-feed table, exit-criterion (a) row and
+the "Three connectors cannot work against their real feeds" section all predate
+[ADR 0022](adr/0022-debian-dsa-source.md). They need updating when that branch merges. `main` has no
+per-feed table, which is why the decision is recorded in the Phase 5 section above instead of
+duplicating one here.
+
+## ✅ Blocking decisions: NONE — all four closed 2026-08-20
+
+The 2026-08-18 audit left four decisions that gated work. **All four are now taken and recorded.**
+Nothing is waiting on a decision; what remains is build capacity.
+
+| # | Decision | Outcome | Record |
+|---|---|---|---|
+| 1 | Third-party application vocabulary | **In scope**, schema-level. Two generic values (`app`, `vendor`), no vendor enumerated. Five CHECKs widened by an additive migration | [ADR 0019](adr/0019-third-party-application-vocabulary.md) |
+| 2 | CAB reader licensing | **MS-RL source vendoring**, OSMF fee rejected. Reciprocity confirmed **file-scoped, not project-wide** | [ADR 0020](adr/0020-cab-reader-licensing.md) |
+| 3 | OpenAPI freeze direction (**H5**) | **Design-first** — the spec is authoritative and hand-authored, and `OpenApiContractTests` now fails on drift in both directions | [ADR 0021](adr/0021-openapi-design-first.md) |
+| 4 | Debian DSA source | **salsa raw plain-text accepted**, with the stability risk named and a fail-loud parser as the binding mitigation | [ADR 0022](adr/0022-debian-dsa-source.md) |
+
+**Clear to pick up, in any order the dependency column allows:** Phase 5 build work — the
+`rhsa`/`msrc` envelope rewrites, the **DSA connector** (unblocked by decision 4), **D-504**
+`wsusscn2` (unblocked by decision 2), and criterion (b) incrementality — plus **Phase 4** (discovery
+& inventory) and **Phase 14** (identity, a Phase 12 prerequisite).
+
+**Two carried obligations that are not decisions and block nothing:** counsel should confirm the
+MS-RL reading before first commercial ship (decision 2), and Phase 6 must build its comparator layer
+ecosystem-extensible (decision 1, `docs/phases/phase-6.md`).
+
 ## Phase summary
 
 | # | Phase | Mode | Depends on | Status |
@@ -59,7 +87,7 @@ catch up. Not a defect in either branch; a merge task with nothing yet enforcing
 | 2 | Credential vault | parallel | 1 | **complete** |
 | 3 | Endpoint connector | parallel | 1 | **complete** — merged to `main`, **311 green on `main` post-merge**, 0 skipped. Four review passes. **SSH verified against the lab fleet; WinRM written and unit-proven but NEVER run against a Windows host (D-303)** |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
-| 5 | Content ingestion | parallel | 1 | **in-progress — 7 of 9 exit criteria** (on `phase/5-content`, not merged). Store criteria (c)–(f) proven against real Postgres. **(a) is 4 of 8 feeds**: `nvd`/`kev`/`epss`/`usn` work; **`rhsa`, `msrc`, `dsa`, `wsusscn2` parse envelopes no server produces** — `rhsa` and `wsusscn2` return an empty batch and report `ok`. **(b) incrementality is unimplemented**, not untested |
+| 5 | Content ingestion | parallel | 1 | **in-progress — 7 of 9 exit criteria** (on `phase/5-content`, not merged). Store criteria (c)–(f) proven against real Postgres. **(a) is 4 of 8 feeds**: `nvd`/`kev`/`epss`/`usn` work; **`rhsa`, `msrc`, `dsa`, `wsusscn2` parse envelopes no server produces** — `rhsa` and `wsusscn2` return an empty batch and report `ok`. **`dsa`'s SOURCE is now decided** ([ADR 0022](adr/0022-debian-dsa-source.md)) — the connector is still unbuilt, so the count stays 4 of 8. **(b) incrementality is unimplemented**, not untested |
 | 6 | Assessment | solo | 4, 5 | not-started |
 | 7 | Risk scoring | parallel | 6 | not-started |
 | 8 | Deployment engine | **SOLO** | 6 | not-started |
@@ -430,6 +458,13 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   MSRC, and `wsusscn2.cab`; normalized into the Phase-1 content schema; incremental &
   idempotent refresh; provenance recorded per record.
 - **Owned paths:** `src/Modules/Content`.
+- **DSA source — DECIDED 2026-08-20** ([ADR 0022](adr/0022-debian-dsa-source.md)). `dsa.json` 404s and
+  Debian serves no structured feed carrying **both** DSA identifiers and per-suite fixed versions, so
+  the source is salsa's raw plain-text `data/DSA/list` (6,466 advisories). **The accepted risk is
+  stability, not legitimacy** — it is the only Phase 5 source that is plain text on a git forge with
+  no versioning or deprecation policy. Binding mitigation: the parser must **fail loudly**, never
+  return an empty batch with `status = 'ok'` — the defect `rhsa` and `wsusscn2` already shipped. The
+  connector is **not built**; this unblocks its slice.
 - **See:** `docs/HARD-PROBLEMS.md` (wsusscn2.cab vs MSRC CSAF; #2/#3 require Debian DSA).
 - **Content vocabulary is frozen in Phase 1** (`advisories.source`, `patches.source`,
   `content_sources.kind`, `ecosystem`) and covers every feed above plus the lab fleet
