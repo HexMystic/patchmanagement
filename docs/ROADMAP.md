@@ -22,11 +22,11 @@ current on `main` per slice; the detail stays on the branch.
 
 | Branch | State | Where its detail lives |
 |---|---|---|
-| `phase/5-content` | **6 commits ahead of `main`, and ahead of `origin` too** — three slices landed (module reachability, two parse slices, the store slice) plus the wsusscn2 audit. Solution green at **402**. | that branch's `docs/ROADMAP.md` session log + `docs/phases/phase-5.md` |
+| `phase/5-content` | **6 commits ahead of `main`, and pushed — `origin/phase/5-content` is in sync at `d46c486`** — three slices landed (module reachability, two parse slices, the store slice) plus the wsusscn2 audit. Solution green at **402**. | that branch's `docs/ROADMAP.md` session log + `docs/phases/phase-5.md` |
 
-**Unpushed work is a standing risk.** `origin/phase/5-content` still points at a superseded WIP
-commit (`3a24ccd`); replacing it needs `--force-with-lease`, which the repo guardrail deliberately
-denies to tooling, so a human must run it (WORKFLOW §6).
+**The push gap is closed (2026-08-20).** `origin/phase/5-content` is in sync at `d46c486`; the
+`--force-with-lease` that replaced superseded WIP `3a24ccd` has been run by a human (WORKFLOW §6).
+The 2026-08-18 session-log entry below still records the gap as open — that is history, not status.
 
 ## Phase summary
 
