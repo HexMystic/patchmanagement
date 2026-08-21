@@ -63,7 +63,7 @@ The interface and the normalized model live in **Contracts**, not in the module
 | `nvd` | advisories | CVE severity + CVSS. Emits **no** affects rows: NVD carries CPE version *ranges*, which are blind to backports (HARD-PROBLEMS #2). Ranges are deferred as an additive `advisory_ranges` table |
 | `usn` | advisory + patch (deb) | Ubuntu. Exact fixed distro version per release; `backported = true` |
 | `dsa` | advisory + patch (deb) | Debian. Required by HARD-PROBLEMS #2/#3, not optional |
-| `rhsa` | advisory + patch (rpm) | Red Hat CSAF. **Also serves Rocky/Alma**, which rebuild RHEL. Native RLSA/ALSA is deferred until per-rebuild precision proves necessary |
+| `rhsa` | advisory + patch (rpm) | Red Hat securitydata. The endpoint returns a **JSON array of summaries** carrying NEVRA strings — not the per-advisory CSAF document. **Also serves Rocky/Alma**, which rebuild RHEL. Native RLSA/ALSA is deferred until per-rebuild precision proves necessary |
 | `msrc` | advisory + patch | CSAF. The Windows **CVE overlay** — "why it matters", keyed CVE→KB |
 | `wsusscn2` | patch + supersedence | The offline scan catalogue. The Windows **applicability engine** — "what is missing on this host" |
 | `kev` | **nothing** | CISA KEV is an **overlay**: it sets `kev_*` columns and appends provenance. A row with `source='kev'` is rejected by CHECK, and would let one CVE exist as divergent duplicates |
@@ -101,7 +101,7 @@ self-healing, not a bug: it succeeds again once the publisher's advisory is inge
 `tests/PatchManagement.Content.Tests` and `tests/PatchManagement.Content.IntegrationTests`.
 
 > **Why there are two test projects.** `Content.Tests` is deliberately infrastructure-free — no
-> Postgres, no fleet, no network — and runs 61 tests in under a second. The store criteria (c)–(f)
+> Postgres, no fleet, no network — and runs 99 tests in under a second. The store criteria (c)–(f)
 > need Postgres *and* `ContentStore`, and neither existing project can host that:
 > `PatchManagement.IntegrationTests` has `PostgresFixture` but **must never reference the Content
 > module**, because `HostModuleDiscoveryTests` only works while the module's sole path into that
@@ -111,13 +111,14 @@ self-healing, not a bug: it succeeds again once the publisher's advisory is inge
 ## Exit criteria — status
 
 Each criterion names the test that proves it. **7 of 9 ticked** as of 2026-08-16 (the store slice).
-The two that are not are the two that matter most for shipping: **(a)** is 4 of 8 feeds, and half the
-remainder parse envelopes no server produces; **(b)** is half-built rather than half-tested.
+The two that are not are the two that matter most for shipping: **(a)** is **5 of 8** feeds as of
+2026-08-21, the remainder being `msrc` (next), `dsa` (unbuilt) and `wsusscn2` (D-504); **(b)** is
+half-built rather than half-tested.
 A criterion is ticked only when a named test proves it — never because the code looks right.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
-| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ◐ **4 of 8** — `nvd`, `kev`, `epss`, **`usn`** covered by `NvdParseTests`/`KevParseTests`/`EpssParseTests`/`UsnParseTests` against real captures. `dsa`, `rhsa`, `msrc`, `wsusscn2` have **no parse test**, and all three HTTP ones cannot reach their feed at all (sections above) |
+| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ◐ **5 of 8** — `nvd`, `kev`, `epss`, `usn`, **`rhsa`** covered by their `*ParseTests` against real captures. `rhsa` was rewritten 2026-08-21 against a captured payload and now **fails loudly** on an unexpected shape. Remaining: **`msrc`** (next), **`dsa`** (source decided — ADR 0022 — connector unbuilt) and **`wsusscn2`** (D-504) |
 | b | Refresh is **incremental** — the cursor advances on success and holds on failure | `ContentSyncServiceTests` over a scripted connector | ◐ — the **advance-or-hold half is proven** (`A_failed_sync_holds_the_cursor_and_records_the_failure_on_the_feed_row`, `A_successful_sync_advances_the_cursor_and_hands_it_to_the_next_run`). Stays unticked because **incrementality is unimplemented**, not untested: cursors are emitted, persisted and handed back, but no connector ever sends one to a feed |
 | c | Refresh is **idempotent** — the same payload twice writes the same rows | `ContentIdempotencyTests` (7) + `ContentSyncServiceTests` atomicity | ☑ — advisories, affects, patches, feed rows and supersedence edges each re-ingested; ids proven **stable**, not merely unduplicated. Includes the NULL-platform case, which is the only proof the store's arbiter resolves to the `NULLS NOT DISTINCT` index rather than silently inserting a duplicate per refresh |
 | d | **Provenance recorded per record**, non-empty, merged rather than overwritten across feeds | `ContentProvenanceTests` (5) | ☑ — an advisory touched by nvd+kev+epss keeps all three; a publisher re-sync replaces **only its own** entry and neither drops the others nor appends a second of its own |
@@ -127,7 +128,22 @@ A criterion is ticked only when a named test proves it — never because the cod
 | h | The contract surface carries no database dependency | `ContentContractSurfaceTests` | ☑ |
 | i | The vocabulary matches the frozen schemas | `ContentVocabularyTests` | ☑ (partial — the `AppDbContext` CHECK copy is still independent; ADR 0018 residual, owner Phase 6) |
 
-## ⚠ Three connectors cannot work against their real feeds — found 2026-07-28
+## ⚠ Three connectors could not work against their real feeds — found 2026-07-28, ONE FIXED 2026-08-21
+
+> **Status.** `rhsa` was rewritten against a real captured payload on 2026-08-21 and now works; it
+> **fails loudly** on an unexpected shape rather than returning an empty batch. `msrc` is next and
+> `dsa` remains — the latter's SOURCE is now decided (**ADR 0022**, which lives on `main`; this
+> branch predates it) but the connector is not built. The finding below is kept as the record of
+> what was wrong, because the rewrite's shape checks exist to stop exactly this recurring.
+>
+> **What the real rhsa format turned out to be**, not matching the guess recorded further down: the
+> endpoint returns a **JSON array of summary objects** (`RHSA`, `severity`, `released_on`, `CVEs[]`,
+> `released_packages[]` as NEVRA, `resource_url`) — not the per-advisory CSAF document. Following
+> `resource_url` per advisory would be an N+1 against a vendor API for fields already in hand.
+> `released_packages` is not uniformly NEVRA either: some advisories list module streams
+> (`java-21-openjdk-portable-main@aarch64`) with no version at all.
+
+## The original finding (2026-07-28), kept as the record
 
 Each connector's own `DefaultEndpoint` was requested during parse-slice-1 planning. **Three of the
 seven HTTP connectors do not match reality**, and the failure is not symmetric — one of them

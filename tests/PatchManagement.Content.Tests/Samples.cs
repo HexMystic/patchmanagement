@@ -45,4 +45,8 @@ internal static class Samples
 
     /// <summary>Two complete notices from the 339 MB usn-db map; see PROVENANCE.md.</summary>
     public static string Usn() => Read("usn.sample.json");
+
+    /// <summary>One whole page of the Red Hat securitydata list; see PROVENANCE.md.</summary>
+    public static string Rhsa() => Read("rhsa.sample.json");
+
 }

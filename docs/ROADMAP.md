@@ -855,6 +855,50 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
+### 2026-08-21 — Phase 5 rhsa REWRITE · criterion (a) 4/8 → 5/8 · NOT MERGED
+
+**`rhsa` was written against an envelope Red Hat does not serve. It is now written against a real
+captured payload, and it fails loudly rather than returning an empty batch.**
+
+**The format was investigated fresh, and it did not match what was recorded.** phase-5.md predicted
+the per-advisory CSAF document (`document.tracking.id` + `vulnerabilities[].product_status.fixed[]`).
+The endpoint actually returns a **JSON array of summaries** carrying `RHSA`, `severity`,
+`released_on`, `CVEs[]` and `released_packages[]` as NEVRA — everything the frozen schema needs, in
+one request. Following `resource_url` per advisory would have been an N+1 against a vendor API for
+fields already in hand.
+
+**The defect, precisely.** `Parse` read `root.Array("advisories")`; `JsonHelpers.Array` requires an
+object receiver, so a root array yielded `[]` in silence. Empty batch, `status = 'ok'`, cursor
+advanced — an operator sees a green sync over an empty catalogue.
+
+**Two traps found in real data that a hand-written fixture would never have contained:**
+
+- `released_packages` is **not uniformly NEVRA** — some advisories list module streams
+  (`java-21-openjdk-portable-main@aarch64`) with no version at all. A fix statement without a fixed
+  version is not a fix statement, so those are skipped.
+- One package at one version on **four arches** is ONE fix statement. `advisory_affects` is unique
+  on (advisory, package, ecosystem, platform), so emitting four would have the store keep one and
+  the reported count describe nothing real.
+
+`.src` rpms are skipped (not installable), the platform is derived from the `.elN` dist tag, and the
+NEVR — epoch included — is carried RAW per ADR 0011. The summary payload carries no title and no
+CVSS, so `Title` falls back to the advisory id and the CVSS members stay null rather than invented.
+
+**Red-first.** **14 of 16 red** before the rewrite, every failure an assertion against the real
+payload ("collection did not contain any matching items" — the empty-batch defect), green at 16.
+**The fail-loud guard was mutation-checked** (`scripts/mutation-guard.ps1`): reverting the throw to a
+silent `NormalizedBatch.Empty` turned **exactly one** test red and left 15 green, then was reverted
+and confirmed with `-Absent`.
+
+**The sample is a real capture** (`Samples/PROVENANCE.md`): `rhsa.sample.json`, 1,448 bytes, a
+**whole unedited response** — `per_page`/`page` are the API's own paging, so a page is a complete
+response to a complete request, not a truncation.
+
+**Scope held.** `msrc`, `wsusscn2`, `dsa`, incrementality (criterion b) and `ContentSyncService` are
+untouched. **The general zero-count-`ok` hole in `ContentSyncService` remains open for the other
+seven feeds** — this slice closes it at the connector for `rhsa` only. Deliberate: a sync-level guard
+would flip `ContentSyncServiceTests`' existing assertion that an empty batch is `ok`.
+
 ### 2026-08-16 — Phase 5 STORE SLICE (criteria c–f) · green at 402 · NOT MERGED
 
 **Tests: 374 → 402 passing, 0 skipped, 0 failed**, measured from a completed run of the whole

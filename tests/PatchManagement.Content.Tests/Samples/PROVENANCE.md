@@ -107,9 +107,40 @@ release series that do not exist yet.
 **`USN-4147-1` was considered and rejected**: it is a kernel notice weighing **156 KB** on its own,
 more than twenty times the whole committed fixture, and covers nothing the two above do not.
 
+## RHSA — `rhsa.sample.json`
+
+1,448 bytes, one **whole, unedited** response from
+`https://access.redhat.com/hydra/rest/securitydata/csaf.json?after=2026-08-19&before=2026-08-20&per_page=3&page=3`
+— the connector's own endpoint. Captured **2026-08-21 UTC**, when the unpaginated endpoint returned
+**5,658,789 bytes**.
+
+`per_page` and `page` are the API's own paging parameters, so this is a complete response to a
+complete request — the same status as the NVD files, not a truncation. No merging, no trimming.
+
+**The root is a JSON ARRAY**, which is the entire defect this fixture exists to pin: the previous
+parser asked the root for an `advisories` member, `JsonHelpers.Array` requires an object receiver,
+and it was handed `[]` in silence. Empty batch, `status = 'ok'`, cursor advanced.
+
+| Advisory | Why this one |
+|---|---|
+| `RHSA-2026:57149` | **Epoch 1**, and one package on **four arches at one version** (`ansible-core-1:2.14.18-3.el9_8.1` ×4). Arch is not part of a fix statement, so the four must collapse to one row — a count assertion would pass at 4, 1 or anything between. The package name also contains digits and hyphens, so a parser splitting on the wrong separator mangles it. |
+| `RHSA-2026:57148` | Epoch 1 on **`.el10_2`** — a different RHEL major from the advisory above, so a hardcoded platform passes one case and fails the other. |
+| `RHSA-2026:57175` | **`java-21-openjdk-portable-main@aarch64`** — a module-stream reference, not a NEVRA. It carries no version at all, so it can state no fix. Proves the skip is deliberate rather than accidental. |
+
+Both NEVRA advisories also ship a `.src` rpm, which is not installable and must not become a fix
+statement. Between them the three advisories cover every shape `released_packages` was observed to
+take.
+
+**Deliberately NOT covered, because the summary payload does not contain it:** a title, a CVSS
+score, and a reboot flag. The endpoint carries none of the three, so `Title` falls back to the
+advisory id and the CVSS members stay null rather than being invented. The full CSAF document behind
+each `resource_url` has more, and fetching it per advisory is the N+1 design that was rejected.
+
 ## Not captured
 
 `wsusscn2.cab` has **no fixture and will not be given a hand-written one.** The cab is ~627 MB, lives
-only in the main worktree, is gitignored, and `ExpandCabPackageSource` has never been executed
-against it. Supersedence inversion is the highest-consequence logic in the module; a fabricated
+only in the main worktree, is gitignored, and `ExpandCabPackageSource` has never *successfully* run
+against it — the cab WAS opened on 2026-08-16 and the extractor found to be broken (phase-5.md,
+D-504), which is a stronger reason for this entry, not a weaker one. Supersedence inversion is
+the highest-consequence logic in the module; a fabricated
 `package.xml` would make it look tested while proving nothing.
