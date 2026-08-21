@@ -75,13 +75,36 @@ internal static class DistroReleases
         ["warty"] = "4.10",
     };
 
+    /// <summary>
+    /// Every Debian suite the DSA list actually uses, plus the announced next release. The captured
+    /// <c>data/DSA/list</c> carries exactly twelve codenames across 8,560 fix statements, and all
+    /// twelve map here — pinned by <c>DsaParseTests</c>, which fails if any suite falls through.
+    ///
+    /// <para>This map previously covered <c>stretch</c>…<c>trixie</c> only, five entries. The seven
+    /// older suites account for <b>5,240 of the 8,560</b> suite lines — 61% — so the majority of
+    /// Debian's published history was being filed under <c>debian:woody</c>-style raw labels rather
+    /// than the <c>debian:N</c> convention Phase 6 matches assets on.</para>
+    ///
+    /// <para><c>forky</c> (14) is Debian's announced next release and does not appear in the list
+    /// yet. It is added ahead of its first advisory deliberately — see the identity warning on
+    /// <see cref="Ubuntu"/>: adding a series before its content lands is free, afterwards it is a
+    /// data migration.</para>
+    /// </summary>
     private static readonly Dictionary<string, string> Debian = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["stretch"] = "9",
-        ["buster"] = "10",
-        ["bullseye"] = "11",
-        ["bookworm"] = "12",
+        ["forky"] = "14",
         ["trixie"] = "13",
+        ["bookworm"] = "12",
+        ["bullseye"] = "11",
+        ["buster"] = "10",
+        ["stretch"] = "9",
+        ["jessie"] = "8",
+        ["wheezy"] = "7",
+        ["squeeze"] = "6",
+        ["lenny"] = "5",
+        ["etch"] = "4",
+        ["sarge"] = "3.1",
+        ["woody"] = "3.0",
     };
 
     public static string UbuntuPlatform(string codename) =>

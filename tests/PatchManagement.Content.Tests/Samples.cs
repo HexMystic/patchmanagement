@@ -54,4 +54,10 @@ internal static class Samples
 
     /// <summary>Four complete vulnerabilities from the 2026-Aug CVRF document; see PROVENANCE.md.</summary>
     public static string Msrc() => Read("msrc.sample.json");
+
+    /// <summary>
+    /// The whole Debian DSA list — 6,519 advisories of plain text, unedited. Not JSON; <see cref="Read"/>
+    /// is content-type agnostic. See PROVENANCE.md.
+    /// </summary>
+    public static string Dsa() => Read("dsa.sample.list");
 }

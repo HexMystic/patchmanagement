@@ -190,6 +190,55 @@ not let it become a `DateTimeOffset`: it would sort ahead of everything and read
 severity Threat is absent. Every one of the 800 carries a Type-3 Threat, so the `unknown` severity
 fallback is unreachable from this data and is left untested rather than fabricated.
 
+## DSA — `dsa.sample.list`
+
+1,135,558 bytes, the **entire** file, unedited, from
+`https://salsa.debian.org/security-tracker-team/security-tracker/-/raw/master/data/DSA/list`.
+Captured **2026-08-21 UTC**. **6,519 advisories**, 2002-07-30 to 2026-08-20.
+
+Not JSON. This is Debian's line-oriented advisory list, and it is the only source carrying both DSA
+identifiers and per-suite fixed versions — see **ADR 0022** (on `main`; this branch predates the
+file), which accepts it with its stability risk named.
+
+**Kept whole, which is a departure worth justifying.** At 1.1 MB it is ~15× the largest other
+sample. It is kept entire because the edge cases are the point and they are scattered through
+twenty-four years of history: truncating to the recent entries would leave a fixture containing only
+`trixie`, only suffixed ids, only tab indentation and no annotations — the exact shape of a test that
+cannot fail. It is plain text and compresses well.
+
+**Measured across the whole file**, so the parser is written from fact:
+
+| Element | Count | Note |
+|---|---|---|
+| Advisories | 6,519 | header lines |
+| CVE lines | 6,326 | indented `{CVE-… CVE-…}` |
+| Suite lines | 8,560 | 8,498 versioned, **62 annotated** |
+| Annotations | 62 | `<not-affected>` 55 · `<end-of-life>` 4 · `<unfixed>` 3 |
+| NOTE lines | 485 | commentary, no applicability fact |
+| Codenames | **12** | woody · sarge · etch · lenny · squeeze · wheezy · jessie · stretch · buster · bullseye · bookworm · trixie |
+
+| Fixture | Why this one |
+|---|---|
+| `DSA-6455-1` | The top entry, and therefore the cursor. Whole shape: 15 CVEs, one trixie fix at `151.0.7922.169-1~deb13u1`. |
+| `DSA-6352-1` | **Two suites, two different versions** for the same package (`bookworm` …`deb12u1`, `trixie` …`deb13u1`). Identical package name on both rows, so a row-COUNT assertion would pass while every version was wrong. |
+| `DSA-1105` | **`woody`** (Debian 3.0) — unmapped before this slice, and one of 871 such lines. Also spans `sarge`. |
+| `DSA-1209` | **No revision suffix** — plain `DSA-1209`, one of 450 pre-2007 ids. A pattern requiring `-N` drops them all. |
+| `DSA-4205-1` | An **announcement**: "jessie end-of-life", no `package - description` split, zero suite lines. One of 217. Also **space-indented**, one of the 260 advisories that are. |
+| `DSA-3699-1` | A suite line whose version is **`<end-of-life>`** — an annotation where a version belongs. |
+| `DSA-6197-*` | Three revisions (`-1`, `-2`, `-3`) of one DSA number, each its own advisory under the frozen `(source, external_id)` uniqueness. |
+
+**Two facts that determined the parser's shape**, neither guessable from a sample of recent entries:
+
+- **Indentation is mixed** — 14,846 tab-indented lines and **525 space-indented**, across 260
+  advisories. A parser anchored on `	` drops them silently.
+- **The file is ordered by DATE, not by id.** Revisions are re-inserted at the top, so 179 DSA
+  numbers carry several revisions and the id order inverts **181 times**. This is why the cursor is
+  the newest *full* id rather than a number or a date.
+
+**Deliberately NOT covered, because the file does not contain it:** a suite codename outside the
+twelve. Every one now maps, so the `debian:<codename>` fallback is unreachable from real data — it
+remains for the release after `forky`, and `DsaParseTests` asserts no fix statement reaches it.
+
 ## Not captured
 
 `wsusscn2.cab` has **no fixture and will not be given a hand-written one.** The cab is ~627 MB, lives

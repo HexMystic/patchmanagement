@@ -855,6 +855,61 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
+### 2026-08-21 — Phase 5 DSA CONNECTOR · criterion (a) 6/8 → 7/8 · NOT MERGED
+
+**The last of the three invented envelopes is gone.** `dsa` pointed at `tracker/data/dsa.json`,
+which 404s, and parsed a JSON root map Debian serves at no URL. The source was settled by **ADR 0022**
+(on `main`; this branch predates the file): salsa's raw plain-text `data/DSA/list`, accepted with its
+stability risk named and a fail-loud parser as the binding mitigation. **Only `wsusscn2` (D-504) now
+remains.**
+
+**Three open questions were decided, not assumed away.**
+
+1. **Cursor: the newest advisory's FULL id** (`DSA-6455-1`). The file is ordered by DATE, not by id —
+   revisions are re-inserted at the top, so 179 DSA numbers carry several revisions and the id order
+   **inverts 181 times**. A full id is therefore the only exact resume point: a re-issued old
+   advisory appears ABOVE the cursor and is picked up rather than missed. A date cursor is
+   day-granular (3 advisories share 2026-08-20) and would force re-ingesting a whole day; a count is
+   meaningless against a file that prepends and revises in place. **The cursor is emitted but not
+   consumed** — using it to limit parsing is criterion (b), which stays out of scope.
+2. **Codename map: all twelve suites in the file, plus the announced `forky`.** The map covered
+   `stretch`…`trixie` only, so seven older suites fell through to `debian:<codename>` — **5,240 of
+   8,560 suite lines, 61%** of Debian's published history filed off the convention Phase 6 matches
+   on. Seven lookup lines fixed it; `forky` (14) was added ahead of its first advisory because the
+   platform label is part of row identity and correcting it after an ingest inserts duplicates.
+3. **Announcements and annotations: advisory yes, fix statement no.** 217 headers carry no
+   `package - description` split at all ("jessie end-of-life"), and 62 suite lines hold an annotation
+   where a version belongs. Both become advisories where they have an id, never an affect row —
+   `<not-affected>` asserts the OPPOSITE of a fix, and a null-version row would have Phase 6 read a
+   fix threshold where Debian said the release was never affected.
+
+**The grammar was measured across the whole 1.1 MB file, and three properties would each have broken
+a parser written from July's notes:**
+
+- **Indentation is mixed** — 14,846 tab-indented lines and **525 space-indented**, across 260
+  advisories. Anchoring on `	` drops them without erroring.
+- **450 pre-2007 ids carry no revision suffix** (`DSA-1209`). A pattern requiring `-N` drops all of them.
+- **1,857 advisories span more than one suite** at different versions — the fan-out
+  `advisory_affects` is keyed on platform for, and the case a row count cannot catch.
+
+**July's recorded edge-case figures were also wrong**, counted from a partial read: the file has
+**6,519** advisories (not 6,466), `<not-affected>` **×55** (not 52) and `<unfixed>` **×3** (not 2).
+Corrected in `phase-5.md`.
+
+**Red-first: 20 of 20 red**, every one failing because `JsonDocument.Parse` cannot read plain text —
+the wrong-envelope defect itself — then **green at 20**. **The fail-loud guard was mutation-checked**
+(`scripts/mutation-guard.ps1`): disabling the throw turned **exactly one** test red and left 19
+green, then was reverted and confirmed with `-Absent`.
+
+**The sample is the whole file** (`Samples/PROVENANCE.md`): `dsa.sample.list`, 1,135,558 bytes,
+**entire and unedited**. Kept whole deliberately — at ~15× the largest other sample it is a departure,
+but the edge cases are scattered through twenty-four years, and a recent-entries subset would contain
+only `trixie`, only suffixed ids, only tab indentation and no annotations: the exact shape of a test
+that cannot fail.
+
+**Scope held.** `wsusscn2`, criterion (b), `ContentSyncService`, `main` and the other worktrees are
+untouched. No frozen contract changed — `dsa` was already in the vocabulary. Content.Tests 99 → 133.
+
 ### 2026-08-21 — Phase 5 rhsa + msrc REWRITE · criterion (a) 4/8 → 6/8 · NOT MERGED
 
 **Both connectors were written against envelopes no server produces. Both are now written against

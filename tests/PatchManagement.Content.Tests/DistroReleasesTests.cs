@@ -65,21 +65,57 @@ public sealed class DistroReleasesTests
     }
 
     /// <summary>
-    /// Debian's half is deliberately untouched by this slice — <c>DebianPlatform</c> is called only
-    /// by <c>DebianDsaConnector</c>, whose feed does not exist (its endpoint 404s) and which is
-    /// deferred to its own slice. This pins what the map covers TODAY so the DSA slice inherits a
-    /// stated starting point rather than a surprise: the pre-stretch suites that
-    /// <c>data/DSA/list</c> still carries (woody, sarge, etch, lenny, squeeze, wheezy, jessie) are
-    /// absent, and so is the forthcoming <c>forky</c>.
+    /// Debian's map covered <c>stretch</c>…<c>trixie</c> only until the DSA slice (2026-08-21). The
+    /// seven older suites the list still carries accounted for 5,240 of its 8,560 fix statements —
+    /// 61% — every one filed under a raw <c>debian:&lt;codename&gt;</c> label rather than
+    /// <c>debian:N</c>. All twelve suites appearing in the captured list now map, and
+    /// <c>DsaParseTests</c> asserts that no fix statement in the whole file reaches the fallback.
+    /// </summary>
+    [Theory]
+    [InlineData("trixie", "debian:13")]
+    [InlineData("bookworm", "debian:12")]
+    [InlineData("bullseye", "debian:11")]
+    [InlineData("buster", "debian:10")]
+    [InlineData("stretch", "debian:9")]
+    [InlineData("jessie", "debian:8")]
+    [InlineData("wheezy", "debian:7")]
+    [InlineData("squeeze", "debian:6")]
+    [InlineData("lenny", "debian:5")]
+    [InlineData("etch", "debian:4")]
+    [InlineData("sarge", "debian:3.1")]
+    [InlineData("woody", "debian:3.0")]
+    public void Every_suite_the_dsa_list_uses_maps_to_its_version(string codename, string expected)
+    {
+        Assert.Equal(expected, DistroReleases.DebianPlatform(codename));
+    }
+
+    /// <summary>
+    /// <c>forky</c> is Debian's announced next release and has no advisory yet. Mapped ahead of its
+    /// first one on purpose: the platform label is part of row identity, so adding a series before
+    /// its content lands is free and correcting it afterwards is a data migration.
     /// </summary>
     [Fact]
-    public void The_debian_map_covers_only_stretch_onwards_and_the_dsa_slice_inherits_that()
+    public void The_announced_next_release_is_mapped_before_its_first_advisory_lands()
     {
-        Assert.Equal("debian:12", DistroReleases.DebianPlatform("bookworm"));
-        Assert.Equal("debian:13", DistroReleases.DebianPlatform("trixie"));
+        Assert.Equal("debian:14", DistroReleases.DebianPlatform("forky"));
+    }
 
-        // Still unmapped — recorded, not fixed here.
-        Assert.Equal("debian:jessie", DistroReleases.DebianPlatform("jessie"));
-        Assert.Equal("debian:forky", DistroReleases.DebianPlatform("forky"));
+    /// <summary>Debian's lookup must be as case-insensitive as Ubuntu's.</summary>
+    [Fact]
+    public void Debian_codename_lookup_is_case_insensitive()
+    {
+        Assert.Equal("debian:12", DistroReleases.DebianPlatform("Bookworm"));
+        Assert.Equal("debian:3.0", DistroReleases.DebianPlatform("WOODY"));
+    }
+
+    /// <summary>
+    /// The fallback survives for a suite Debian has not announced. No real DSA reaches it today —
+    /// all twelve codenames in the captured list map — so it exists for the release after forky,
+    /// which is exactly when nobody will be looking.
+    /// </summary>
+    [Fact]
+    public void An_unannounced_debian_suite_falls_back_to_the_raw_codename()
+    {
+        Assert.Equal("debian:notayetreleasedsuite", DistroReleases.DebianPlatform("notayetreleasedsuite"));
     }
 }

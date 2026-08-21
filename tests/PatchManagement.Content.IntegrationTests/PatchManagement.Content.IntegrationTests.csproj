@@ -12,7 +12,7 @@
     WHY THIS PROJECT EXISTS AT ALL — it is the only place these tests can live:
 
       - PatchManagement.Content.Tests references the module but is deliberately infrastructure-free
-        (99 tests in under a second); its csproj says DB-touching tests do not belong there.
+        (133 tests in under a second); its csproj says DB-touching tests do not belong there.
       - PatchManagement.IntegrationTests has PostgresFixture but MUST NOT reference the Content
         module: HostModuleDiscoveryTests only works because the module's ONLY path into that
         project's output is the API's own ProjectReference. A direct reference would create a

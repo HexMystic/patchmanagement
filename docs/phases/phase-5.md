@@ -62,7 +62,7 @@ The interface and the normalized model live in **Contracts**, not in the module
 |------|-----------|-------|
 | `nvd` | advisories | CVE severity + CVSS. Emits **no** affects rows: NVD carries CPE version *ranges*, which are blind to backports (HARD-PROBLEMS #2). Ranges are deferred as an additive `advisory_ranges` table |
 | `usn` | advisory + patch (deb) | Ubuntu. Exact fixed distro version per release; `backported = true` |
-| `dsa` | advisory + patch (deb) | Debian. Required by HARD-PROBLEMS #2/#3, not optional |
+| `dsa` | advisory + patch (deb) | Debian. Required by HARD-PROBLEMS #2/#3, not optional. Source is salsa's raw **plain-text** `data/DSA/list` (ADR 0022) — not JSON, and the only form carrying both DSA ids and per-suite fixed versions |
 | `rhsa` | advisory + patch (rpm) | Red Hat securitydata. The endpoint returns a **JSON array of summaries** carrying NEVRA strings — not the per-advisory CSAF document. **Also serves Rocky/Alma**, which rebuild RHEL. Native RLSA/ALSA is deferred until per-rebuild precision proves necessary |
 | `msrc` | advisory + patch | **CVRF, two calls**: a monthly index then one document per month. The Windows **CVE overlay** — "why it matters", keyed CVE→KB |
 | `wsusscn2` | patch + supersedence | The offline scan catalogue. The Windows **applicability engine** — "what is missing on this host" |
@@ -101,7 +101,7 @@ self-healing, not a bug: it succeeds again once the publisher's advisory is inge
 `tests/PatchManagement.Content.Tests` and `tests/PatchManagement.Content.IntegrationTests`.
 
 > **Why there are two test projects.** `Content.Tests` is deliberately infrastructure-free — no
-> Postgres, no fleet, no network — and runs 99 tests in under a second. The store criteria (c)–(f)
+> Postgres, no fleet, no network — and runs 133 tests in under a second. The store criteria (c)–(f)
 > need Postgres *and* `ContentStore`, and neither existing project can host that:
 > `PatchManagement.IntegrationTests` has `PostgresFixture` but **must never reference the Content
 > module**, because `HostModuleDiscoveryTests` only works while the module's sole path into that
@@ -111,14 +111,14 @@ self-healing, not a bug: it succeeds again once the publisher's advisory is inge
 ## Exit criteria — status
 
 Each criterion names the test that proves it. **7 of 9 ticked** as of 2026-08-16 (the store slice).
-The two that are not are the two that matter most for shipping: **(a)** is **6 of 8** feeds as of
-2026-08-21, the remaining two being `dsa` (unbuilt) and `wsusscn2` (D-504); **(b)** is half-built
-rather than half-tested.
+The two that are not are the two that matter most for shipping: **(a)** is **7 of 8** feeds as of
+2026-08-21 — `wsusscn2` (D-504) is the only one left; **(b)** is half-built rather than
+half-tested.
 A criterion is ticked only when a named test proves it — never because the code looks right.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
-| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ◐ **6 of 8** — `nvd`, `kev`, `epss`, `usn`, **`rhsa`**, **`msrc`** covered by their `*ParseTests` against real captures. `rhsa`/`msrc` were rewritten 2026-08-21 against captured payloads and now **fail loudly** on an unexpected shape. Remaining: **`dsa`** (source decided — ADR 0022 — connector unbuilt) and **`wsusscn2`** (D-504) |
+| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ◐ **7 of 8** — `nvd`, `kev`, `epss`, `usn`, `rhsa`, `msrc`, **`dsa`** covered by their `*ParseTests` against real captures. All three rewritten 2026-08-21 against captured payloads; each **fails loudly** on an unexpected shape. Remaining: **`wsusscn2`** alone (D-504) |
 | b | Refresh is **incremental** — the cursor advances on success and holds on failure | `ContentSyncServiceTests` over a scripted connector | ◐ — the **advance-or-hold half is proven** (`A_failed_sync_holds_the_cursor_and_records_the_failure_on_the_feed_row`, `A_successful_sync_advances_the_cursor_and_hands_it_to_the_next_run`). Stays unticked because **incrementality is unimplemented**, not untested: cursors are emitted, persisted and handed back, but no connector ever sends one to a feed |
 | c | Refresh is **idempotent** — the same payload twice writes the same rows | `ContentIdempotencyTests` (7) + `ContentSyncServiceTests` atomicity | ☑ — advisories, affects, patches, feed rows and supersedence edges each re-ingested; ids proven **stable**, not merely unduplicated. Includes the NULL-platform case, which is the only proof the store's arbiter resolves to the `NULLS NOT DISTINCT` index rather than silently inserting a duplicate per refresh |
 | d | **Provenance recorded per record**, non-empty, merged rather than overwritten across feeds | `ContentProvenanceTests` (5) | ☑ — an advisory touched by nvd+kev+epss keeps all three; a publisher re-sync replaces **only its own** entry and neither drops the others nor appends a second of its own |
@@ -128,13 +128,12 @@ A criterion is ticked only when a named test proves it — never because the cod
 | h | The contract surface carries no database dependency | `ContentContractSurfaceTests` | ☑ |
 | i | The vocabulary matches the frozen schemas | `ContentVocabularyTests` | ☑ (partial — the `AppDbContext` CHECK copy is still independent; ADR 0018 residual, owner Phase 6) |
 
-## ⚠ Three connectors could not work against their real feeds — found 2026-07-28, TWO FIXED 2026-08-21
+## ⚠ Three connectors could not work against their real feeds — found 2026-07-28, ALL THREE FIXED 2026-08-21
 
-> **Status.** `rhsa` and `msrc` were rewritten against real captured payloads on 2026-08-21 and now
-> work; both **fail loudly** on an unexpected shape rather than returning an empty batch. `dsa`
-> remains — its SOURCE is now decided (**ADR 0022**, which lives on `main`; this branch predates it) but the
-> connector is not built. The findings below are kept as the record of what was wrong, because the
-> rewrite's shape checks exist to stop exactly this recurring.
+> **Status.** All three were rewritten against real captured payloads on 2026-08-21 and now work;
+> each **fails loudly** on an unexpected shape rather than returning an empty batch. The findings
+> below are kept as the record of what was wrong, because the rewrites' shape checks exist to stop
+> exactly this recurring.
 >
 > **What the real formats turned out to be**, neither matching the guess recorded further down:
 >
@@ -151,6 +150,12 @@ A criterion is ticked only when a named test proves it — never because the cod
 >   `ReleaseDateSpecified: false` (a sentinel that must not become a date), and Type 2's
 >   `Description` is only *sometimes* a KB — for non-Windows products it is a label such as
 >   `"Release Notes"`.
+> - **`dsa`** — the endpoint 404s; the source is salsa's raw **plain-text** `data/DSA/list`
+>   (**ADR 0022**, which lives on `main`; this branch predates the file). Grammar measured across the
+>   whole 1.1 MB capture: **indentation is mixed** (525 space-indented lines among 14,846 tabbed),
+>   the file is **date-ordered so revisions are prepended** (181 id-order inversions), 217 headers are
+>   announcements with no package, 450 ids carry no revision suffix, and 62 suite lines hold an
+>   annotation where a version belongs.
 
 ## The original finding (2026-07-28), kept as the record
 
@@ -204,20 +209,30 @@ is line-oriented text:
 	[trixie] - hplip 3.22.10+dfsg0-8.1+deb13u1
 ```
 
-**Deferred to its own slice, deliberately.** Swapping a JSON parser for a text parser, deciding
-whether a `salsa.debian.org` raw-git URL is an acceptable production dependency, and handling 6,466
-advisories of edge cases (`<not-affected>` ×52, `<end-of-life>` ×4, `<unfixed>` ×2, 12 suites back to
-`woody`) is a data-source decision, not a parse test.
+**BUILT 2026-08-21.** The data-source question — whether a `salsa.debian.org` raw-git URL is an
+acceptable production dependency — was answered by **ADR 0022** (on `main`; this branch predates the
+file): accepted, with the stability risk named and a fail-loud parser as the binding mitigation. The
+connector is a line parser over the whole list, covered by `DsaParseTests` against the real capture.
+
+**The edge-case figures quoted here in July were counted from a partial read and are wrong.**
+Measured across the whole 1,135,558-byte capture: **6,519** advisories (not 6,466), `<not-affected>`
+**×55** (not 52), `<end-of-life>` ×4, `<unfixed>` **×3** (not 2), and 12 suites back to `woody` —
+which is right. Three further properties were not noticed at all in July and each would have broken
+a parser: **indentation is mixed** (525 space-indented lines among 14,846 tabbed, across 260
+advisories), the file is **ordered by date rather than id** so revisions are prepended (179 numbers
+with several revisions, 181 inversions), and **450 pre-2007 ids carry no revision suffix**.
 
 **Rejected: sourcing Debian from the CVE-keyed JSON.** It carries no DSA identifiers, so advisories
 would have no `external_id` — breaking the frozen `advisories(source, external_id)` uniqueness — and
 it drops the advisory-level fixed version HARD-PROBLEMS #2 needs for backport detection.
 
-**Debian's codename map is untouched and the DSA slice inherits it as-is:** `DistroReleases.Debian`
-covers `stretch`…`trixie` only. The pre-stretch suites `data/DSA/list` still carries (`woody`,
-`sarge`, `etch`, `lenny`, `squeeze`, `wheezy`, `jessie`) and the forthcoming `forky` all fall through
-to `debian:<codename>`. Pinned by `DistroReleasesTests` so it is a stated starting point rather than
-a surprise.
+**Debian's codename map was extended by the DSA slice (2026-08-21), from 5 entries to 13.** It
+covered `stretch`…`trixie` only, so the seven older suites the list still carries (`woody`, `sarge`,
+`etch`, `lenny`, `squeeze`, `wheezy`, `jessie`) fell through to `debian:<codename>` — **5,240 of the
+8,560 suite lines, 61%**. All twelve suites in the capture now map, plus the announced `forky` (14),
+added ahead of its first advisory because the platform label is part of row identity and correcting
+it after an ingest inserts duplicates rather than updating. `DsaParseTests` asserts that **no** fix
+statement in the whole file reaches the raw-codename fallback.
 
 ### wsusscn2 — the cab was opened for the first time, 2026-08-16
 
@@ -381,10 +396,10 @@ inherits and what it cannot claim until then.
 ## ⚠ Scope: what has NOT been done
 
 - **No connector has ever run end-to-end against its live feed.** `nvd`, `kev`, `epss` and `usn` are
-  now proven against **real captured payloads** (`Samples/PROVENANCE.md`), which is a statement about
-  the parser *and* about the shape the feed really serves — but the fetch path itself, and the other
-  four connectors, remain unexercised. The distinction Phase 3 records for WinRM still applies to the
-  remaining four, three of which are worse than untested (see the endpoint sections above).
+  now proven against **real captured payloads** (`Samples/PROVENANCE.md`), as are `rhsa`, `msrc` and
+  `dsa` since 2026-08-21 — a statement about the parser *and* about the shape the feed really serves.
+  The fetch path itself remains unexercised for all of them, and **`wsusscn2` alone is still worse
+  than untested** (D-504). The distinction Phase 3 records for WinRM still applies.
 - **One USN branch is unreachable from real data and is left untested rather than faked.** All 7,678
   notices in the live usn-db carry at least one CVE, so `SourceMetadataJson == null` cannot be
   exercised by a capture. Likewise every codename in the database now maps, so the

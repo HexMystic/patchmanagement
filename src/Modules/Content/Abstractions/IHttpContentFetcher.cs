@@ -8,7 +8,7 @@ namespace PatchManagement.Content.Abstractions;
 /// </summary>
 public interface IHttpContentFetcher
 {
-    /// <summary>GET the resource as text (JSON feeds: NVD, KEV, EPSS, USN, DSA, RHSA, MSRC).</summary>
+    /// <summary>GET the resource as text (text feeds: NVD, KEV, EPSS, USN, RHSA, MSRC as JSON; DSA as plain text).</summary>
     Task<string> GetStringAsync(Uri uri, CancellationToken ct);
 
     /// <summary>GET the resource as a stream (binary feeds, e.g. a hosted wsusscn2.cab mirror).</summary>
