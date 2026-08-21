@@ -22,7 +22,7 @@ current on `main` per slice; the detail stays on the branch.
 
 | Branch | State | Where its detail lives |
 |---|---|---|
-| `phase/5-content` | **6 commits ahead of `main`, and pushed — `origin/phase/5-content` is in sync at `d46c486`** — three slices landed (module reachability, two parse slices, the store slice) plus the wsusscn2 audit. Solution green at **402**. | that branch's `docs/ROADMAP.md` session log + `docs/phases/phase-5.md` |
+| `phase/5-content` | **8 commits ahead of `main`, and pushed — `origin/phase/5-content` is in sync at `424ee78`** — module reachability, two parse slices, the store slice, the wsusscn2 audit, and the 2026-08-21 rhsa + msrc rewrites. Exit criterion (a) is **6 of 8** feeds. Solution green at **440**. | that branch's `docs/ROADMAP.md` session log + `docs/phases/phase-5.md` |
 
 **The push gap is closed (2026-08-20).** `origin/phase/5-content` is in sync at `d46c486`; the
 `--force-with-lease` that replaced superseded WIP `3a24ccd` has been run by a human (WORKFLOW §6).
@@ -50,12 +50,17 @@ so [ADR 0019](adr/0019-third-party-application-vocabulary.md) could not update t
 `schemas/*.json` and the CHECK constraints, and the C# constants are the fourth copy that has to
 catch up. Not a defect in either branch; a merge task with nothing yet enforcing it.
 
-**⚠ Second merge note — DSA (added 2026-08-20).** `phase/5-content`'s `docs/phases/phase-5.md` still
-records the Debian source as an **open question** — its eight-feed table, exit-criterion (a) row and
-the "Three connectors cannot work against their real feeds" section all predate
-[ADR 0022](adr/0022-debian-dsa-source.md). They need updating when that branch merges. `main` has no
-per-feed table, which is why the decision is recorded in the Phase 5 section above instead of
-duplicating one here.
+**⚠ Second merge note — DSA (added 2026-08-20, revised 2026-08-21).** `phase/5-content`'s
+`docs/phases/phase-5.md` carries a **"DSA — every candidate source probed"** section that still
+frames salsa as an undecided question — *"deciding whether a `salsa.debian.org` raw-git URL is an
+acceptable production dependency … is a data-source decision"*. That question is answered on `main`
+by [ADR 0022](adr/0022-debian-dsa-source.md): **accepted**, with the stability risk named and a
+fail-loud parser as the binding mitigation. The section needs reconciling with that decision at
+merge. The branch also cites ADR 0022 in **plain text rather than as a link**, because the file does
+not exist there. Not a defect in either branch; a merge task with nothing yet enforcing it. (The
+branch's criterion (a) row and its "three connectors" section were already brought current by the
+2026-08-21 rhsa/msrc slice; `main` has no per-feed table, which is why the decision itself is
+recorded in the Phase 5 section below rather than duplicated here.)
 
 ## ✅ Blocking decisions: NONE — all four closed 2026-08-20
 
@@ -69,10 +74,11 @@ Nothing is waiting on a decision; what remains is build capacity.
 | 3 | OpenAPI freeze direction (**H5**) | **Design-first** — the spec is authoritative and hand-authored, and `OpenApiContractTests` now fails on drift in both directions | [ADR 0021](adr/0021-openapi-design-first.md) |
 | 4 | Debian DSA source | **salsa raw plain-text accepted**, with the stability risk named and a fail-loud parser as the binding mitigation | [ADR 0022](adr/0022-debian-dsa-source.md) |
 
-**Clear to pick up, in any order the dependency column allows:** Phase 5 build work — the
-`rhsa`/`msrc` envelope rewrites, the **DSA connector** (unblocked by decision 4), **D-504**
-`wsusscn2` (unblocked by decision 2), and criterion (b) incrementality — plus **Phase 4** (discovery
-& inventory) and **Phase 14** (identity, a Phase 12 prerequisite).
+**Clear to pick up, in any order the dependency column allows:** Phase 5 build work — the **DSA
+connector** (unblocked by decision 4), **D-504** `wsusscn2` (unblocked by decision 2), and criterion
+(b) incrementality — plus **Phase 4** (discovery & inventory) and **Phase 14** (identity, a Phase 12
+prerequisite). The `rhsa`/`msrc` envelope rewrites listed here on 2026-08-20 **landed 2026-08-21** on
+`phase/5-content`.
 
 **Two carried obligations that are not decisions and block nothing:** counsel should confirm the
 MS-RL reading before first commercial ship (decision 2), and Phase 6 must build its comparator layer
