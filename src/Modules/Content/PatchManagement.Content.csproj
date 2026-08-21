@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!--
     Phase 5 content ingestion. The connector interface and the normalized model live in
@@ -13,6 +13,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Vendored WiX DTF, ADR 0020. Wraps Windows cabinet.dll FDI; the wsusscn2 catalogue is
+         LZX-compressed and Windows decodes it. NOT cross-platform - see DtfWsusCatalogSource. -->
+    <ProjectReference Include="..\..\..\third_party\wix-dtf\WixToolset.Dtf.Compression.Cab\WixToolset.Dtf.Compression.Cab.csproj" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\Shared\Contracts\PatchManagement.Contracts.csproj" />

@@ -27,7 +27,9 @@ public static class ContentModule
             c.DefaultRequestHeaders.UserAgent.ParseAdd("PatchManagement-Content/1.0");
         });
 
-        services.AddSingleton<IWsusPackageSource, ExpandCabPackageSource>();
+        // wsusscn2 reads a LOCAL cab whose path comes from content_sources.endpoint, so the source is
+        // constructed per sync rather than registered as a singleton with no path.
+        services.AddTransient<Func<string, IWsusCatalogSource>>(_ => path => new DtfWsusCatalogSource(path));
         services.AddSingleton<IContentStore, ContentStore>();
 
         // Deferred throw: the API host does not resolve this unless a sync actually runs, so a host

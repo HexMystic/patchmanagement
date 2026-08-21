@@ -239,7 +239,48 @@ cannot fail. It is plain text and compresses well.
 twelve. Every one now maps, so the `debian:<codename>` fallback is unreachable from real data — it
 remains for the release after `forky`, and `DsaParseTests` asserts no fix statement reaches it.
 
+## wsusscn2 — `wsusscn2/` (a selected slice, not a whole file)
+
+From the real `lab/content/wsusscn2.cab` — **658,155,174 bytes**, fetched Phase 0, gitignored, and
+opened for real on **2026-08-21 UTC**. The cab holds `index.xml`, `package.cab` (the ~115 MB update
+graph) and **74 detail shards**; a whole-file fixture is out of the question, and the shards are
+LZX-compressed binaries besides.
+
+**This is a SELECTED SLICE of real bytes, and the selection is the claim.** Every file here was
+extracted verbatim from the cab — no key added, removed, reordered or retyped, no value altered —
+but the set is chosen rather than complete:
+
+- `package.xml` holds **20 `<Update>` elements**, copied whole, inside the real root element with its
+  real `PackageId`. All 20 have `RevisionId <= 626`, which is shard 2's range, so the slice is
+  internally consistent: every revision the graph names is present in the blobs beside it.
+- `c/<n>`, `x/<n>` and `l/en/<n>` are the matching blobs for those revisions — **20, 20 and 12**
+  respectively. Twelve, not twenty, because eight of these revisions genuinely have no English title.
+
+The blobs are XML **fragments** — several sibling top-level elements with no single root — which is
+why both the fake source and the real one wrap them before parsing. That is a property of the
+format, not an edit to the files.
+
+| Fixture | Why this one |
+|---|---|
+| rev **1** | `UpdateType=Software`, a KB (`5087058`), `MsrcSeverity=Critical`, an English title, and a `SupersededBy` pointing at revision **222 — deliberately NOT in the slice**, so a dangling edge must produce nothing |
+| rev **2** | Software with **no KB and no title**: the vendor id falls back to `UpdateId`. Carries `RebootBehavior=CanRequestReboot` |
+| rev **3** | `UpdateType=Detectoid` — an applicability probe, not installable, must be dropped |
+| rev **5** | `UpdateType=Category` — taxonomy, must be dropped |
+| rev **21** + **616** | A real supersedence pair with **both ends present**: KB5094126 (June) superseded by KB5101650 (July). The one case that proves the inversion |
+| rev **33** + **616** | **One KB, two updates.** Both are KB5101650 with *different* `UpdateId`s — Microsoft ships a KB across product families. They must collapse to one patch, because `patches` is unique on (source, vendor_id) |
+
+**Measured across the whole cab**, so the parser was written from fact: 137,091 updates in the graph;
+in shard 2, `UpdateType` splits 523 Software / 93 Detectoid / 10 Category, `KBArticleID` appears in
+256 of 626 `x/` blobs, `MsrcSeverity` in 251 and `RebootBehavior` in 267; `l/` carries 37 languages.
+
+**Deliberately NOT covered, because the catalogue does not contain it:** `Uninstallable`. Zero
+occurrences across every `c/` and `x/` blob in the shard, so `reversible` cannot be sourced and stays
+`false` as a stated limit rather than a fabricated value.
+
 ## Not captured
+
+*(Superseded 2026-08-21 — wsusscn2 now has a captured slice; see the section above. The paragraph
+below is kept because its reasoning is why the fixture is a real slice rather than a fabrication.)*
 
 `wsusscn2.cab` has **no fixture and will not be given a hand-written one.** The cab is ~627 MB, lives
 only in the main worktree, is gitignored, and `ExpandCabPackageSource` has never *successfully* run

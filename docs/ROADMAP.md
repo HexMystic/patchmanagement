@@ -1029,6 +1029,71 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
+### 2026-08-21 — Phase 5 wsusscn2 / D-504 · criterion (a) 7/8 → **8/8, COMPLETE** · NOT MERGED
+
+**The Windows applicability engine ingests real patches for the first time.** Unlike rhsa/msrc/dsa
+this was not one wrong envelope: the extractor could not run at all, it read 1 cab of 75, and every
+field the parser wanted lived in shards it never opened. ADR 0008 makes this feed the source of
+truth for "what is missing on this host", so until now **no Windows assessment was possible** and the
+Windows half of the HARD-PROBLEMS #4 supersedence DAG was absent. **Criterion (a) is now 8 of 8.**
+
+**`main` was merged first** (its own commit) because ADR 0020's vendored WiX DTF lived only there.
+That merge also brought ADRs 0019/0021/0022, the widened CHECKs and `OpenApiContractTests`, and
+resolved both merge hazards `main`'s banner had predicted — `Ecosystems.cs`/`Feeds.cs` gained
+`'app'`/`'vendor'`, which `ContentVocabularyTests` immediately demanded.
+
+**The format, measured against the real 658 MB cab rather than inferred:**
+
+```
+wsusscn2.cab                      multi-file → a FILE destination is refused outright
+├── index.xml                     CABLIST: package.cab + package2..75.cab, each with RANGESTART
+├── package.cab → package.xml     114,697,163 B, the GRAPH: 137,091 <Update RevisionId=…>
+└── package2..75.cab              c/<n>  x/<n>  l/<lang>/<n>   — keyed by RevisionId
+```
+
+**The join key is `RevisionId`**: the blob's file name IS the revision id, and `RANGESTART` partitions
+that space (shard 2 covers 1–626, shard 3 starts at 627, up to 45,415,921), so a lookup is a search
+over the shard table rather than a scan of 75 cabs.
+
+**Five things found in the real data that no amount of reading would have given:**
+
+- **The blobs are XML FRAGMENTS** — several sibling top-level elements, no single root. `XElement.Parse`
+  rejects them outright until wrapped.
+- **`RebootBehavior` was located** in `x/<n>`'s `<InstallationBehavior>`, resolving half of the
+  "must be located" note. **`Uninstallable` does not exist** — zero occurrences across all 626 `c/`
+  and `x/` blobs — so `reversible` stays false as a stated limit, gating rollback off, which is the
+  safe direction (DIFFERENTIATORS #1).
+- **One KB can be several updates.** KB5101650 appears as two revisions with *different* `UpdateId`s
+  — Microsoft ships a KB across product families. `patches` is unique on `(source, vendor_id)`, so
+  they collapse to one patch with merged supersedence, the same collapse MSRC needed.
+- **`XNode.ReadFrom` advances the reader**, so a `while (reader.Read())` loop around it silently
+  processes every OTHER update. Caught only because a count assertion said 10 where 20 was expected.
+- **DTF does not make this cross-platform**, contrary to what both `ExpandCabPackageSource`'s doc and
+  phase-5.md predicted. It has no managed decompressor and P/Invokes `cabinet.dll`; LZX works because
+  *Windows* decodes it. The explicit platform guard is kept — off Windows a `DllNotFoundException`
+  from inside a P/Invoke is strictly worse than a refusal. Both docs corrected.
+
+**The seam had to change shape.** `IWsusPackageSource` handed back one `package.xml` stream, which
+cannot reach a shard. `IWsusCatalogSource` replaces it, and that split is what let both halves be
+tested honestly: the parser against a captured slice with no cab, and **the reader against the real
+cab** — the failure the old arrangement hid behind "fully tested independently of this extractor".
+
+**Red-first: 14 of 14 red**, green at 15 after the rewrite (one test was added mid-slice when the
+real data revealed the one-KB-two-updates collapse). The fail-loud guard was **mutation-checked**:
+disabling the throw turned exactly one test red, reverted and confirmed with `-Absent`.
+
+**`Wsusscn2CatalogTests` is the first successful run of this extractor — 4 tests, 44 s, against the
+real cab.** It FAILS rather than skips when the cab is absent, and resolves the cab from the main
+checkout because it is gitignored and not duplicated per worktree.
+
+**The sample is a selected slice of real bytes** (`Samples/wsusscn2/`, PROVENANCE.md): 20 revisions —
+graph elements plus 20 `c/`, 20 `x/` and 12 `l/en/` blobs — covering Software/Detectoid/Category, KB
+present and absent, a supersedence pair with both ends present, a dangling edge, and the one-KB-two-
+updates case.
+
+**Scope held.** Criterion (b) incrementality, `main` and the other worktrees are untouched, and no
+frozen contract changed. Content.Tests 133 → 148; Content.IntegrationTests 28 → 32.
+
 ### 2026-08-21 — Phase 5 DSA CONNECTOR · criterion (a) 6/8 → 7/8 · NOT MERGED
 
 **The last of the three invented envelopes is gone.** `dsa` pointed at `tracker/data/dsa.json`,

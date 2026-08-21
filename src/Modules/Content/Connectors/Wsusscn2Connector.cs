@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.Json;
+using System.Xml;
 using System.Xml.Linq;
 using PatchManagement.Content.Abstractions;
 using PatchManagement.Contracts.Content;
@@ -7,35 +9,35 @@ namespace PatchManagement.Content.Connectors;
 
 /// <summary>
 /// wsusscn2.cab connector — the Windows APPLICABILITY/patch side of ADR 0008 (MSRC is the CVE
-/// overlay). It ingests the offline-sync <c>package.xml</c> catalogue into <c>patches</c>
-/// (source = <c>wsusscn2</c>) and the supersedence DAG (<c>patch_supersedence</c>): each update's
-/// <c>SupersededBy</c> revisions are inverted into "the newer patch supersedes this older one", so
-/// Phase 6 can resolve a missing patch to its effective head (HARD-PROBLEMS #4).
+/// overlay). It ingests the offline-sync catalogue into <c>patches</c> (source = <c>wsusscn2</c>)
+/// and the supersedence DAG (<c>patch_supersedence</c>): each update's <c>SupersededBy</c> revisions
+/// are inverted into "the newer patch supersedes this older one", so Phase 6 can resolve a missing
+/// patch to its effective head (HARD-PROBLEMS #4).
 ///
-/// <para><b>⚠ THIS PARSER IS WRITTEN AGAINST A SCHEMA THAT DOES NOT EXIST. It returns an EMPTY
-/// BATCH against the real catalogue, and the sync reports <c>ok</c>.</b> Do not build on it — see
-/// `docs/phases/phase-5.md` "wsusscn2 — the cab was opened for the first time" and <b>D-504</b>.</para>
+/// <para><b>Rewritten 2026-08-21 (D-504) against the real 658&#160;MB cab.</b> The previous parser
+/// returned an <b>empty batch that the sync recorded as <c>ok</c></b> — on the feed that is the
+/// source of truth for what a Windows host is missing. It looked for <c>KBArticleID</c>,
+/// <c>Title</c>, <c>RebootBehavior</c> and <c>IsSoftware="true"</c> in <c>package.xml</c>, and the
+/// real file contains <b>zero</b> occurrences of any of them across 137,091 updates: the graph
+/// carries identity and relationships only.</para>
 ///
-/// <para><b>Correction (2026-08-16).</b> This comment previously claimed the normalization was
-/// "fully covered by tests against a sample <c>package.xml</c>". <b>That was false.</b> No
-/// wsusscn2 test and no <c>package.xml</c> sample have ever existed in this repository;
-/// <see cref="Parse(System.Xml.Linq.XDocument, DateTimeOffset)"/> has zero coverage. The claim is
-/// struck rather than quietly deleted, because a doc asserting a guarantee it does not have is what
-/// stops the next reader from looking.</para>
+/// <para><b>Every one of those fields lives in a sibling shard, keyed by <c>RevisionId</c>:</b>
+/// <c>c/&lt;n&gt;</c> holds <c>Properties/@UpdateType</c> — the real software-vs-category
+/// discriminator, since <c>IsSoftware</c> is <c>"false"</c> throughout; <c>x/&lt;n&gt;</c> holds
+/// <c>KBArticleID</c>, <c>MsrcSeverity</c> and <c>InstallationBehavior/@RebootBehavior</c>; and
+/// <c>l/en/&lt;n&gt;</c> holds the title. Reaching them is why <c>IWsusPackageSource</c> — a seam that
+/// could only hand back one <c>package.xml</c> — was replaced by
+/// <see cref="IWsusCatalogSource"/>.</para>
 ///
-/// <para>Measured against the real 658&#160;MB <c>lab/content/wsusscn2.cab</c>: <c>package.xml</c>
-/// holds 136,965 <c>&lt;Update&gt;</c> elements and contains <b>zero</b> occurrences of
-/// <c>KBArticleID</c>, <c>Title</c>, <c>RebootBehavior</c> or <c>Uninstallable</c>, and zero
-/// <c>IsSoftware="true"</c> (all 4,206 are <c>"false"</c>). The first filter below therefore skips
-/// every update. Those fields are real but live in the <c>package2..75.cab</c> shards —
-/// <c>KBArticleID</c> in <c>x/&lt;n&gt;</c>, <c>Title</c> in <c>l/&lt;lang&gt;/&lt;n&gt;</c>, and the
-/// software/category discriminator is <c>c/&lt;n&gt;</c>'s <c>Properties/@UpdateType</c>.</para>
+/// <para><b><c>Uninstallable</c> does not exist in the catalogue at all</b> (zero occurrences across
+/// every <c>c/</c> and <c>x/</c> blob in the shard measured). So <c>reversible</c> is <c>false</c> as
+/// an honest "the vendor never said", which gates rollback OFF — the safe direction
+/// (DIFFERENTIATORS #1), and a stated limit rather than a silent default.</para>
 ///
-/// <para>What IS correct against real data and should survive the rewrite: the
-/// <c>SupersededBy → Revision/@Id</c> inversion, the <c>UpdateId</c>/<c>RevisionId</c> attributes,
-/// and <c>PackageId</c> as the cursor.</para>
+/// <para>The graph is streamed with <see cref="XmlReader"/> rather than loaded: it is ~115&#160;MB,
+/// and <c>XDocument.Load</c> would hold the whole DOM per sync.</para>
 /// </summary>
-public sealed class Wsusscn2Connector(IWsusPackageSource packageSource) : IContentConnector
+public sealed class Wsusscn2Connector(Func<string, IWsusCatalogSource> catalogFor) : IContentConnector
 {
     public string Kind => Feeds.Wsusscn2;
 
@@ -46,80 +48,118 @@ public sealed class Wsusscn2Connector(IWsusPackageSource packageSource) : IConte
                 "wsusscn2 sync requires content_sources.endpoint to point at the local wsusscn2.cab "
                 + "(the cab is downloaded out-of-band, never re-fetched).");
 
-        await using var xml = await packageSource.OpenPackageXmlAsync(state.Endpoint, ct);
-        return Parse(xml, DateTimeOffset.UtcNow);
+        // The catalogue is opened per sync because its path is per feed row, and disposed with it
+        // because it materialises shards into a temp directory.
+        await using var catalog = catalogFor(state.Endpoint);
+        return await ParseAsync(catalog, DateTimeOffset.UtcNow, ct);
     }
 
-    /// <summary>Pure parse of an offline-sync package.xml stream — the tested normalization path.</summary>
-    public static NormalizedBatch Parse(Stream packageXml, DateTimeOffset retrievedAt)
+    /// <summary>
+    /// Walks the graph, joins each update to its shard blobs, and emits patches plus supersedence.
+    /// Pure with respect to the catalogue seam, which is what lets it be tested against captured
+    /// blobs with no cab, no native library and no platform dependency.
+    /// </summary>
+    public static async Task<NormalizedBatch> ParseAsync(
+        IWsusCatalogSource source, DateTimeOffset retrievedAt, CancellationToken ct)
     {
-        var doc = XDocument.Load(packageXml);
-        return Parse(doc, retrievedAt);
-    }
-
-    public static NormalizedBatch Parse(XDocument doc, DateTimeOffset retrievedAt)
-    {
-        // Namespace-agnostic: match by local name so we tolerate the OfflineSync namespace being
-        // present or absent, and minor schema drift between catalogue vintages.
-        var updates = doc.Descendants().Where(e => e.Name.LocalName == "Update").ToList();
-
         var parsed = new List<ParsedUpdate>();
-        var byRevision = new Dictionary<string, ParsedUpdate>(StringComparer.OrdinalIgnoreCase);
+        var byRevision = new Dictionary<long, ParsedUpdate>();
+        var seen = 0;
+        string? packageId;
 
-        foreach (var u in updates)
+        await using (var graph = await source.OpenPackageXmlAsync(ct))
         {
-            var kb = Value(u, "KBArticleID");
-            var isSoftware = Value(u, "IsSoftware");
-            // Skip category/detectoid rows: real catalogues carry thousands. Keep anything with a KB
-            // or explicitly flagged software.
-            if (string.IsNullOrEmpty(kb) && !string.Equals(isSoftware, "true", StringComparison.OrdinalIgnoreCase))
-                continue;
+            using var reader = XmlReader.Create(graph, new XmlReaderSettings { IgnoreWhitespace = true });
 
-            var updateId = Value(u, "UpdateId");
-            var revisionId = Value(u, "RevisionId");
-            var vendorId = !string.IsNullOrEmpty(kb) ? NormalizeKb(kb) : updateId;
-            if (string.IsNullOrEmpty(vendorId))
-                continue;
+            reader.MoveToContent();
+            packageId = reader.GetAttribute("PackageId");
 
-            var supersededByRevisions = u.Descendants()
-                .Where(e => e.Name.LocalName is "Revision" or "SupersededBy")
-                .SelectMany(e => e.Name.LocalName == "SupersededBy" ? e.Elements() : [e])
-                .Select(e => (string?)e.Attribute("Id") ?? Value(e, "Id"))
-                .Where(id => !string.IsNullOrEmpty(id))
-                .Select(id => id!)
-                .ToList();
-
-            var pu = new ParsedUpdate
+            while (!reader.EOF)
             {
-                VendorId = vendorId,
-                UpdateId = updateId,
-                RevisionId = revisionId,
-                Kb = kb,
-                Title = Value(u, "Title") ?? (kb is not null ? $"{NormalizeKb(kb)} update" : vendorId),
-                RequiresReboot = RebootFrom(Value(u, "RebootBehavior")),
-                Reversible = string.Equals(Value(u, "Uninstallable"), "true", StringComparison.OrdinalIgnoreCase),
-                SupersededByRevisions = supersededByRevisions,
-            };
+                ct.ThrowIfCancellationRequested();
 
-            parsed.Add(pu);
-            if (!string.IsNullOrEmpty(revisionId))
-                byRevision[revisionId] = pu;
+                if (reader.NodeType != XmlNodeType.Element || reader.LocalName != "Update")
+                {
+                    reader.Read();
+                    continue;
+                }
+
+                // ReadFrom materialises ONE update and ADVANCES PAST IT, so the loop must not call
+                // Read() as well — doing so silently skips every other update. The ~115 MB graph is
+                // never resident. Namespace-agnostic: the real file is in the OfflineSync namespace,
+                // older vintages are not.
+                if (XNode.ReadFrom(reader) is not XElement update)
+                    continue;
+
+                seen++;
+
+                if (!long.TryParse(Value(update, "RevisionId"), out var revisionId))
+                    continue;
+
+                var detail = await source.OpenRevisionAsync(revisionId, ct);
+                if (detail is null)
+                    continue;
+
+                // The real discriminator. Detectoids (applicability probes) and Categories
+                // (taxonomy) are not installable; a real catalogue carries thousands of each.
+                if (!string.Equals(UpdateType(detail.Core), "Software", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var updateId = Value(update, "UpdateId");
+                var kb = detail.Extended is null ? null : Value(detail.Extended, "KBArticleID");
+                var vendorId = !string.IsNullOrEmpty(kb) ? NormalizeKb(kb) : updateId;
+                if (string.IsNullOrEmpty(vendorId))
+                    continue;
+
+                var item = new ParsedUpdate
+                {
+                    VendorId = vendorId,
+                    UpdateId = updateId,
+                    RevisionId = revisionId,
+                    Kb = kb,
+                    Title = TitleOf(detail) ?? vendorId,
+                    MsrcSeverity = AttributeAnywhere(detail.Extended, "MsrcSeverity"),
+                    RequiresReboot = RebootFrom(RebootBehavior(detail.Extended)),
+                    SupersededByRevisions = SupersededBy(update).ToList(),
+                };
+
+                parsed.Add(item);
+                byRevision[revisionId] = item;
+            }
         }
 
-        // Invert SupersededBy (per the superseded update) into Supersedes (on the superseding patch):
-        // if U says "superseded by revision R" and R is a known patch, then R supersedes U.
-        var supersedes = parsed.ToDictionary(p => p.VendorId, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-        foreach (var u in parsed)
-        foreach (var rev in u.SupersededByRevisions)
-            if (byRevision.TryGetValue(rev, out var newer) && !string.Equals(newer.VendorId, u.VendorId, StringComparison.OrdinalIgnoreCase))
-                supersedes[newer.VendorId].Add(u.VendorId);
+        // Invert SupersededBy (stated on the OLDER update) into Supersedes (carried by the NEWER
+        // patch): if U says "superseded by revision R" and R is itself a patch here, R supersedes U.
+        // An edge whose other end is absent produces nothing — a dangling vendor id would be a
+        // relationship the catalogue does not support.
+        // ONE KB, SEVERAL REVISIONS. A KB is re-issued as a new revision of the same update, and the
+        // catalogue carries every revision. `patches` is unique on (source, vendor_id), so they must
+        // collapse to one patch with their supersedence merged — emitting one row per revision would
+        // have the store keep whichever landed last and the reported count describe nothing.
+        var merged = new Dictionary<string, ParsedUpdate>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in parsed)
+            merged[item.VendorId] = merged.TryGetValue(item.VendorId, out var existing)
+                ? existing.MergedWith(item)
+                : item;
 
-        var patches = parsed.Select(p => new NormalizedPatch
+        var supersedes = merged.Keys.ToDictionary(
+            id => id,
+            _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in parsed)
+        foreach (var revision in item.SupersededByRevisions)
+            if (byRevision.TryGetValue(revision, out var newer)
+                && !string.Equals(newer.VendorId, item.VendorId, StringComparison.OrdinalIgnoreCase))
+                supersedes[newer.VendorId].Add(item.VendorId);
+
+        var patches = merged.Values.Select(p => new NormalizedPatch
         {
             Source = Feeds.Wsusscn2,
             VendorId = p.VendorId,
             Title = p.Title,
-            Reversible = p.Reversible,
+            // The catalogue never states uninstallability — see the class summary.
+            Reversible = false,
             RequiresReboot = p.RequiresReboot,
             Classification = "Update",
             SourceMetadataJson = JsonSerializer.Serialize(new
@@ -127,15 +167,53 @@ public sealed class Wsusscn2Connector(IWsusPackageSource packageSource) : IConte
                 updateId = p.UpdateId,
                 revisionId = p.RevisionId,
                 kb = p.Kb,
+                msrcSeverity = p.MsrcSeverity,
             }),
             Provenance = [new ProvenanceEntry(Feeds.Wsusscn2, retrievedAt, SourceRecordId: p.UpdateId ?? p.VendorId)],
             Supersedes = supersedes[p.VendorId].ToList(),
         }).ToList();
 
-        var cursor = doc.Root?.Attribute("PackageId")?.Value;
+        // The defect this rewrite exists for: a catalogue full of updates that yields no patches is
+        // a format change, and it previously passed as `ok` with the cursor advanced
+        // (ADR 0022 mitigation (a)).
+        if (seen > 0 && patches.Count == 0)
+            throw new InvalidOperationException(
+                $"The wsusscn2 catalogue carried {seen} updates but none resolved to a patch. The "
+                + "cab's layout has changed — refusing to report an empty sync as success.");
 
-        return new NormalizedBatch { Patches = patches, Cursor = cursor };
+        return new NormalizedBatch { Patches = patches, Cursor = packageId };
     }
+
+    /// <summary>Finds an attribute on the element or any descendant — blobs arrive wrapped.</summary>
+    private static string? AttributeAnywhere(XElement? element, string name) =>
+        element?.DescendantsAndSelf()
+            .Select(e => e.Attribute(name))
+            .FirstOrDefault(a => a is not null)?.Value;
+
+    private static string? UpdateType(XElement core) =>
+        core.Descendants().FirstOrDefault(e => e.Name.LocalName == "Properties")
+            ?.Attribute("UpdateType")?.Value
+        ?? (core.Name.LocalName == "Properties" ? core.Attribute("UpdateType")?.Value : null);
+
+    private static string? TitleOf(WsusRevision detail) =>
+        detail.Localized?.Descendants().FirstOrDefault(e => e.Name.LocalName == "Title")?.Value;
+
+    private static string? RebootBehavior(XElement? extended) =>
+        extended?.Descendants().FirstOrDefault(e => e.Name.LocalName == "InstallationBehavior")
+            ?.Attribute("RebootBehavior")?.Value;
+
+    /// <summary>The revisions this update declares itself superseded BY, as ids.</summary>
+    private static IEnumerable<long> SupersededBy(XElement update) =>
+        update.Descendants()
+            .Where(e => e.Name.LocalName == "SupersededBy")
+            .SelectMany(e => e.Elements())
+            .Select(e => e.Attribute("Id")?.Value)
+            .Where(id => id is not null)
+            .Select(id => long.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)
+                ? v
+                : (long?)null)
+            .Where(v => v.HasValue)
+            .Select(v => v!.Value);
 
     private static string NormalizeKb(string kb)
     {
@@ -143,7 +221,7 @@ public sealed class Wsusscn2Connector(IWsusPackageSource packageSource) : IConte
         return $"KB{digits}";
     }
 
-    // AlwaysRequiresReboot / CanRequestReboot → reboot; NeverReboots / absent → no reboot (safe default).
+    // AlwaysRequiresReboot / CanRequestReboot → reboot; NeverReboots / absent → no reboot.
     private static bool RebootFrom(string? behavior) => behavior?.ToLowerInvariant() switch
     {
         "alwaysrequiresreboot" => true,
@@ -151,13 +229,15 @@ public sealed class Wsusscn2Connector(IWsusPackageSource packageSource) : IConte
         _ => false,
     };
 
-    // Reads an attribute OR a child element of the given local name (catalogues use both forms).
+    // Reads an attribute OR a child element of the given local name (the catalogue uses both forms:
+    // RevisionId is an attribute, KBArticleID is an element).
     private static string? Value(XElement e, string localName)
     {
         var attr = e.Attributes().FirstOrDefault(a => a.Name.LocalName == localName);
         if (attr is not null)
             return attr.Value;
-        var child = e.Elements().FirstOrDefault(c => c.Name.LocalName == localName);
+
+        var child = e.Descendants().FirstOrDefault(c => c.Name.LocalName == localName);
         return child?.Value;
     }
 
@@ -165,11 +245,28 @@ public sealed class Wsusscn2Connector(IWsusPackageSource packageSource) : IConte
     {
         public required string VendorId { get; init; }
         public string? UpdateId { get; init; }
-        public string? RevisionId { get; init; }
+        public required long RevisionId { get; init; }
         public string? Kb { get; init; }
         public required string Title { get; init; }
+        public string? MsrcSeverity { get; init; }
         public bool RequiresReboot { get; init; }
-        public bool Reversible { get; init; }
-        public required List<string> SupersededByRevisions { get; init; }
+        public required List<long> SupersededByRevisions { get; init; }
+
+        /// <summary>
+        /// Fold a later revision of the SAME KB into this one. Reboot is OR-ed because any revision
+        /// needing one means the patch does; the newest revision wins on identity and title, and the
+        /// superseded-by lists are unioned so no edge is lost to the collapse.
+        /// </summary>
+        public ParsedUpdate MergedWith(ParsedUpdate other) => new()
+        {
+            VendorId = VendorId,
+            UpdateId = other.RevisionId > RevisionId ? other.UpdateId : UpdateId,
+            RevisionId = Math.Max(RevisionId, other.RevisionId),
+            Kb = Kb ?? other.Kb,
+            Title = other.RevisionId > RevisionId && other.Title != other.VendorId ? other.Title : Title,
+            MsrcSeverity = MsrcSeverity ?? other.MsrcSeverity,
+            RequiresReboot = RequiresReboot || other.RequiresReboot,
+            SupersededByRevisions = [.. SupersededByRevisions.Union(other.SupersededByRevisions)],
+        };
     }
 }

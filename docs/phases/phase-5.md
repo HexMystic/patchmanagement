@@ -65,7 +65,7 @@ The interface and the normalized model live in **Contracts**, not in the module
 | `dsa` | advisory + patch (deb) | Debian. Required by HARD-PROBLEMS #2/#3, not optional. Source is salsa's raw **plain-text** `data/DSA/list` (ADR 0022) — not JSON, and the only form carrying both DSA ids and per-suite fixed versions |
 | `rhsa` | advisory + patch (rpm) | Red Hat securitydata. The endpoint returns a **JSON array of summaries** carrying NEVRA strings — not the per-advisory CSAF document. **Also serves Rocky/Alma**, which rebuild RHEL. Native RLSA/ALSA is deferred until per-rebuild precision proves necessary |
 | `msrc` | advisory + patch | **CVRF, two calls**: a monthly index then one document per month. The Windows **CVE overlay** — "why it matters", keyed CVE→KB |
-| `wsusscn2` | patch + supersedence | The offline scan catalogue. The Windows **applicability engine** — "what is missing on this host" |
+| `wsusscn2` | patch + supersedence | The offline scan catalogue. The Windows **applicability engine** — "what is missing on this host". A 658 MB multi-file cab: `index.xml` + a graph cab + **74 detail shards** keyed by `RevisionId` (ADR 0020's vendored WiX DTF reads it) |
 | `kev` | **nothing** | CISA KEV is an **overlay**: it sets `kev_*` columns and appends provenance. A row with `source='kev'` is rejected by CHECK, and would let one CVE exist as divergent duplicates |
 | `epss` | **nothing** | FIRST EPSS, same overlay shape. Scores are probabilities in **[0,1], not percentages** — the CHECK rejects anything else, so a divide-by-100 slip fails loudly instead of inflating every Phase 7 score |
 
@@ -101,7 +101,7 @@ self-healing, not a bug: it succeeds again once the publisher's advisory is inge
 `tests/PatchManagement.Content.Tests` and `tests/PatchManagement.Content.IntegrationTests`.
 
 > **Why there are two test projects.** `Content.Tests` is deliberately infrastructure-free — no
-> Postgres, no fleet, no network — and runs 133 tests in under a second. The store criteria (c)–(f)
+> Postgres, no fleet, no network — and runs 148 tests in under a second. The store criteria (c)–(f)
 > need Postgres *and* `ContentStore`, and neither existing project can host that:
 > `PatchManagement.IntegrationTests` has `PostgresFixture` but **must never reference the Content
 > module**, because `HostModuleDiscoveryTests` only works while the module's sole path into that
@@ -110,15 +110,14 @@ self-healing, not a bug: it succeeds again once the publisher's advisory is inge
 
 ## Exit criteria — status
 
-Each criterion names the test that proves it. **7 of 9 ticked** as of 2026-08-16 (the store slice).
-The two that are not are the two that matter most for shipping: **(a)** is **7 of 8** feeds as of
-2026-08-21 — `wsusscn2` (D-504) is the only one left; **(b)** is half-built rather than
-half-tested.
+Each criterion names the test that proves it. **8 of 9 ticked** as of 2026-08-21 — criterion (a) completed with the wsusscn2 rewrite.
+**(a) is complete as of 2026-08-21 — 8 of 8 feeds.** The one criterion still open is **(b)**, which
+is half-built rather than half-tested.
 A criterion is ticked only when a named test proves it — never because the code looks right.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
-| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ◐ **7 of 8** — `nvd`, `kev`, `epss`, `usn`, `rhsa`, `msrc`, **`dsa`** covered by their `*ParseTests` against real captures. All three rewritten 2026-08-21 against captured payloads; each **fails loudly** on an unexpected shape. Remaining: **`wsusscn2`** alone (D-504) |
+| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ☑ **8 of 8** — every feed covered by its `*ParseTests` against real captures. `rhsa`, `msrc`, `dsa` and **`wsusscn2`** were all rewritten 2026-08-21 against captured payloads, and each **fails loudly** on an unexpected shape. `wsusscn2` additionally has `Wsusscn2CatalogTests` against the real 658 MB cab — the extractor's first successful run (D-504 closed) |
 | b | Refresh is **incremental** — the cursor advances on success and holds on failure | `ContentSyncServiceTests` over a scripted connector | ◐ — the **advance-or-hold half is proven** (`A_failed_sync_holds_the_cursor_and_records_the_failure_on_the_feed_row`, `A_successful_sync_advances_the_cursor_and_hands_it_to_the_next_run`). Stays unticked because **incrementality is unimplemented**, not untested: cursors are emitted, persisted and handed back, but no connector ever sends one to a feed |
 | c | Refresh is **idempotent** — the same payload twice writes the same rows | `ContentIdempotencyTests` (7) + `ContentSyncServiceTests` atomicity | ☑ — advisories, affects, patches, feed rows and supersedence edges each re-ingested; ids proven **stable**, not merely unduplicated. Includes the NULL-platform case, which is the only proof the store's arbiter resolves to the `NULLS NOT DISTINCT` index rather than silently inserting a duplicate per refresh |
 | d | **Provenance recorded per record**, non-empty, merged rather than overwritten across feeds | `ContentProvenanceTests` (5) | ☑ — an advisory touched by nvd+kev+epss keeps all three; a publisher re-sync replaces **only its own** entry and neither drops the others nor appends a second of its own |
@@ -234,7 +233,32 @@ added ahead of its first advisory because the platform label is part of row iden
 it after an ingest inserts duplicates rather than updating. `DsaParseTests` asserts that **no** fix
 statement in the whole file reaches the raw-codename fallback.
 
-### wsusscn2 — the cab was opened for the first time, 2026-08-16
+### wsusscn2 — BUILT 2026-08-21 (D-504 closed). The four defects below are the record of what was wrong
+
+> **Status.** The rewrite landed on 2026-08-21 and the extractor ran successfully against the real
+> 658 MB cab for the first time. `DtfWsusCatalogSource` reads `index.xml`, resolves a revision to its
+> shard by `RANGESTART`, and extracts through the vendored WiX DTF reader (**ADR 0020**, its first
+> consumer). `Wsusscn2Connector` joins the graph to the shard blobs and emits patches plus
+> supersedence. Covered by `Wsusscn2ParseTests` (captured slice) **and** `Wsusscn2CatalogTests`
+> (the real cab, failing rather than skipping if it is absent).
+>
+> **What the investigation added to the four defects below:**
+>
+> - **The join key is `RevisionId`** — the blob file name IS the revision id, and `RANGESTART`
+>   partitions that space: shard 2 covers 1–626, shard 3 starts at 627, up to 45,415,921.
+> - **`RebootBehavior` was located** — it is in `x/<n>`'s `<InstallationBehavior>`, so
+>   `requires_reboot` now comes from vendor data. **`Uninstallable` does not exist anywhere** in the
+>   `c/` or `x/` blobs, so `reversible` stays false as a stated limit, gating rollback off.
+> - **The blobs are XML FRAGMENTS** — several sibling top-level elements, no single root, which
+>   `XElement.Parse` rejects outright until wrapped.
+> - **One KB can be several updates.** KB5101650 appears as two revisions with different `UpdateId`s;
+>   `patches` is unique on `(source, vendor_id)`, so they collapse to one patch with merged edges.
+> - **DTF does not make this cross-platform**, contrary to what the note below and
+>   `ExpandCabPackageSource` both predicted: it contains no decompressor and P/Invokes
+>   `cabinet.dll`, so LZX works because *Windows* decodes it. The explicit platform guard is kept —
+>   off Windows a `DllNotFoundException` from inside a P/Invoke is strictly worse.
+
+### The original finding (2026-08-16), kept as the record
 
 The real `lab/content/wsusscn2.cab` (658 MB, fetched Phase 0) had **never been opened**. It was
 opened on this Windows box using `C:\Windows\System32\expand.exe`. **No Windows target, VM or WinRM
@@ -311,15 +335,18 @@ So the three fields the parser wanted **do exist — in the shards, not in `pack
 throughout). `MsrcSeverity` in `x/<n>` is a bonus the current design does not use.
 
 **Not found in the sampled blobs:** `RebootBehavior` and `Uninstallable`. Sample was small — `c/1`,
-`c/7`, `x/1`, `l/en/1` — so this is "must be located", not "does not exist". Until located,
-`requires_reboot` and `reversible` would be `false` for every Windows patch, which is the unsafe
-direction for a maintenance window (DIFFERENTIATORS #3) and gates rollback off (#1).
+`c/7`, `x/1`, `l/en/1` — so this is "must be located", not "does not exist".
+
+> **RESOLVED 2026-08-21.** `RebootBehavior` **was located**, in `x/<n>`'s `<InstallationBehavior>`;
+> `requires_reboot` now comes from it. `Uninstallable` **does not exist** — zero occurrences across
+> all 626 `c/` and `x/` blobs in the shard measured — so `reversible` stays `false` as a stated
+> limit, which gates rollback off (DIFFERENTIATORS #1), the safe direction.
 
 **Deferred to its own slice, deliberately — this is a data-source decision, not a parse fix**, the
-same call made for DSA. It requires: reading `index.xml`; expanding 75 cabs (~658 MB → GBs); joining
-three blob families per update by shard-relative index; and deciding whether a full expansion is
-even the right ingestion model versus WiX DTF (`Microsoft.Deployment.Compression.Cab`) for random
-access without materialising everything. **Recorded as D-504.**
+same call made for DSA. **That slice landed 2026-08-21: D-504 is closed.** It did read `index.xml`,
+resolve shards by `RANGESTART` rather than expanding all 75, join the three blob families per update
+by `RevisionId`, and adopt WiX DTF — extracting a shard once per run rather than materialising the
+whole cab.
 
 ### The Ubuntu codename map was missing the current LTS — fixed 2026-07-29
 
@@ -390,7 +417,7 @@ inherits and what it cannot claim until then.
 |----|----------|-------|----------------------------------------------|
 | **D-501** | `ContentPostgresFixture` duplicates the shape of `PatchManagement.IntegrationTests.PostgresFixture` | **Phase 6** — the next phase to add a DB-backed suite | Two ephemeral-database fixtures coexist. Neither can simply consume the other: `TestSupport` is documented as referencing Contracts ONLY (a Persistence reference there would put EF in every consumer's output), and referencing the sibling test project would drag the API host in. A third consumer is the point at which the shared home has to be built rather than argued about |
 | **D-502** | A KEV sync that records **"evaluated and absent"** | **Phase 7** — the consumer that would be misled | `advisories.kev_listed` is three-valued by design (NULL = not evaluated, false = evaluated and absent, true = listed) and `ContentCatalogueTests` pins that contract, but **the ingestion path can only ever write `true`**. After a complete KEV sync every CVE that is not known-exploited is still NULL, indistinguishable from a catalogue where KEV never ran. Phase 7 **cannot treat NULL as "not exploited"** until a sweep marks the complement — which needs a decision about what the complement means for a partial or failed run, since a KEV that fetched half its list must not mark the other half absent. Pinned by `A_kev_sync_cannot_currently_record_evaluated_and_absent` |
-| **D-504** | **`wsusscn2` rewrite against the real cab format** — the extractor cannot run (multi-file cab needs a directory destination), reads 1 of 75 cabs, and the parser's fields do not exist in `package.xml` | **Phase 5** — its own slice, next | **The Windows applicability engine currently ingests NOTHING and reports `ok`.** ADR 0008 makes this the source of truth for "what is missing on this host", so until it lands **no Windows assessment is possible at all** and the Windows half of the HARD-PROBLEMS #4 supersedence DAG (14,242 `SupersededBy` blocks) is absent. Criterion (a) cannot count `wsusscn2`. The real format is mapped in the section above so the rewrite starts from fact, not from a guess |
+| ~~**D-504**~~ | **CLOSED 2026-08-21.** `wsusscn2` rewrite against the real cab format — the extractor now reads `index.xml`, resolves shards by `RANGESTART` and extracts through the vendored WiX DTF reader (ADR 0020, first consumer); the parser joins the graph to `c/`, `x/` and `l/en/` blobs by `RevisionId` | **Phase 5 — done** | Gate lifted. The Windows applicability engine ingests real patches and the Windows half of the HARD-PROBLEMS #4 supersedence DAG is present. Proven by `Wsusscn2ParseTests` over a captured slice AND `Wsusscn2CatalogTests` against the real 658 MB cab — the extractor's first successful run |
 | **D-503** | Cycle detection over `patch_supersedence` | **Phase 6** — HARD-PROBLEMS #4 assigns cycle-breaking to assessment | `ck_patch_supersedence_no_self_loop` and the store's `older.id <> newer.id` filter catch a **1-cycle only**. A 2-cycle (A supersedes B, B supersedes A) inserts cleanly, and the effective-head walk does not terminate on it. Phase 5 deliberately does not reject it — a real feed can contradict itself and good content must not be refused over it — so **Phase 6's effective-head resolution cannot be claimed until it terminates on a cyclic graph**. Pinned by `A_two_patch_cycle_is_accepted_today_and_the_graph_is_not_provably_acyclic`, and the test helper's own walk is depth-capped for exactly this reason |
 
 ## ⚠ Scope: what has NOT been done
@@ -398,16 +425,18 @@ inherits and what it cannot claim until then.
 - **No connector has ever run end-to-end against its live feed.** `nvd`, `kev`, `epss` and `usn` are
   now proven against **real captured payloads** (`Samples/PROVENANCE.md`), as are `rhsa`, `msrc` and
   `dsa` since 2026-08-21 — a statement about the parser *and* about the shape the feed really serves.
-  The fetch path itself remains unexercised for all of them, and **`wsusscn2` alone is still worse
-  than untested** (D-504). The distinction Phase 3 records for WinRM still applies.
+  The HTTP fetch path itself remains unexercised for all of them. **`wsusscn2` is no longer among
+  them**: its reader runs against the real cab in `Wsusscn2CatalogTests`, which makes it the one feed
+  whose transport IS proven. The distinction Phase 3 records for WinRM still applies to the rest.
 - **One USN branch is unreachable from real data and is left untested rather than faked.** All 7,678
   notices in the live usn-db carry at least one CVE, so `SourceMetadataJson == null` cannot be
   exercised by a capture. Likewise every codename in the database now maps, so the
   `ubuntu:<codename>` fallback is unreachable too — it remains for series that do not exist yet.
-- **`wsusscn2.cab` has never been expanded.** `ExpandCabPackageSource` shells out to Windows
-  `expand.exe` twice and has never been run against the real ~627 MB cab. It also throws
-  `PlatformNotSupportedException` off Windows, so a Linux host that syncs this feed fails at call
-  time, not at startup. WiX DTF is the managed alternative if shelling out proves unworkable.
+- ~~**`wsusscn2.cab` has never been expanded.**~~ **Done 2026-08-21.** `ExpandCabPackageSource` is
+  replaced by `DtfWsusCatalogSource`, which has now run against the real 658 MB cab. It still throws
+  `PlatformNotSupportedException` off Windows, and deliberately so: WiX DTF P/Invokes `cabinet.dll`
+  and has no managed decompressor, so it is not the cross-platform answer this bullet assumed — an
+  explicit refusal beats a `DllNotFoundException` from inside a P/Invoke.
 - **Nothing invokes `ContentSyncService`.** There is no Hangfire job, no endpoint and no scheduler,
   so the shipped host can discover the module but cannot start a sync. Same shape as the Phase 2
   rotation trigger, whose owner is **Phase 11** — and this needs the same decision.
