@@ -49,4 +49,9 @@ internal static class Samples
     /// <summary>One whole page of the Red Hat securitydata list; see PROVENANCE.md.</summary>
     public static string Rhsa() => Read("rhsa.sample.json");
 
+    /// <summary>The whole MSRC monthly index — 191 entries, unedited.</summary>
+    public static string MsrcUpdates() => Read("msrc.updates.sample.json");
+
+    /// <summary>Four complete vulnerabilities from the 2026-Aug CVRF document; see PROVENANCE.md.</summary>
+    public static string Msrc() => Read("msrc.sample.json");
 }

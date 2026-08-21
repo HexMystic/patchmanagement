@@ -855,49 +855,74 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
-### 2026-08-21 — Phase 5 rhsa REWRITE · criterion (a) 4/8 → 5/8 · NOT MERGED
+### 2026-08-21 — Phase 5 rhsa + msrc REWRITE · criterion (a) 4/8 → 6/8 · NOT MERGED
 
-**`rhsa` was written against an envelope Red Hat does not serve. It is now written against a real
-captured payload, and it fails loudly rather than returning an empty batch.**
+**Both connectors were written against envelopes no server produces. Both are now written against
+real captured payloads, and both fail loudly rather than returning an empty batch.**
 
-**The format was investigated fresh, and it did not match what was recorded.** phase-5.md predicted
-the per-advisory CSAF document (`document.tracking.id` + `vulnerabilities[].product_status.fixed[]`).
-The endpoint actually returns a **JSON array of summaries** carrying `RHSA`, `severity`,
-`released_on`, `CVEs[]` and `released_packages[]` as NEVRA — everything the frozen schema needs, in
-one request. Following `resource_url` per advisory would have been an N+1 against a vendor API for
-fields already in hand.
+**The formats were investigated fresh, and neither matched what was recorded.** phase-5.md predicted
+`rhsa` would need the per-advisory CSAF document (`document.tracking.id` +
+`vulnerabilities[].product_status.fixed[]`). The endpoint actually returns a **JSON array of
+summaries** carrying `RHSA`, `severity`, `released_on`, `CVEs[]` and `released_packages[]` as NEVRA —
+everything the frozen schema needs, in one request. Following `resource_url` per advisory would have
+been an N+1 against a vendor API for fields already in hand.
 
-**The defect, precisely.** `Parse` read `root.Array("advisories")`; `JsonHelpers.Array` requires an
-object receiver, so a root array yielded `[]` in silence. Empty batch, `status = 'ok'`, cursor
-advanced — an operator sees a green sync over an empty catalogue.
+**MSRC was worse, and is the reason "investigate, don't assume" is the rule.** Its endpoint
+(`cvrf/v3.0/csaf`) 400s; the real API is `cvrf/v3.0/updates` (a 191-entry monthly index) then one
+CVRF document per month. And **the remediation types are not what the CVRF spec's numbering
+implies** — measured across the live 2026-Aug document:
 
-**Two traps found in real data that a hand-written fixture would never have contained:**
+| Type | Count | Carries |
+|---|---|---|
+| 2 | 2198 | the **KB** in `Description.Value`, plus `FixedBuild`, `RestartRequired`, `Supercedence` |
+| 3 | 2198 | **no `Description` at all** — a mitigation URL |
+| 6 | 354 | a KB article reference, repeating a KB already on Type 2 |
+
+A parser written from the spec reads **Type 3** as "Vendor Fix", finds nothing, and returns an empty
+batch that the sync reports as `ok` — the exact defect being fixed, reachable a second time by
+following the documentation instead of the data.
+
+**Four traps found in real data that a hand-written fixture would never have contained:**
 
 - `released_packages` is **not uniformly NEVRA** — some advisories list module streams
   (`java-21-openjdk-portable-main@aarch64`) with no version at all. A fix statement without a fixed
   version is not a fix statement, so those are skipped.
-- One package at one version on **four arches** is ONE fix statement. `advisory_affects` is unique
-  on (advisory, package, ecosystem, platform), so emitting four would have the store keep one and
-  the reported count describe nothing real.
+- One package at one version on **four arches** is ONE fix statement. `advisory_affects` is unique on
+  (advisory, package, ecosystem, platform), so emitting four would have the store keep one and the
+  count describe nothing.
+- MSRC's `ReleaseDate` is **`0001-01-01T00:00:00` with `ReleaseDateSpecified: false`** — a .NET
+  default serialized as a date. Parsed naively it becomes a real timestamp in year 1 that sorts ahead
+  of everything and reads as a genuine publication date. Unstated now stays null (HARD-PROBLEMS #8).
+- Type 2's `Description` is only **sometimes** a KB. For Visual Studio Code and Teams it is
+  `"Release Notes"`, which a trusting parser would mint as a `vendor_id` and then dedupe every such
+  product onto. Accepted only when it looks like a KB number.
 
-`.src` rpms are skipped (not installable), the platform is derived from the `.elN` dist tag, and the
-NEVR — epoch included — is carried RAW per ADR 0011. The summary payload carries no title and no
-CVSS, so `Title` falls back to the advisory id and the CVSS members stay null rather than invented.
+**Two KBs can fix one product at different builds** (Windows Server 2022 at `…5499` and `…5440` in
+one CVE). The unique key cannot hold both, so the **lowest** build is kept: a host that installed
+either KB is fixed, and the lower build is the threshold at which that becomes true. Taking the
+higher would report patched hosts as vulnerable.
 
-**Red-first.** **14 of 16 red** before the rewrite, every failure an assertion against the real
-payload ("collection did not contain any matching items" — the empty-batch defect), green at 16.
-**The fail-loud guard was mutation-checked** (`scripts/mutation-guard.ps1`): reverting the throw to a
-silent `NormalizedBatch.Empty` turned **exactly one** test red and left 15 green, then was reverted
-and confirmed with `-Absent`.
+**`requires_reboot` now comes from vendor data** — MSRC's `RestartRequired`, which has three values.
+Only an explicit `No` is a statement that no reboot is needed; `Maybe` is treated as true, because a
+maintenance window planned as no-reboot that then reboots is the harmful direction.
 
-**The sample is a real capture** (`Samples/PROVENANCE.md`): `rhsa.sample.json`, 1,448 bytes, a
-**whole unedited response** — `per_page`/`page` are the API's own paging, so a page is a complete
-response to a complete request, not a truncation.
+**Red-first, both connectors.** rhsa: **14 of 16 red** before the rewrite, every failure an assertion
+against the real payload ("collection did not contain any matching items" — the empty-batch defect),
+green at 16. msrc: **21 of 22 red**, green at 22. **Both fail-loud guards were then mutation-checked**
+(`scripts/mutation-guard.ps1`): reverting each throw to a silent `NormalizedBatch.Empty` turned
+**exactly one** test red and left the rest green, then was reverted and confirmed with `-Absent`.
 
-**Scope held.** `msrc`, `wsusscn2`, `dsa`, incrementality (criterion b) and `ContentSyncService` are
-untouched. **The general zero-count-`ok` hole in `ContentSyncService` remains open for the other
-seven feeds** — this slice closes it at the connector for `rhsa` only. Deliberate: a sync-level guard
-would flip `ContentSyncServiceTests`' existing assertion that an empty batch is `ok`.
+**Samples are real captures** (`Samples/PROVENANCE.md`). `rhsa.sample.json` (1,448 B) and
+`msrc.updates.sample.json` (48,354 B) are **whole, unedited responses** — `per_page`/`page` are the
+API's own paging, so a page is a complete response. `msrc.sample.json` (73,106 B) is **truncated and
+declared**: real envelope, four vulnerabilities field-for-field, `ProductTree` filtered to the 33
+products they reference, from a live document of 6,428,354 B / 800 vulnerabilities.
+
+**Scope held.** `wsusscn2`, `dsa`, incrementality (criterion b) and `ContentSyncService` are
+untouched. **The general zero-count-`ok` hole in `ContentSyncService` remains open for the other six
+feeds** — this slice closes it at the connector for `rhsa` and `msrc` only. That is deliberate: a
+sync-level guard would flip `ContentSyncServiceTests`' existing assertion that an empty batch is
+`ok`, which is out of this slice's scope. Recorded here so it is a known gap, not an oversight.
 
 ### 2026-08-16 — Phase 5 STORE SLICE (criteria c–f) · green at 402 · NOT MERGED
 

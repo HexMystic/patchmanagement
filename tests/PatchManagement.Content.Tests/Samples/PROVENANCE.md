@@ -136,6 +136,60 @@ score, and a reboot flag. The endpoint carries none of the three, so `Title` fal
 advisory id and the CVSS members stay null rather than being invented. The full CSAF document behind
 each `resource_url` has more, and fetching it per advisory is the N+1 design that was rejected.
 
+## MSRC — `msrc.updates.sample.json` and `msrc.sample.json`
+
+Two files because MSRC is **two calls**. Captured **2026-08-21 UTC**.
+
+### `msrc.updates.sample.json` — 48,354 bytes, the **entire** response, unedited
+
+From `https://api.msrc.microsoft.com/cvrf/v3.0/updates`, the connector's own endpoint. **191**
+monthly entries, each with an `ID`, both release dates and a `CvrfUrl`.
+
+Kept whole because its size is reasonable and because the selection rule depends on the *whole* set:
+`2026-Apr`, `2026-Jul` and `2026-Aug` all carry `CurrentReleaseDate` of `2026-08-20`, so a max over
+that field is decided by array order and can return a four-month-old document. `InitialReleaseDate`
+is the discriminator, and only the complete index proves the tie exists.
+
+### `msrc.sample.json` — 73,106 bytes, **TRUNCATED**
+
+From `https://api.msrc.microsoft.com/cvrf/v3.0/cvrf/2026-Aug`, which at capture time was
+**6,428,354 bytes** holding **800 vulnerabilities** and **209** `FullProductName` entries.
+
+**6.4 MB cannot be committed.** What was done:
+
+- The envelope — `DocumentTitle`, `DocumentType`, `DocumentPublisher`, `DocumentTracking`,
+  `DocumentNotes` — is **the real one**, unedited. `DocumentTracking` matters: it carries the
+  `2026-Aug` id the connector uses as its cursor.
+- **Four vulnerabilities are retained field-for-field as published** — no key added, removed,
+  reordered or retyped, and no value altered.
+- `ProductTree.FullProductName` is filtered to the **33** products those four reference, from 209.
+  Every `ProductID` appearing in a retained vulnerability still resolves, which is the property the
+  parser depends on.
+- `ProductTree.Branch` was dropped entirely. The connector never reads it.
+- Every other vulnerability was dropped. (Whitespace differs: re-serialized with two-space
+  indentation, same caveat as KEV and USN.)
+
+| CVE | Why this one |
+|---|---|
+| `CVE-2026-50472` | The full Windows shape: **35 remediations**, KBs on **Type 2** with `FixedBuild`, `RestartRequired: Yes` and `Supercedence`. Also the collision case — **two KBs fix Windows Server 2022 at different builds** (`…5499` and `…5440`), which `advisory_affects`'s unique key cannot both hold. |
+| `CVE-2026-58650` | Visual Studio Code: Type 2's `Description.Value` is **`"Release Notes"`, not a KB**. A parser trusting that field mints a patch whose `vendor_id` is that label. Also `RestartRequired: Maybe`, the third value. |
+| `CVE-2026-65768` | Microsoft Teams for Android: `"Release Notes"` again, with `RestartRequired: No` — the other end of the reboot mapping. |
+| `CVE-2026-62896` | **Zero remediations**, and `Critical` severity. 333 of the 800 have no remediation, so this is normal data, not an edge case — an advisory with nothing to install yet. |
+
+**The remediation types are not what the CVRF spec implies, which is why this had to be captured.**
+Measured across the live document: **Type 2** carries the KB, `FixedBuild`, `RestartRequired` and
+`Supercedence`; **Type 3** has no `Description` member at all; **Type 6** repeats a KB already on
+Type 2. A parser written from the spec reads Type 3 as "Vendor Fix", finds nothing, and returns an
+empty batch that the sync reports as `ok`.
+
+**`ReleaseDate` is `0001-01-01T00:00:00` with `ReleaseDateSpecified: false`** on every retained
+record — a .NET default serialized as a date, not a publication time. Do not "correct" it, and do
+not let it become a `DateTimeOffset`: it would sort ahead of everything and read as real.
+
+**Deliberately NOT covered, because the captured month does not contain it:** a vulnerability whose
+severity Threat is absent. Every one of the 800 carries a Type-3 Threat, so the `unknown` severity
+fallback is unreachable from this data and is left untested rather than fabricated.
+
 ## Not captured
 
 `wsusscn2.cab` has **no fixture and will not be given a hand-written one.** The cab is ~627 MB, lives

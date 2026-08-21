@@ -64,7 +64,7 @@ The interface and the normalized model live in **Contracts**, not in the module
 | `usn` | advisory + patch (deb) | Ubuntu. Exact fixed distro version per release; `backported = true` |
 | `dsa` | advisory + patch (deb) | Debian. Required by HARD-PROBLEMS #2/#3, not optional |
 | `rhsa` | advisory + patch (rpm) | Red Hat securitydata. The endpoint returns a **JSON array of summaries** carrying NEVRA strings — not the per-advisory CSAF document. **Also serves Rocky/Alma**, which rebuild RHEL. Native RLSA/ALSA is deferred until per-rebuild precision proves necessary |
-| `msrc` | advisory + patch | CSAF. The Windows **CVE overlay** — "why it matters", keyed CVE→KB |
+| `msrc` | advisory + patch | **CVRF, two calls**: a monthly index then one document per month. The Windows **CVE overlay** — "why it matters", keyed CVE→KB |
 | `wsusscn2` | patch + supersedence | The offline scan catalogue. The Windows **applicability engine** — "what is missing on this host" |
 | `kev` | **nothing** | CISA KEV is an **overlay**: it sets `kev_*` columns and appends provenance. A row with `source='kev'` is rejected by CHECK, and would let one CVE exist as divergent duplicates |
 | `epss` | **nothing** | FIRST EPSS, same overlay shape. Scores are probabilities in **[0,1], not percentages** — the CHECK rejects anything else, so a divide-by-100 slip fails loudly instead of inflating every Phase 7 score |
@@ -111,14 +111,14 @@ self-healing, not a bug: it succeeds again once the publisher's advisory is inge
 ## Exit criteria — status
 
 Each criterion names the test that proves it. **7 of 9 ticked** as of 2026-08-16 (the store slice).
-The two that are not are the two that matter most for shipping: **(a)** is **5 of 8** feeds as of
-2026-08-21, the remainder being `msrc` (next), `dsa` (unbuilt) and `wsusscn2` (D-504); **(b)** is
-half-built rather than half-tested.
+The two that are not are the two that matter most for shipping: **(a)** is **6 of 8** feeds as of
+2026-08-21, the remaining two being `dsa` (unbuilt) and `wsusscn2` (D-504); **(b)** is half-built
+rather than half-tested.
 A criterion is ticked only when a named test proves it — never because the code looks right.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
-| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ◐ **5 of 8** — `nvd`, `kev`, `epss`, `usn`, **`rhsa`** covered by their `*ParseTests` against real captures. `rhsa` was rewritten 2026-08-21 against a captured payload and now **fails loudly** on an unexpected shape. Remaining: **`msrc`** (next), **`dsa`** (source decided — ADR 0022 — connector unbuilt) and **`wsusscn2`** (D-504) |
+| a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ◐ **6 of 8** — `nvd`, `kev`, `epss`, `usn`, **`rhsa`**, **`msrc`** covered by their `*ParseTests` against real captures. `rhsa`/`msrc` were rewritten 2026-08-21 against captured payloads and now **fail loudly** on an unexpected shape. Remaining: **`dsa`** (source decided — ADR 0022 — connector unbuilt) and **`wsusscn2`** (D-504) |
 | b | Refresh is **incremental** — the cursor advances on success and holds on failure | `ContentSyncServiceTests` over a scripted connector | ◐ — the **advance-or-hold half is proven** (`A_failed_sync_holds_the_cursor_and_records_the_failure_on_the_feed_row`, `A_successful_sync_advances_the_cursor_and_hands_it_to_the_next_run`). Stays unticked because **incrementality is unimplemented**, not untested: cursors are emitted, persisted and handed back, but no connector ever sends one to a feed |
 | c | Refresh is **idempotent** — the same payload twice writes the same rows | `ContentIdempotencyTests` (7) + `ContentSyncServiceTests` atomicity | ☑ — advisories, affects, patches, feed rows and supersedence edges each re-ingested; ids proven **stable**, not merely unduplicated. Includes the NULL-platform case, which is the only proof the store's arbiter resolves to the `NULLS NOT DISTINCT` index rather than silently inserting a duplicate per refresh |
 | d | **Provenance recorded per record**, non-empty, merged rather than overwritten across feeds | `ContentProvenanceTests` (5) | ☑ — an advisory touched by nvd+kev+epss keeps all three; a publisher re-sync replaces **only its own** entry and neither drops the others nor appends a second of its own |
@@ -128,20 +128,29 @@ A criterion is ticked only when a named test proves it — never because the cod
 | h | The contract surface carries no database dependency | `ContentContractSurfaceTests` | ☑ |
 | i | The vocabulary matches the frozen schemas | `ContentVocabularyTests` | ☑ (partial — the `AppDbContext` CHECK copy is still independent; ADR 0018 residual, owner Phase 6) |
 
-## ⚠ Three connectors could not work against their real feeds — found 2026-07-28, ONE FIXED 2026-08-21
+## ⚠ Three connectors could not work against their real feeds — found 2026-07-28, TWO FIXED 2026-08-21
 
-> **Status.** `rhsa` was rewritten against a real captured payload on 2026-08-21 and now works; it
-> **fails loudly** on an unexpected shape rather than returning an empty batch. `msrc` is next and
-> `dsa` remains — the latter's SOURCE is now decided (**ADR 0022**, which lives on `main`; this
-> branch predates it) but the connector is not built. The finding below is kept as the record of
-> what was wrong, because the rewrite's shape checks exist to stop exactly this recurring.
+> **Status.** `rhsa` and `msrc` were rewritten against real captured payloads on 2026-08-21 and now
+> work; both **fail loudly** on an unexpected shape rather than returning an empty batch. `dsa`
+> remains — its SOURCE is now decided (**ADR 0022**, which lives on `main`; this branch predates it) but the
+> connector is not built. The findings below are kept as the record of what was wrong, because the
+> rewrite's shape checks exist to stop exactly this recurring.
 >
-> **What the real rhsa format turned out to be**, not matching the guess recorded further down: the
-> endpoint returns a **JSON array of summary objects** (`RHSA`, `severity`, `released_on`, `CVEs[]`,
-> `released_packages[]` as NEVRA, `resource_url`) — not the per-advisory CSAF document. Following
-> `resource_url` per advisory would be an N+1 against a vendor API for fields already in hand.
-> `released_packages` is not uniformly NEVRA either: some advisories list module streams
-> (`java-21-openjdk-portable-main@aarch64`) with no version at all.
+> **What the real formats turned out to be**, neither matching the guess recorded further down:
+>
+> - **`rhsa`** — the endpoint returns a **JSON array of summary objects** (`RHSA`, `severity`,
+>   `released_on`, `CVEs[]`, `released_packages[]` as NEVRA, `resource_url`). Not the per-advisory
+>   CSAF document. `released_packages` is not uniformly NEVRA either: some advisories list module
+>   streams (`java-21-openjdk-portable-main@aarch64`) with no version at all.
+> - **`msrc`** — **two calls**: `cvrf/v3.0/updates` (a 191-entry monthly index) then the month's
+>   CVRF document. And **the remediation types are not what the CVRF spec implies** — **Type 2** is
+>   the vendor fix carrying the KB, `FixedBuild`, `RestartRequired` and `Supercedence`; **Type 3**
+>   has no `Description` at all; **Type 6** repeats a KB. A parser written from the spec reads Type 3
+>   as "Vendor Fix", finds nothing, and returns an empty batch reported as `ok`.
+> - Two further traps, both now pinned by test: MSRC's `ReleaseDate` is `0001-01-01T00:00:00` with
+>   `ReleaseDateSpecified: false` (a sentinel that must not become a date), and Type 2's
+>   `Description` is only *sometimes* a KB — for non-Windows products it is a label such as
+>   `"Release Notes"`.
 
 ## The original finding (2026-07-28), kept as the record
 
