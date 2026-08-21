@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright (c) .NET Foundation and contributors. All rights reserved. Licensed under the Microsoft Reciprocal License. See LICENSE.TXT file in the project root for full license information. -->
+
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>WixToolset.Dtf.Compression</RootNamespace>
+    <AssemblyName>WixToolset.Dtf.Compression</AssemblyName>
+    <!-- LOCAL MODIFICATION (see third_party/wix-dtf/README.md): upstream targets
+         netstandard2.0;net20. net20 needs a legacy targeting pack the modern SDK does not
+         ship, so it is dropped. netstandard2.0 is what our net9.0 code consumes. -->
+    <TargetFrameworks>netstandard2.0</TargetFrameworks>
+    <Description>Abstract base libraries for archive packing and unpacking</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <CreateDocumentationFile>true</CreateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="Compression.cd" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

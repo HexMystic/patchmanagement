@@ -32,4 +32,12 @@ public static class Feeds
 
     /// <summary>Debian Security Advisories — advisory + patch (deb).</summary>
     public const string Dsa = "dsa";
+
+    /// <summary>
+    /// A third-party application vendor publishing its own advisory or installer — deliberately
+    /// GENERIC, never per-vendor ([ADR 0019](../../../docs/adr/0019-third-party-application-vocabulary.md)).
+    /// Vendor identity rides on <c>content_sources.instance</c>, <c>external_id</c> and
+    /// <c>vendor_id</c>; 'chrome'/'adobe' are never feed names.
+    /// </summary>
+    public const string Vendor = "vendor";
 }

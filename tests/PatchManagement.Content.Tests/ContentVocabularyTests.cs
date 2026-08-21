@@ -49,7 +49,9 @@ public sealed class ContentVocabularyTests
         var declared = EnumAt(LoadSchema("advisory.schema.json"), "properties", "source");
 
         Assert.Equal(
-            new SortedSet<string> { Feeds.Nvd, Feeds.Usn, Feeds.Rhsa, Feeds.Msrc, Feeds.Dsa },
+            // Feeds.Vendor joined 2026-08-20 (ADR 0019): a third-party application vendor
+            // publishing its own advisory. Generic, never per-vendor.
+            new SortedSet<string> { Feeds.Nvd, Feeds.Usn, Feeds.Rhsa, Feeds.Msrc, Feeds.Dsa, Feeds.Vendor },
             declared);
 
         Assert.DoesNotContain(Feeds.Kev, declared);
@@ -68,7 +70,7 @@ public sealed class ContentVocabularyTests
         var declared = EnumAt(LoadSchema("patch.schema.json"), "properties", "source");
 
         Assert.Equal(
-            new SortedSet<string> { Feeds.Usn, Feeds.Rhsa, Feeds.Msrc, Feeds.Wsusscn2, Feeds.Dsa },
+            new SortedSet<string> { Feeds.Usn, Feeds.Rhsa, Feeds.Msrc, Feeds.Wsusscn2, Feeds.Dsa, Feeds.Vendor },
             declared);
 
         Assert.DoesNotContain(Feeds.Nvd, declared);

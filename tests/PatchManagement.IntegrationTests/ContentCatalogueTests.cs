@@ -265,6 +265,105 @@ public sealed class ContentCatalogueTests(PostgresFixture fx)
     }
 
     // ---------------------------------------------------------------------------------------
+    // Third-party application vocabulary (ADR 0019) — the generic fourth ecosystem
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A Chrome MSI, an Adobe Reader EXE or a Zoom PKG is not a dpkg package, not an rpm, and not a
+    /// Windows build threshold, so under the original three-value CHECK a third-party fix statement
+    /// had NO representable row — the whole point of the Phase 16 gate (ADR 0019). <c>app</c> is
+    /// deliberately GENERIC: it names the ecosystem, not the vendor. Per-vendor identity lives in
+    /// <c>package_name</c> here, and in <c>content_sources.instance</c> for feeds — adding
+    /// 'chrome'/'adobe' as ecosystem values is explicitly NOT what this admits.
+    /// </summary>
+    [Fact]
+    public async Task The_app_ecosystem_admits_a_third_party_fix_statement()
+    {
+        await using var conn = await OpenContentAsync();
+        // Deliberately an NVD advisory: this test must fail on ck_advisory_affects_ecosystem and
+        // nothing else, and Chrome CVEs really are published by NVD.
+        var advisoryId = await InsertAdvisoryAsync(conn, "nvd", $"CVE-{Guid.NewGuid():N}");
+
+        await InsertAffectsAsync(conn, advisoryId, "google-chrome", "app", "windows:11", "128.0.6613.120");
+
+        Assert.Equal(1, await CountAffectsAsync(conn, advisoryId));
+    }
+
+    /// <summary>
+    /// Widening a CHECK is only safe if it still REJECTS. A constraint that admits anything is not a
+    /// contract, and the failure would be silent — a typo'd ecosystem would insert and then never
+    /// match a comparator at assessment time. Also pins that the vendor NAME is not an ecosystem:
+    /// 'chrome' must fail exactly as loudly as a random string.
+    /// </summary>
+    [Theory]
+    [InlineData("chrome")]
+    [InlineData("msi")]
+    [InlineData("qgwutbxz")]
+    public async Task An_ecosystem_outside_the_widened_list_is_still_rejected(string ecosystem)
+    {
+        await using var conn = await OpenContentAsync();
+        var advisoryId = await InsertAdvisoryAsync(conn, "nvd", $"CVE-{Guid.NewGuid():N}");
+
+        var ex = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertAffectsAsync(conn, advisoryId, "google-chrome", ecosystem, "windows:11", "128.0"));
+
+        Assert.Equal("23514", ex.SqlState);
+    }
+
+    /// <summary>
+    /// The three source/kind columns move together with the ecosystem or the row is unwritable
+    /// anyway: a vendor advisory needs a publisher, its installer needs a patch source, and the feed
+    /// needs a kind to register under. <c>content_sources.instance</c> is what separates one vendor
+    /// feed from the next, which is why a single generic <c>kind</c> suffices (ADR 0019).
+    /// </summary>
+    [Fact]
+    public async Task Vendor_is_a_publisher_a_patch_source_and_a_feed_kind()
+    {
+        await using var conn = await OpenContentAsync();
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+
+        var advisoryId = await InsertAdvisoryAsync(
+            conn, "vendor", $"CHROME-{suffix}",
+            provenance: """'[{"source":"vendor","retrievedAt":"2026-08-20T00:00:00Z"}]'::jsonb""");
+        Assert.NotEqual(Guid.Empty, advisoryId);
+
+        var patchId = await InsertPatchAsync(conn, $"chrome-128.0.6613.120-{suffix}", source: "vendor");
+        Assert.NotEqual(Guid.Empty, patchId);
+
+        // Two vendors, one kind — the (kind, instance) key is what keeps them apart.
+        await InsertContentSourceAsync(conn, "vendor", $"google-chrome-{suffix}");
+        await InsertContentSourceAsync(conn, "vendor", $"adobe-reader-{suffix}");
+    }
+
+    /// <summary>
+    /// The rejection half for the three source/kind columns. <c>kev</c> and <c>epss</c> stay barred
+    /// as advisory publishers — widening for applications must not quietly reopen the overlay hole
+    /// that <see cref="Scoring_overlays_are_not_valid_advisory_publishers"/> closed.
+    /// </summary>
+    [Fact]
+    public async Task A_source_or_kind_outside_the_widened_list_is_still_rejected()
+    {
+        await using var conn = await OpenContentAsync();
+
+        var advisory = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertAdvisoryAsync(conn, "hxkrvqmt", $"CVE-{Guid.NewGuid():N}"));
+        Assert.Equal("23514", advisory.SqlState);
+
+        var patch = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertPatchAsync(conn, $"KB{Random.Shared.Next(1000000, 9999999)}", source: "hxkrvqmt"));
+        Assert.Equal("23514", patch.SqlState);
+
+        var feed = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertContentSourceAsync(conn, "hxkrvqmt", $"instance-{Guid.NewGuid():N}"));
+        Assert.Equal("23514", feed.SqlState);
+
+        // Still not publishers, widening notwithstanding.
+        var overlay = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertAdvisoryAsync(conn, "kev", $"CVE-{Guid.NewGuid():N}"));
+        Assert.Equal("23514", overlay.SqlState);
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------------------
 
@@ -310,14 +409,15 @@ public sealed class ContentCatalogueTests(PostgresFixture fx)
             + $"VALUES (gen_random_uuid(), '{advisoryId}', '{package}', '{ecosystem}', "
             + $"{Quote(platform)}, {Quote(fixedVersion)}, true, now())");
 
-    private static async Task<Guid> InsertPatchAsync(NpgsqlConnection conn, string vendorId)
+    private static async Task<Guid> InsertPatchAsync(
+        NpgsqlConnection conn, string vendorId, string source = "msrc")
     {
         var id = Guid.NewGuid();
         await ExecAsync(
             conn,
             "INSERT INTO patches (id, source, vendor_id, title, reversible, requires_reboot, "
             + "provenance, created_at, updated_at) "
-            + $"VALUES ('{id}', 'msrc', '{vendorId}', 'test patch', false, true, "
+            + $"VALUES ('{id}', '{source}', '{vendorId}', 'test patch', false, true, "
             + $"{Provenance}, now(), now())");
         return id;
     }

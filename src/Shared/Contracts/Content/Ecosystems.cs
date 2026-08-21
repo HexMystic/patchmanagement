@@ -14,4 +14,12 @@ public static class Ecosystems
 
     /// <summary>Windows — four-part build numbers.</summary>
     public const string Windows = "windows";
+
+    /// <summary>
+    /// The generic third-party application ecosystem (ADR 0019). A Chrome MSI or an Adobe PKG is not
+    /// a dpkg package, not an rpm and not a Windows build threshold. It names the ECOSYSTEM, not the
+    /// vendor — the vendor's product goes in <c>package_name</c>. Phase 16 implements its comparator;
+    /// Phase 6 must resolve comparators by ecosystem so adding one is a registration, not a rewrite.
+    /// </summary>
+    public const string App = "app";
 }

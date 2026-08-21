@@ -1,0 +1,27 @@
+<Project>
+
+  <!--
+    INHERITANCE STOP — this file deliberately does NOT import ..\Directory.Build.props.
+
+    MSBuild walks up from a project directory to the FIRST Directory.Build.props it finds and stops.
+    Placing this file here severs everything under third_party/ from the repo-root props, which sets
+    TargetFramework=net9.0, Nullable=enable and ImplicitUsings=enable. Vendored third-party source
+    must build under UPSTREAM's settings, not ours: the DTF sources are pre-nullable C# and
+    multi-target via TargetFrameworks (plural), so inheriting the root props sets both
+    TargetFramework and TargetFrameworks and floods the build with nullable warnings on code we do
+    not own and must not "fix" (every edit to a vendored file widens the MS-RL reciprocal surface —
+    see third_party/wix-dtf/README.md and docs/adr/0020-cab-reader-licensing.md).
+
+    Do not add house style, analyzers or warning levels here. This directory is a copy of someone
+    else's code; our conventions apply to OUR code.
+  -->
+
+  <PropertyGroup>
+    <!-- Vendored code is not ours to lint. Keep the build quiet and non-blocking. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS0618;NU5104</NoWarn>
+  </PropertyGroup>
+
+</Project>
