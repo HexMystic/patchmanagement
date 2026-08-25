@@ -93,7 +93,7 @@ ecosystem-extensible (decision 1, `docs/phases/phase-6.md`).
 | 2 | Credential vault | parallel | 1 | **complete** |
 | 3 | Endpoint connector | parallel | 1 | **complete** — merged to `main`, **311 green on `main` post-merge**, 0 skipped. Four review passes. **SSH verified against the lab fleet; WinRM written and unit-proven but NEVER run against a Windows host (D-303)** |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
-| 5 | Content ingestion | parallel | 1 | **9 of 9 exit criteria met** (on `phase/5-content`, not merged). Store criteria (c)–(f) proven against real Postgres. **(a) is 8 of 8 feeds** — `rhsa`, `msrc`, `dsa` and `wsusscn2` were rewritten 2026-08-21 against captured payloads, each failing loudly on an unexpected shape. **(b) incrementality landed 2026-08-25** ([ADR 0023](adr/0023-incremental-cursor-mechanisms.md)): all eight connectors consume their cursor, by four mechanisms chosen per feed, asserted through the outgoing request. **(i)** carries a residual — the `AppDbContext` CHECK copy — which ADR 0018 assigns to **Phase 6**, not to this phase. Still unmerged, and `ContentSyncService` is still invoked by nothing (owner Phase 11) |
+| 5 | Content ingestion | parallel | 1 | **complete** — merged to `main` 2026-08-25, **531 green on `main` post-merge**, 0 skipped. Store criteria (c)–(f) proven against real Postgres. **(a) is 8 of 8 feeds** — `rhsa`, `msrc`, `dsa` and `wsusscn2` were rewritten 2026-08-21 against captured payloads, each failing loudly on an unexpected shape. **(b) incrementality landed 2026-08-25** ([ADR 0023](adr/0023-incremental-cursor-mechanisms.md)): all eight connectors consume their cursor, by four mechanisms chosen per feed, asserted through the outgoing request. **(i)** carries a residual — the `AppDbContext` CHECK copy — which ADR 0018 assigns to **Phase 6**, not to this phase. **Deferred, not done:** `ContentSyncService` is invoked by nothing — no job, no endpoint (owner Phase 11) — plus D-502, D-503, `msrc` back-fill and NVD 120-day window chunking |
 | 6 | Assessment | solo | 4, 5 | not-started |
 | 7 | Risk scoring | parallel | 6 | not-started |
 | 8 | Deployment engine | **SOLO** | 6 | not-started |
@@ -1032,7 +1032,34 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
-### 2026-08-25 — Phase 5 criterion (b) INCREMENTALITY · 8 of 8 connectors · NOT MERGED
+### 2026-08-25 — Phase 5 MERGED TO `main` · **531 green on `main`**, 0 skipped
+
+**Fast-forward, `5154820` → `fe364d4`.** `main` carried **no unique commits**: the earlier
+`763922e` ("Merge main into phase/5-content") had already absorbed main's tip, so the two lines were
+reconciled at that point and nothing needed reconciling at this one. A merge commit would have been a
+bookkeeping node with an empty diff; the fast-forward keeps the twelve slice commits — each recording
+a defect found — legible on main's first-parent log. `git diff main phase/5-content` is empty.
+
+**Verified on `main` itself, not inferred from the branch run:** clean build (0 warnings, 0 errors)
+and the full suite at **531 passed / 0 failed / 0 skipped** — Contracts 19, Content 176, Connectors
+120, Content.Integration 32, Integration 50, Vault 80, Connectors.Integration 54. The last of those
+runs ~13 minutes against the lab fleet.
+
+**Phase 5 status → complete.** All nine exit criteria met; (i) keeps its `AppDbContext` CHECK
+residual, which ADR 0018 assigns to Phase 6 rather than here.
+
+**Deferred, and NOT closed by this merge:** `ContentSyncService` is still invoked by nothing — no
+job, no endpoint (owner Phase 11), so none of this ingests on a schedule yet. Also open: D-502,
+D-503, `msrc` back-fill, and NVD 120-day window chunking.
+
+**`phase/5-content` kept, not deleted.** It is identical to `main`, so nothing is at risk either way,
+but git refuses to delete it while its worktree holds it — and `phase/3-connector` sits in the same
+state (phase 3 already merged), so both stale worktrees are better retired together than one at a
+time. **Not pushed:** `origin` exists and WORKFLOW §6 asks for it, but that is an outward-facing step
+left to the operator. **WORKFLOW §4 step 3 not done:** `phase/3-connector` (`0199d81`) has not been
+rebased onto the new `main`.
+
+### 2026-08-25 — Phase 5 criterion (b) INCREMENTALITY · 8 of 8 connectors · ~~NOT MERGED~~ (superseded: merged to `main` 2026-08-25, see the merge entry above)
 
 **The cursor is now sent, not just persisted.** Every connector computed one and
 `ContentSyncService` stored it, advancing on success and holding on failure — but **no `SyncAsync`
@@ -1091,7 +1118,7 @@ transfer if a host serves no validators.
 Content.Tests **148 → 176**; whole solution green at **531** (Contracts 19, Content 176, Connectors
 120, IntegrationTests 50, Content.IntegrationTests 32, Vault 80, Connectors.IntegrationTests 54).
 
-### 2026-08-21 — Phase 5 wsusscn2 / D-504 · criterion (a) 7/8 → **8/8, COMPLETE** · NOT MERGED
+### 2026-08-21 — Phase 5 wsusscn2 / D-504 · criterion (a) 7/8 → **8/8, COMPLETE** · ~~NOT MERGED~~ (superseded: merged to `main` 2026-08-25, see the merge entry above)
 
 **The Windows applicability engine ingests real patches for the first time.** Unlike rhsa/msrc/dsa
 this was not one wrong envelope: the extractor could not run at all, it read 1 cab of 75, and every
@@ -1156,7 +1183,7 @@ updates case.
 **Scope held.** Criterion (b) incrementality, `main` and the other worktrees are untouched, and no
 frozen contract changed. Content.Tests 133 → 148; Content.IntegrationTests 28 → 32.
 
-### 2026-08-21 — Phase 5 DSA CONNECTOR · criterion (a) 6/8 → 7/8 · NOT MERGED
+### 2026-08-21 — Phase 5 DSA CONNECTOR · criterion (a) 6/8 → 7/8 · ~~NOT MERGED~~ (superseded: merged to `main` 2026-08-25, see the merge entry above)
 
 **The last of the three invented envelopes is gone.** `dsa` pointed at `tracker/data/dsa.json`,
 which 404s, and parsed a JSON root map Debian serves at no URL. The source was settled by
@@ -1211,7 +1238,7 @@ that cannot fail.
 **Scope held.** `wsusscn2`, criterion (b), `ContentSyncService`, `main` and the other worktrees are
 untouched. No frozen contract changed — `dsa` was already in the vocabulary. Content.Tests 99 → 133.
 
-### 2026-08-21 — Phase 5 rhsa + msrc REWRITE · criterion (a) 4/8 → 6/8 · NOT MERGED
+### 2026-08-21 — Phase 5 rhsa + msrc REWRITE · criterion (a) 4/8 → 6/8 · ~~NOT MERGED~~ (superseded: merged to `main` 2026-08-25, see the merge entry above)
 
 **Both connectors were written against envelopes no server produces. Both are now written against
 real captured payloads, and both fail loudly rather than returning an empty batch.**
@@ -1280,7 +1307,7 @@ feeds** — this slice closes it at the connector for `rhsa` and `msrc` only. Th
 sync-level guard would flip `ContentSyncServiceTests`' existing assertion that an empty batch is
 `ok`, which is out of this slice's scope. Recorded here so it is a known gap, not an oversight.
 
-### 2026-08-16 — Phase 5 STORE SLICE (criteria c–f) · green at 402 · NOT MERGED
+### 2026-08-16 — Phase 5 STORE SLICE (criteria c–f) · green at 402 · ~~NOT MERGED~~ (superseded: merged to `main` 2026-08-25, see the merge entry above)
 
 **Tests: 374 → 402 passing, 0 skipped, 0 failed**, measured from a completed run of the whole
 solution with Postgres and the lab fleet up (Contracts 19 · Content 61 · Connectors unit 120 ·
@@ -1336,7 +1363,7 @@ the two-pass patch/edge loop collapsed into one; and the affects upsert weakened
 
 **Not merged, not pushed.** `main` untouched at `614f911`; pushing still needs `--force-with-lease`.
 
-### 2026-07-29 — Phase 5 PARSE SLICE 2 (usn) · green at 374 · NOT MERGED
+### 2026-07-29 — Phase 5 PARSE SLICE 2 (usn) · green at 374 · ~~NOT MERGED~~ (superseded: merged to `main` 2026-08-25, see the merge entry above)
 
 **USN is parse-tested against real captures, and the Ubuntu codename map was missing the current
 LTS.** 349 → **374 passing, 0 skipped, 0 failed** (Contracts 19 · Content **61** · Connectors unit
@@ -1415,7 +1442,7 @@ matters because it passes first time, so like EPSS in slice 1 it had to be *show
 
 **Not merged, not pushed.** `main` untouched at `614f911`; pushing needs `--force-with-lease`.
 
-### 2026-07-29 — Phase 5 PARSE SLICE 1 (nvd · kev · epss) · green at 349 · NOT MERGED
+### 2026-07-29 — Phase 5 PARSE SLICE 1 (nvd · kev · epss) · green at 349 · ~~NOT MERGED~~ (superseded: merged to `main` 2026-08-25, see the merge entry above)
 
 **Three of eight feeds are now parse-tested against REAL captured payloads.** 322 → **349 passing,
 0 skipped, 0 failed** (Contracts 19 · Content **36** · Connectors unit 120 · IntegrationTests 40 ·
@@ -1497,7 +1524,7 @@ missing, not merely untested.
 **Not merged, not pushed.** `main` untouched at `614f911`. The branch has diverged from
 `origin/phase/5-content` (rebased), so pushing needs `--force-with-lease`.
 
-### 2026-07-28 — Phase 5 FOUNDATION · `phase/5-content` rebased onto `main` · green at 322 · NOT MERGED
+### 2026-07-28 — Phase 5 FOUNDATION · `phase/5-content` rebased onto `main` · green at 322 · ~~NOT MERGED~~ (superseded: merged to `main` 2026-08-25, see the merge entry above)
 
 **Foundation only. No content-parsing work was done, and none is claimed.** `phase/5-content` was
 rebased onto `main` (`614f911`) and taken from "full module, no tests, not in the host" to **322
