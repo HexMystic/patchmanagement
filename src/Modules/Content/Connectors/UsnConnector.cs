@@ -23,11 +23,23 @@ public sealed class UsnConnector(IHttpContentFetcher fetcher) : IContentConnecto
 
     public string Kind => Feeds.Usn;
 
+    /// <summary>
+    /// The usn-db body is 260&#160;MB and Ubuntu offers no filter parameter over it, so the cursor
+    /// reaches the feed as HTTP validators. A 304 here is the difference between a schedule that can
+    /// run hourly and one that cannot.
+    /// </summary>
     public async Task<NormalizedBatch> SyncAsync(ContentSourceState state, CancellationToken ct)
     {
         var uri = new Uri(state.Endpoint ?? DefaultEndpoint);
-        var json = await fetcher.GetStringAsync(uri, ct);
-        return Parse(json, DateTimeOffset.UtcNow);
+        var cursor = FeedCursor.Read(state.Cursor);
+
+        var fetch = await fetcher.GetStringConditionalAsync(uri, cursor.ETag, cursor.LastModified, ct);
+
+        if (fetch.NotModified)
+            return new NormalizedBatch { Cursor = state.Cursor };
+
+        var batch = Parse(fetch.Content!, DateTimeOffset.UtcNow);
+        return batch with { Cursor = FeedCursor.From(batch.Cursor, fetch).Format() };
     }
 
     public static NormalizedBatch Parse(string json, DateTimeOffset retrievedAt)

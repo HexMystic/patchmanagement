@@ -51,7 +51,8 @@ public sealed class Wsusscn2Connector(Func<string, IWsusCatalogSource> catalogFo
         // The catalogue is opened per sync because its path is per feed row, and disposed with it
         // because it materialises shards into a temp directory.
         await using var catalog = catalogFor(state.Endpoint);
-        return await ParseAsync(catalog, DateTimeOffset.UtcNow, ct);
+        return await ParseAsync(
+            catalog, DateTimeOffset.UtcNow, ct, FeedCursor.Read(state.Cursor).Semantic);
     }
 
     /// <summary>
@@ -59,8 +60,16 @@ public sealed class Wsusscn2Connector(Func<string, IWsusCatalogSource> catalogFo
     /// Pure with respect to the catalogue seam, which is what lets it be tested against captured
     /// blobs with no cab, no native library and no platform dependency.
     /// </summary>
+    /// <param name="source">The catalogue seam.</param>
+    /// <param name="retrievedAt">Stamped onto provenance.</param>
+    /// <param name="ct">Time bound.</param>
+    /// <param name="since">
+    /// The <c>PackageId</c> the previous run ingested. There is no request to hang a cursor on here —
+    /// the cab is local — so incrementality is the walk NOT taken: an unchanged id means the same
+    /// catalogue, and the 115&#160;MB graph plus a shard lookup per update can be skipped whole.
+    /// </param>
     public static async Task<NormalizedBatch> ParseAsync(
-        IWsusCatalogSource source, DateTimeOffset retrievedAt, CancellationToken ct)
+        IWsusCatalogSource source, DateTimeOffset retrievedAt, CancellationToken ct, string? since = null)
     {
         var parsed = new List<ParsedUpdate>();
         var byRevision = new Dictionary<long, ParsedUpdate>();
@@ -73,6 +82,12 @@ public sealed class Wsusscn2Connector(Func<string, IWsusCatalogSource> catalogFo
 
             reader.MoveToContent();
             packageId = reader.GetAttribute("PackageId");
+
+            // Same catalogue as last run. Returning here is the incrementality: nothing is written,
+            // and the cursor is handed back so the feed row keeps pointing at the cab it reflects.
+            // Distinct from the empty-batch guard below, which is about a catalogue that WAS walked.
+            if (since is not null && string.Equals(packageId, since, StringComparison.OrdinalIgnoreCase))
+                return new NormalizedBatch { Cursor = since };
 
             while (!reader.EOF)
             {

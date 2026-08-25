@@ -50,17 +50,17 @@ so [ADR 0019](adr/0019-third-party-application-vocabulary.md) could not update t
 `schemas/*.json` and the CHECK constraints, and the C# constants are the fourth copy that has to
 catch up. Not a defect in either branch; a merge task with nothing yet enforcing it.
 
-**⚠ Second merge note — DSA (added 2026-08-20, revised 2026-08-21).** `phase/5-content`'s
-`docs/phases/phase-5.md` carries a **"DSA — every candidate source probed"** section that still
-frames salsa as an undecided question — *"deciding whether a `salsa.debian.org` raw-git URL is an
-acceptable production dependency … is a data-source decision"*. That question is answered on `main`
-by [ADR 0022](adr/0022-debian-dsa-source.md): **accepted**, with the stability risk named and a
-fail-loud parser as the binding mitigation. The section needs reconciling with that decision at
-merge. The branch also cites ADR 0022 in **plain text rather than as a link**, because the file does
-not exist there. Not a defect in either branch; a merge task with nothing yet enforcing it. (The
-branch's criterion (a) row and its "three connectors" section were already brought current by the
-2026-08-21 rhsa/msrc slice; `main` has no per-feed table, which is why the decision itself is
-recorded in the Phase 5 section below rather than duplicated here.)
+**✅ Second merge note — DSA (added 2026-08-20, revised 2026-08-21, CLOSED 2026-08-25).** Both
+halves are discharged on `phase/5-content` now that `main` is merged in and
+[ADR 0022](adr/0022-debian-dsa-source.md) exists on the branch. The **"DSA — every candidate source
+probed"** section no longer frames salsa as undecided — its "BUILT 2026-08-21" paragraph records the
+decision (**accepted**, with the stability risk named and a fail-loud parser as the binding
+mitigation). And the citations that read *"which lives on `main`; this branch predates the file"*
+are now real links to the ADR, in all three places they appeared: `DebianDsaConnector`,
+`docs/phases/phase-5.md`, and the samples' `PROVENANCE.md`. (The branch's criterion (a) row and its
+"three connectors" section were already brought current by the 2026-08-21 rhsa/msrc slice; `main`
+has no per-feed table, which is why the decision itself is recorded in the Phase 5 section below
+rather than duplicated here.)
 
 ## ✅ Blocking decisions: NONE — all four closed 2026-08-20
 
@@ -74,11 +74,11 @@ Nothing is waiting on a decision; what remains is build capacity.
 | 3 | OpenAPI freeze direction (**H5**) | **Design-first** — the spec is authoritative and hand-authored, and `OpenApiContractTests` now fails on drift in both directions | [ADR 0021](adr/0021-openapi-design-first.md) |
 | 4 | Debian DSA source | **salsa raw plain-text accepted**, with the stability risk named and a fail-loud parser as the binding mitigation | [ADR 0022](adr/0022-debian-dsa-source.md) |
 
-**Clear to pick up, in any order the dependency column allows:** Phase 5 build work — the **DSA
-connector** (unblocked by decision 4), **D-504** `wsusscn2` (unblocked by decision 2), and criterion
-(b) incrementality — plus **Phase 4** (discovery & inventory) and **Phase 14** (identity, a Phase 12
-prerequisite). The `rhsa`/`msrc` envelope rewrites listed here on 2026-08-20 **landed 2026-08-21** on
-`phase/5-content`.
+**Clear to pick up, in any order the dependency column allows:** **Phase 4** (discovery &
+inventory) and **Phase 14** (identity, a Phase 12 prerequisite). The Phase 5 build work listed here
+on 2026-08-20 is done: the `rhsa`/`msrc` envelope rewrites, the **DSA connector** and **D-504**
+`wsusscn2` all landed 2026-08-21, and **criterion (b) incrementality** landed 2026-08-25 — all on
+`phase/5-content`, still unmerged.
 
 **Two carried obligations that are not decisions and block nothing:** counsel should confirm the
 MS-RL reading before first commercial ship (decision 2), and Phase 6 must build its comparator layer
@@ -93,7 +93,7 @@ ecosystem-extensible (decision 1, `docs/phases/phase-6.md`).
 | 2 | Credential vault | parallel | 1 | **complete** |
 | 3 | Endpoint connector | parallel | 1 | **complete** — merged to `main`, **311 green on `main` post-merge**, 0 skipped. Four review passes. **SSH verified against the lab fleet; WinRM written and unit-proven but NEVER run against a Windows host (D-303)** |
 | 4 | Discovery & inventory | parallel | 3 | not-started |
-| 5 | Content ingestion | parallel | 1 | **in-progress — 7 of 9 exit criteria** (on `phase/5-content`, not merged). Store criteria (c)–(f) proven against real Postgres. **(a) is 4 of 8 feeds**: `nvd`/`kev`/`epss`/`usn` work; **`rhsa`, `msrc`, `dsa`, `wsusscn2` parse envelopes no server produces** — `rhsa` and `wsusscn2` return an empty batch and report `ok`. **`dsa`'s SOURCE is now decided** ([ADR 0022](adr/0022-debian-dsa-source.md)) — the connector is still unbuilt, so the count stays 4 of 8. **(b) incrementality is unimplemented**, not untested |
+| 5 | Content ingestion | parallel | 1 | **9 of 9 exit criteria met** (on `phase/5-content`, not merged). Store criteria (c)–(f) proven against real Postgres. **(a) is 8 of 8 feeds** — `rhsa`, `msrc`, `dsa` and `wsusscn2` were rewritten 2026-08-21 against captured payloads, each failing loudly on an unexpected shape. **(b) incrementality landed 2026-08-25** ([ADR 0023](adr/0023-incremental-cursor-mechanisms.md)): all eight connectors consume their cursor, by four mechanisms chosen per feed, asserted through the outgoing request. **(i)** carries a residual — the `AppDbContext` CHECK copy — which ADR 0018 assigns to **Phase 6**, not to this phase. Still unmerged, and `ContentSyncService` is still invoked by nothing (owner Phase 11) |
 | 6 | Assessment | solo | 4, 5 | not-started |
 | 7 | Risk scoring | parallel | 6 | not-started |
 | 8 | Deployment engine | **SOLO** | 6 | not-started |
@@ -483,13 +483,16 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   unreferenced-module defect after the Vault at `a50d9ec` and Phase 3's WIP), two parse slices
   (`nvd`/`kev`/`epss`/`usn` against real captured payloads), and the store slice (criteria c–f
   against real Postgres). What is left:
-  - **(a) is 4 of 8 feeds**, and the gap is not "untested" — `dsa`, `rhsa` and `msrc` parse
-    **envelopes no server produces**, and `rhsa` is the dangerous one: it returns a JSON array where
-    the parser expects an object, so it yields an empty batch, a green status and an advanced
-    cursor. A green sync over an empty catalogue. `wsusscn2` has never expanded its cab.
-  - **(b) incrementality is unimplemented, not untested.** No connector reads `state.Cursor`;
-    NVD pagination truncates to page 1. The cursor's advance-on-success / hold-on-failure half *is*
-    proven.
+  - **(a) is 8 of 8 feeds** since 2026-08-21. `dsa`, `rhsa` and `msrc` had parsed **envelopes no
+    server produces**, `rhsa` being the dangerous one — a JSON array where the parser expected an
+    object, yielding an empty batch, a green status and an advanced cursor. All three were rewritten
+    against captured payloads and now fail loudly; `wsusscn2` expanded its cab the same day (D-504).
+  - **(b) incrementality landed 2026-08-25** ([ADR 0023](adr/0023-incremental-cursor-mechanisms.md)).
+    All eight connectors read `state.Cursor`, and NVD pagination no longer truncates to page 1. The
+    eight do **not** share one mechanism — four serve a whole file with no filter parameter, so the
+    cursor reaches them as a conditional GET or bounds the parse instead. Asserted through the
+    outgoing request, because a connector that reads a cursor and discards it returns an
+    indistinguishable batch. The two outgoing query parameters were **probed live** the same day.
   - **Nothing invokes `ContentSyncService`** — no job, no endpoint. Same shape as the Phase 2
     rotation trigger, and it needs the same decision (owner: Phase 11).
 - **Content vocabulary is frozen in Phase 1** (`advisories.source`, `patches.source`,
@@ -1029,6 +1032,65 @@ role-based and tenant-neutral per ADR 0010 and does not need it.
 Running record of what each session accomplished, so a future session has continuity
 without re-explaining. Newest entry first.
 
+### 2026-08-25 — Phase 5 criterion (b) INCREMENTALITY · 8 of 8 connectors · NOT MERGED
+
+**The cursor is now sent, not just persisted.** Every connector computed one and
+`ContentSyncService` stored it, advancing on success and holding on failure — but **no `SyncAsync`
+ever read `state.Cursor`**, so refresh was idempotent and not incremental. Criterion (b) is now
+ticked; only (i) remains partial.
+
+**The eight feeds do not share one mechanism, and that was the whole design question.** Four of them
+serve a whole file with no filter parameter, so appending a `?since=` would have been a request
+written against a shape the server does not implement — this module's own recurring defect (`rhsa`'s
+invented `root.advisories[]`, `msrc`'s invented `remediations[]`, `dsa`'s invented JSON root map).
+[ADR 0023](adr/0023-incremental-cursor-mechanisms.md) records four mechanisms, chosen per feed:
+server-side window (`nvd` `lastModStartDate`, `rhsa` `after`), conditional GET (`kev`, `usn`),
+client-side cutoff (`epss`, `dsa`), local comparison (`wsusscn2` `PackageId`). **`epss` and `dsa`
+save database and parse work, not bandwidth** — stated rather than dressed up. `usn` is the largest
+win: a 304 replaces a 260 MB transfer.
+
+**The cursor contract was restated, which ADR 0022 had required** (*"the slice must restate the
+cursor contract, not paper over it"*). `FeedCursor` carries a semantic bookmark plus, for the
+conditional feeds only, HTTP validators. **With no validators the encoding IS the bare string, byte
+for byte**, so six feeds persist exactly what they persisted before and no migration is needed.
+`content_sources.cursor` stays a `text` column — **no frozen contract changed** (NEVER #6).
+
+**NVD pagination was fixed in the same slice**, deliberately: `startIndex`/`totalResults` were read
+by nothing, so a multi-page response truncated to page 1. A cursor-narrowed window on top of that
+would have made the truncation *harder* to spot, because the window would explain away the small
+result.
+
+**A 304 is evidence, not an empty read.** The fail-loud guards stay; each new "wrote nothing" path is
+carved narrowly at the condition that proves the absence — a 304, a DSA cursor reached with nothing
+above it, an unchanged `PackageId` — rather than by weakening the guard.
+
+**Red-first: 13 of 20 `IncrementalSyncTests` failed before implementation**, covering all eight
+connectors. The seven that passed first time, plus `FeedCursorTests`, were **demonstrated red by
+mutation** — 7 probes, each confirmed present with `scripts/mutation-guard.ps1`, run, reverted, and
+confirmed absent: dropped bare-string encoding; MSRC `Skip(at+1)`→`Skip(at)`; DSA stopping at the
+first header; inverted EPSS comparison; wsusscn2 skipping without comparing; and NVD/RHSA defaulting
+a first run's window instead of omitting it.
+
+**Also fixed:** the stale ADR 0022 citations. `DebianDsaConnector`, `docs/phases/phase-5.md` and the
+samples' `PROVENANCE.md` all read *"which lives on `main`; this branch predates the file"* — false
+since the merge, and now real links. The ROADMAP merge note that tracked it is closed. The
+local-only branch `phase-1/c1-content-catalogue` was verified as an ancestor of both `main` and
+`phase/5-content` (no unique commits) and deleted.
+
+**Both outgoing parameters were PROBED against the live feeds, same day** — and not merely for a
+200, since a parameter a server ignores also returns 200. `nvd`: 382,390 → **3,758** for a five-day
+window, every inspected record inside it, and `lastModStartDate` **alone 404s** (so the pairing test
+guards a real failure). `rhsa`: **133** records for `after=2026-08-20` against 1,000 unfiltered,
+oldest exactly on the boundary day. Tables in ADR 0023.
+
+**Named gaps, not solved:** an `nvd` cursor older than the 120-day ceiling falls back to a full fetch
+rather than clamping forward; `msrc` back-fill is not attempted; `kev`/`usn` degrade to a full
+transfer if a host serves no validators.
+
+**Scope held.** `main` and the other worktrees are untouched; no frozen contract changed.
+Content.Tests **148 → 176**; whole solution green at **531** (Contracts 19, Content 176, Connectors
+120, IntegrationTests 50, Content.IntegrationTests 32, Vault 80, Connectors.IntegrationTests 54).
+
 ### 2026-08-21 — Phase 5 wsusscn2 / D-504 · criterion (a) 7/8 → **8/8, COMPLETE** · NOT MERGED
 
 **The Windows applicability engine ingests real patches for the first time.** Unlike rhsa/msrc/dsa
@@ -1097,8 +1159,8 @@ frozen contract changed. Content.Tests 133 → 148; Content.IntegrationTests 28 
 ### 2026-08-21 — Phase 5 DSA CONNECTOR · criterion (a) 6/8 → 7/8 · NOT MERGED
 
 **The last of the three invented envelopes is gone.** `dsa` pointed at `tracker/data/dsa.json`,
-which 404s, and parsed a JSON root map Debian serves at no URL. The source was settled by **ADR 0022**
-(on `main`; this branch predates the file): salsa's raw plain-text `data/DSA/list`, accepted with its
+which 404s, and parsed a JSON root map Debian serves at no URL. The source was settled by
+[ADR 0022](adr/0022-debian-dsa-source.md): salsa's raw plain-text `data/DSA/list`, accepted with its
 stability risk named and a fail-loud parser as the binding mitigation. **Only `wsusscn2` (D-504) now
 remains.**
 

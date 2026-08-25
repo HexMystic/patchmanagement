@@ -118,7 +118,7 @@ A criterion is ticked only when a named test proves it — never because the cod
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
 | a | Connectors for all eight feeds, normalizing into the Phase-1 schema | per-feed parse tests over **captured** payloads in `Samples/` | ☑ **8 of 8** — every feed covered by its `*ParseTests` against real captures. `rhsa`, `msrc`, `dsa` and **`wsusscn2`** were all rewritten 2026-08-21 against captured payloads, and each **fails loudly** on an unexpected shape. `wsusscn2` additionally has `Wsusscn2CatalogTests` against the real 658 MB cab — the extractor's first successful run (D-504 closed) |
-| b | Refresh is **incremental** — the cursor advances on success and holds on failure | `ContentSyncServiceTests` over a scripted connector | ◐ — the **advance-or-hold half is proven** (`A_failed_sync_holds_the_cursor_and_records_the_failure_on_the_feed_row`, `A_successful_sync_advances_the_cursor_and_hands_it_to_the_next_run`). Stays unticked because **incrementality is unimplemented**, not untested: cursors are emitted, persisted and handed back, but no connector ever sends one to a feed |
+| b | Refresh is **incremental** — the cursor advances on success and holds on failure | `ContentSyncServiceTests` over a scripted connector + `IncrementalSyncTests` (20) + `FeedCursorTests` (8) | ☑ **8 of 8 connectors consume their cursor** (2026-08-25, [ADR 0023](../adr/0023-incremental-cursor-mechanisms.md)). The advance-or-hold half was already proven (`A_failed_sync_holds_the_cursor_and_records_the_failure_on_the_feed_row`, `A_successful_sync_advances_the_cursor_and_hands_it_to_the_next_run`); the consume half is now proven **per connector, through the outgoing request** — a connector that reads a cursor and discards it returns an indistinguishable batch, so the batch is not the evidence. Four mechanisms, chosen by what each source implements: server-side window (`nvd`, `rhsa`), conditional GET (`kev`, `usn`), client-side cutoff (`epss`, `dsa`), local comparison (`wsusscn2`). See the gaps ADR 0023 names |
 | c | Refresh is **idempotent** — the same payload twice writes the same rows | `ContentIdempotencyTests` (7) + `ContentSyncServiceTests` atomicity | ☑ — advisories, affects, patches, feed rows and supersedence edges each re-ingested; ids proven **stable**, not merely unduplicated. Includes the NULL-platform case, which is the only proof the store's arbiter resolves to the `NULLS NOT DISTINCT` index rather than silently inserting a duplicate per refresh |
 | d | **Provenance recorded per record**, non-empty, merged rather than overwritten across feeds | `ContentProvenanceTests` (5) | ☑ — an advisory touched by nvd+kev+epss keeps all three; a publisher re-sync replaces **only its own** entry and neither drops the others nor appends a second of its own |
 | e | Overlays (KEV/EPSS) never insert an advisory and never clobber a publisher's re-sync | `ContentOverlayTests` (6) | ☑ — an overlay for an unpublished CVE writes nothing and self-heals; a publisher re-sync leaves `kev_*`/`epss_*` intact. **See D-502**: a related gap this criterion does not cover |
@@ -150,7 +150,7 @@ A criterion is ticked only when a named test proves it — never because the cod
 >   `Description` is only *sometimes* a KB — for non-Windows products it is a label such as
 >   `"Release Notes"`.
 > - **`dsa`** — the endpoint 404s; the source is salsa's raw **plain-text** `data/DSA/list`
->   (**ADR 0022**, which lives on `main`; this branch predates the file). Grammar measured across the
+>   ([ADR 0022](../adr/0022-debian-dsa-source.md)). Grammar measured across the
 >   whole 1.1 MB capture: **indentation is mixed** (525 space-indented lines among 14,846 tabbed),
 >   the file is **date-ordered so revisions are prepended** (181 id-order inversions), 217 headers are
 >   announcements with no package, 450 ids carry no revision suffix, and 62 suite lines hold an
@@ -209,8 +209,8 @@ is line-oriented text:
 ```
 
 **BUILT 2026-08-21.** The data-source question — whether a `salsa.debian.org` raw-git URL is an
-acceptable production dependency — was answered by **ADR 0022** (on `main`; this branch predates the
-file): accepted, with the stability risk named and a fail-loud parser as the binding mitigation. The
+acceptable production dependency — was answered by [ADR 0022](../adr/0022-debian-dsa-source.md):
+accepted, with the stability risk named and a fail-loud parser as the binding mitigation. The
 connector is a line parser over the whole list, covered by `DsaParseTests` against the real capture.
 
 **The edge-case figures quoted here in July were counted from a partial read and are wrong.**
@@ -373,15 +373,52 @@ The map is now transcribed from Ubuntu's published list rather than recalled.
 > migration. Nothing has ingested yet — which is the reason this was fixed now rather than deferred
 > to Phase 6.
 
-### Also recorded: incrementality is emitted but never consumed
+### Incrementality was emitted but never consumed — CLOSED 2026-08-25
 
-**No connector reads `state.Cursor`.** Every `Parse` computes a cursor and `ContentSyncService`
-persists it (advancing on success, holding on failure), but no `SyncAsync` ever sends it back to the
-feed. Refresh is therefore **idempotent but not incremental** — each run re-fetches the same window.
-`NvdConnector`'s doc comment claimed "Incremental via `lastModStartDate`"; that claim was false and
-has been corrected in place. **NVD pagination is also unimplemented** (`startIndex`/`totalResults`
-never read), so a multi-page response is silently truncated to page 1 — a second silent-truncation
-path. Exit criterion (b) stays unticked because of this, not merely for want of a test.
+**No connector read `state.Cursor`.** Every `Parse` computed a cursor and `ContentSyncService`
+persisted it (advancing on success, holding on failure), but no `SyncAsync` ever sent it back to the
+feed. Refresh was therefore **idempotent but not incremental** — each run re-fetched the same window.
+`NvdConnector`'s doc comment claimed "Incremental via `lastModStartDate`"; that claim was false, was
+struck, and is now true. **NVD pagination was also unimplemented** (`startIndex`/`totalResults` never
+read), so a multi-page response was silently truncated to page 1 — a second silent-truncation path,
+fixed in the same slice because a cursor-narrowed window would have made that truncation *harder* to
+notice, not easier.
+
+**All eight connectors now consume their cursor** ([ADR 0023](../adr/0023-incremental-cursor-mechanisms.md)).
+The eight do not share one mechanism, and pretending they did was the trap: four of them serve a
+whole file with no filter parameter, so appending a `?since=` would have been a request written
+against a shape the server does not implement — this module's own recurring defect.
+
+| Feed | Mechanism | What reaches the source |
+|---|---|---|
+| `nvd` | server-side window | `lastModStartDate` + `lastModEndDate`, paired because NVD rejects one alone |
+| `rhsa` | server-side window | `after=YYYY-MM-DD` |
+| `msrc` | request selection | the cursor picks which month documents are fetched from the 191-entry index |
+| `kev` · `usn` | conditional GET | `If-None-Match` / `If-Modified-Since`; a 304 ends the run |
+| `epss` · `dsa` | client-side cutoff | **nothing** — the cursor bounds the parse and what is written |
+| `wsusscn2` | local comparison | **nothing** — no network; an unchanged `PackageId` skips the walk |
+
+**`epss` and `dsa` save database and parse work, not bandwidth**, and that is stated rather than
+dressed up — the alternative claim would be the same species as the NVD doc comment this slice makes
+true. `usn` is the largest single win: a 304 replaces a 260 MB transfer.
+
+**The cursor contract is restated, not papered over** — ADR 0022's own requirement. `content_sources.cursor`
+now carries a semantic bookmark plus, for the conditional feeds only, HTTP validators. With no
+validators the encoding IS the bare string byte for byte, so six feeds persist exactly what they
+persisted before and no migration is needed; `FeedCursorTests` pins that as an equality.
+
+**Both outgoing parameters were probed against the live feeds on 2026-08-25**, and not merely for a
+200 — a parameter a server ignores also returns 200. `nvd` with the connector's exact timestamp
+format narrowed 382,390 results to **3,758**, with every inspected record inside the window; and
+`lastModStartDate` **alone 404s**, confirming the pairing requirement is real rather than supposed.
+`rhsa` with `after=2026-08-20` returned **133** records against 1,000 unfiltered, oldest exactly on
+the boundary day — the inclusive semantics the connector documents. Full tables in
+[ADR 0023](../adr/0023-incremental-cursor-mechanisms.md).
+
+**Named gaps** (full list in ADR 0023): an `nvd` cursor older than NVD's 120-day ceiling falls back
+to a full fetch rather than being clamped forward — expensive and correct rather than cheap and
+silently lossy. `msrc` back-fill is not attempted. `kev`/`usn` depend on their hosts serving
+validators; if one does not, the run degrades to the pre-ADR full transfer.
 
 ### One question a fixture must not settle
 

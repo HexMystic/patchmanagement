@@ -19,9 +19,9 @@ namespace PatchManagement.Content.Connectors;
 /// at no URL — the same invented-envelope defect recorded for <c>rhsa</c> and <c>msrc</c>, and the
 /// last of the three. <b>Debian publishes no structured feed carrying both DSA identifiers and
 /// per-suite fixed versions</b>; the source is salsa's raw plain-text <c>data/DSA/list</c>, accepted
-/// with its stability risk named in <b>ADR 0022</b> (which lives on <c>main</c>; this branch predates
-/// the file). The shape checks below are that ADR's binding mitigation: this parser must fail loudly
-/// rather than hand back an empty batch for the sync to record as <c>ok</c>.</para>
+/// with its stability risk named in <b>ADR 0022</b> (<c>docs/adr/0022-debian-dsa-source.md</c>). The
+/// shape checks below are that ADR's binding mitigation: this parser must fail loudly rather than
+/// hand back an empty batch for the sync to record as <c>ok</c>.</para>
 ///
 /// <para><b>The format, measured across the whole 1.1 MB file rather than assumed.</b> An advisory is
 /// an unindented header followed by indented detail lines:</para>
@@ -41,12 +41,17 @@ namespace PatchManagement.Content.Connectors;
 ///     statement, and <c>&lt;not-affected&gt;</c> asserts the opposite of one.</item>
 /// </list>
 ///
-/// <para><b>The cursor is the newest advisory's full id, and it is emitted but not consumed.</b> The
-/// file is ordered by DATE, not by id — revisions are re-inserted at the top, so 179 DSA numbers
-/// carry several revisions and the id order inverts 181 times. A full id (<c>DSA-6455-1</c>) is
-/// therefore the only exact resume point: a re-issued old advisory appears ABOVE it and is picked up
-/// rather than missed, which a day-granular date cursor could not promise. Using it to limit
-/// parsing is incrementality — Phase 5 criterion (b) — and is deliberately not built here.</para>
+/// <para><b>The cursor is the newest advisory's full id, and it now BOUNDS THE PARSE.</b> The file is
+/// ordered by DATE, not by id — revisions are re-inserted at the top, so 179 DSA numbers carry
+/// several revisions and the id order inverts 181 times. A full id (<c>DSA-6455-1</c>) is therefore
+/// the only exact resume point: a re-issued old advisory appears ABOVE it and is picked up rather
+/// than missed, which a day-granular date cursor could not promise.</para>
+///
+/// <para>The 1.1&#160;MB body still crosses the wire every run. Salsa serves raw git: no filter
+/// parameter, and ADR 0022 records that it has no conditional-GET story either. So this feed's
+/// incrementality is in what is PARSED and written, not in what is transferred — stated plainly
+/// rather than dressed up, because the alternative was inventing a query parameter Debian does not
+/// serve, which is the defect this connector was rewritten to remove.</para>
 ///
 /// Fixes are <c>backported = true</c> (Debian's <c>~debNuM</c> suffix is a backport into the frozen
 /// upstream version). The version is carried RAW; only the suite codename is mapped to
@@ -73,16 +78,25 @@ public sealed class DebianDsaConnector(IHttpContentFetcher fetcher) : IContentCo
     {
         var uri = new Uri(state.Endpoint ?? DefaultEndpoint);
         var text = await fetcher.GetStringAsync(uri, ct);
-        return Parse(text, DateTimeOffset.UtcNow);
+        return Parse(text, DateTimeOffset.UtcNow, FeedCursor.Read(state.Cursor).Semantic);
     }
 
-    public static NormalizedBatch Parse(string text, DateTimeOffset retrievedAt)
+    /// <param name="text">The raw list.</param>
+    /// <param name="retrievedAt">Stamped onto provenance.</param>
+    /// <param name="since">
+    /// The full DSA id this run should stop above — the previous run's cursor. Null parses the whole
+    /// list. Salsa serves raw git with no filter parameter and no conditional-GET story (ADR 0022),
+    /// so the whole 1.1&#160;MB body still crosses the wire; the cursor bounds the PARSE, and with it
+    /// everything written. An id that is no longer in the list parses everything rather than nothing.
+    /// </param>
+    public static NormalizedBatch Parse(string text, DateTimeOffset retrievedAt, string? since = null)
     {
         var advisories = new List<NormalizedAdvisory>();
         var patches = new List<NormalizedPatch>();
 
         Builder? current = null;
         var sawContent = false;
+        var reachedCursor = false;
 
         foreach (var line in text.Split('\n'))
         {
@@ -98,10 +112,21 @@ public sealed class DebianDsaConnector(IHttpContentFetcher fetcher) : IContentCo
                 current = null;
 
                 if (Header.Match(stripped) is { Success: true } header)
+                {
+                    // The resume point, reached. Everything below it was ingested by an earlier run;
+                    // everything above it — including a re-issued old advisory, which this file
+                    // re-inserts at the TOP rather than in id order — has just been read.
+                    if (since is not null && header.Groups["id"].Value == since)
+                    {
+                        reachedCursor = true;
+                        break;
+                    }
+
                     current = new Builder(
                         header.Groups["id"].Value,
                         header.Groups["rest"].Value.Trim(),
                         ParseDate(header.Groups["date"].Value));
+                }
 
                 continue;
             }
@@ -132,7 +157,10 @@ public sealed class DebianDsaConnector(IHttpContentFetcher fetcher) : IContentCo
         // A document with content but no advisory in it is a format change — salsa moving the file,
         // an error body, a login page. Refusing here is what stops ContentSyncService recording an
         // empty catalogue as a successful sync (ADR 0022 mitigation (a)).
-        if (sawContent && advisories.Count == 0)
+        // Narrowed by `reachedCursor`: stopping AT the cursor with nothing above it is the normal
+        // quiet run, not a format change. Without that clause, incrementality would turn every
+        // no-news sync into a thrown sync — the mitigation firing on the case it exists to permit.
+        if (sawContent && advisories.Count == 0 && !reachedCursor)
             throw new InvalidOperationException(
                 "The dsa list carried content but no parseable advisory header. The source's format "
                 + "has changed — refusing to report an empty sync as success.");
@@ -143,7 +171,9 @@ public sealed class DebianDsaConnector(IHttpContentFetcher fetcher) : IContentCo
             Patches = patches,
             // The file is newest-first, so the first advisory parsed is the newest. Its FULL id
             // (revision suffix included) is unique and is the exact resume point — see the class doc.
-            Cursor = advisories.Count > 0 ? advisories[0].ExternalId : null,
+            // Falling back to `since` keeps a quiet run from nulling the cursor and re-opening the
+            // whole list on the next one.
+            Cursor = advisories.Count > 0 ? advisories[0].ExternalId : since,
         };
     }
 

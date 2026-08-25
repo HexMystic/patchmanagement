@@ -21,11 +21,27 @@ public sealed class EpssConnector(IHttpContentFetcher fetcher) : IContentConnect
 
     public string Kind => Feeds.Epss;
 
+    /// <summary>
+    /// EPSS republishes EVERY score daily and the cursor is the model date. FIRST offers no "has the
+    /// model moved?" question and no validator worth storing, so the fetch always happens and the
+    /// cursor bounds what is WRITTEN: an unmoved model date means the overlays already applied are
+    /// the current ones, and re-applying ~250,000 of them is pure no-op churn per run.
+    ///
+    /// <para>Stated plainly because it is the weakest incrementality of the eight: it saves database
+    /// work, not bandwidth. The alternative — inventing a filter parameter FIRST does not serve —
+    /// is the defect this module keeps deleting.</para>
+    /// </summary>
     public async Task<NormalizedBatch> SyncAsync(ContentSourceState state, CancellationToken ct)
     {
         var uri = new Uri(state.Endpoint ?? DefaultEndpoint);
         var json = await fetcher.GetStringAsync(uri, ct);
-        return Parse(json, DateTimeOffset.UtcNow);
+        var batch = Parse(json, DateTimeOffset.UtcNow);
+
+        var since = FeedCursor.Read(state.Cursor).Semantic;
+
+        return batch.Cursor is not null && batch.Cursor == since
+            ? new NormalizedBatch { Cursor = state.Cursor }
+            : batch;
     }
 
     public static NormalizedBatch Parse(string json, DateTimeOffset retrievedAt)

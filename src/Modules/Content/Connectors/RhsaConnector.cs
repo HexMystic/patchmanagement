@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using PatchManagement.Content.Abstractions;
@@ -41,10 +42,30 @@ public sealed class RhsaConnector(IHttpContentFetcher fetcher) : IContentConnect
 
     public async Task<NormalizedBatch> SyncAsync(ContentSourceState state, CancellationToken ct)
     {
-        var uri = new Uri(state.Endpoint ?? DefaultEndpoint);
+        var uri = FeedUri.With(
+            new Uri(state.Endpoint ?? DefaultEndpoint),
+            ("after", After(FeedCursor.Read(state.Cursor).Semantic)));
+
         var json = await fetcher.GetStringAsync(uri, ct);
-        return Parse(json, DateTimeOffset.UtcNow);
+        var batch = Parse(json, DateTimeOffset.UtcNow);
+
+        // Hold rather than null: a narrowed window that returned nothing is the normal quiet case,
+        // and dropping the cursor would re-open the whole catalogue on the next run.
+        return batch.Cursor is null ? batch with { Cursor = state.Cursor } : batch;
     }
+
+    /// <summary>
+    /// Red Hat's <c>after</c> filter is DATE-granular, so the cursor's time half is dropped. That
+    /// makes the window inclusive of the cursor's own day and re-reads it — which is the safe
+    /// direction: the upserts are idempotent, and rounding the other way would skip advisories
+    /// released later on the same day as the last one ingested.
+    /// </summary>
+    private static string? After(string? cursor) =>
+        DateTimeOffset.TryParse(
+            cursor, CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var since)
+            ? since.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : null;
 
     public static NormalizedBatch Parse(string json, DateTimeOffset retrievedAt)
     {

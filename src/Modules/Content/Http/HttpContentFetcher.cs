@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http.Headers;
 using PatchManagement.Content.Abstractions;
 
 namespace PatchManagement.Content.Http;
@@ -23,5 +25,32 @@ public sealed class HttpContentFetcher(HttpClient client) : IHttpContentFetcher
         var response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStreamAsync(ct);
+    }
+
+    public async Task<ConditionalFetch> GetStringConditionalAsync(
+        Uri uri, string? etag, DateTimeOffset? lastModified, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+
+        // TryParse, not Parse: the ETag came out of the database, and a stored value that is no
+        // longer a well-formed entity tag must degrade to an unconditional GET rather than throw and
+        // take the whole sync down. Weak tags (W/"...") are normal for these hosts and parse fine.
+        if (!string.IsNullOrWhiteSpace(etag) && EntityTagHeaderValue.TryParse(etag, out var tag))
+            request.Headers.IfNoneMatch.Add(tag);
+
+        if (lastModified is { } since)
+            request.Headers.IfModifiedSince = since;
+
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+
+        if (response.StatusCode == HttpStatusCode.NotModified)
+            return ConditionalFetch.Unchanged;
+
+        response.EnsureSuccessStatusCode();
+
+        return new ConditionalFetch(
+            await response.Content.ReadAsStringAsync(ct),
+            response.Headers.ETag?.ToString(),
+            response.Content.Headers.LastModified);
     }
 }

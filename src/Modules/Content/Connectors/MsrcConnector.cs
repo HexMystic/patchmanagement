@@ -45,13 +45,83 @@ public sealed class MsrcConnector(IHttpContentFetcher fetcher) : IContentConnect
 
     public string Kind => Feeds.Msrc;
 
+    /// <summary>
+    /// The index names every month Microsoft has ever published (191 at capture time), so the cursor
+    /// selects WHICH documents this run fetches rather than filtering inside one. That is a real
+    /// request-level saving: normally the index plus nothing, or the index plus one month.
+    ///
+    /// <para>The index is read on every run even when nothing follows it. That is how "nothing new"
+    /// gets established — the alternative is assuming it, which is how this module previously
+    /// reported an empty sync as success.</para>
+    /// </summary>
     public async Task<NormalizedBatch> SyncAsync(ContentSourceState state, CancellationToken ct)
     {
         var indexUri = new Uri(state.Endpoint ?? DefaultEndpoint);
-        var month = NewestMonth(await fetcher.GetStringAsync(indexUri, ct));
+        var index = await fetcher.GetStringAsync(indexUri, ct);
 
-        var document = await fetcher.GetStringAsync(new Uri(month.CvrfUrl), ct);
-        return Parse(document, DateTimeOffset.UtcNow);
+        var months = MonthsAfter(index, FeedCursor.Read(state.Cursor).Semantic);
+
+        if (months.Count == 0)
+            return new NormalizedBatch { Cursor = state.Cursor };
+
+        var retrievedAt = DateTimeOffset.UtcNow;
+        var advisories = new List<NormalizedAdvisory>();
+        var patches = new List<NormalizedPatch>();
+        string? cursor = null;
+
+        // Oldest first, so the cursor ends on the newest month actually ingested. A failure part-way
+        // through leaves the whole run failed and the cursor held (ContentSyncService), so the next
+        // run re-reads from the same place rather than skipping the months it did not reach.
+        foreach (var month in months)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var batch = Parse(await fetcher.GetStringAsync(new Uri(month.CvrfUrl), ct), retrievedAt);
+            advisories.AddRange(batch.Advisories);
+            patches.AddRange(batch.Patches);
+            cursor = batch.Cursor ?? month.Id;
+        }
+
+        return new NormalizedBatch { Advisories = advisories, Patches = patches, Cursor = cursor };
+    }
+
+    /// <summary>
+    /// The months to fetch: those published after the month the cursor names, oldest first.
+    ///
+    /// <para>A cursor the index no longer carries — Microsoft renaming or withdrawing a month —
+    /// falls back to the newest month alone rather than to everything. Re-ingesting 191 documents
+    /// because one id moved would be a self-inflicted outage; missing older months is visible in the
+    /// catalogue, which is the recoverable direction.</para>
+    ///
+    /// <para>A null cursor is a first run and also takes the newest month only. Backfill is a
+    /// deliberate operator action, not something a fresh install does on its own.</para>
+    /// </summary>
+    public static IReadOnlyList<MsrcMonth> MonthsAfter(string json, string? cursorId)
+    {
+        // Both fallbacks DELEGATE to NewestMonth rather than re-deriving "newest" here. That answer
+        // carries a subtlety — InitialReleaseDate, never CurrentReleaseDate, see below — which must
+        // not exist in two places where one copy can be corrected and the other left behind. It also
+        // keeps NewestMonth on the production path, so the tests that pin it still guard real code.
+        if (cursorId is null)
+            return [NewestMonth(json)];
+
+        using var doc = JsonDocument.Parse(json);
+
+        var all = doc.RootElement.Array("value")
+            .Select(v => (Id: v.StringOrNull("ID"), Url: v.StringOrNull("CvrfUrl"),
+                          Released: v.DateTimeOffsetOrNull("InitialReleaseDate")))
+            .Where(v => v.Id is not null && v.Url is not null)
+            .OrderBy(v => v.Released ?? DateTimeOffset.MinValue)
+            .ToList();
+
+        var at = all.FindIndex(v => string.Equals(v.Id, cursorId, StringComparison.OrdinalIgnoreCase));
+
+        // Not found — including the empty-index case, where NewestMonth throws the format-change
+        // error rather than letting an unusable index pass as "nothing new".
+        if (at < 0)
+            return [NewestMonth(json)];
+
+        return all.Skip(at + 1).Select(v => new MsrcMonth(v.Id!, v.Url!)).ToList();
     }
 
     /// <summary>
@@ -63,8 +133,9 @@ public sealed class MsrcConnector(IHttpContentFetcher fetcher) : IContentConnect
     /// four-month-old document. <c>InitialReleaseDate</c> is when the month was published, which is
     /// what "newest month" means.</para>
     ///
-    /// <para>Which months a sync should fetch beyond the newest is incrementality — Phase 5
-    /// criterion (b) — and is deliberately not decided here.</para>
+    /// <para>Which months a sync fetches beyond the newest is incrementality, and it is decided by
+    /// <see cref="MonthsAfter"/> from the stored cursor. This method remains the first-run and
+    /// cursor-not-found answer: newest month only.</para>
     /// </summary>
     public static MsrcMonth NewestMonth(string json)
     {

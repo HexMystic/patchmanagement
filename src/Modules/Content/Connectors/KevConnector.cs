@@ -21,11 +21,25 @@ public sealed class KevConnector(IHttpContentFetcher fetcher) : IContentConnecto
 
     public string Kind => Feeds.Kev;
 
+    /// <summary>
+    /// CISA serves one whole file with no filter parameter, so the cursor reaches the feed as HTTP
+    /// validators. A 304 is the server ASSERTING that nothing changed — the opposite of the
+    /// empty-parse hazard this module throws on, which infers absence from silence.
+    /// </summary>
     public async Task<NormalizedBatch> SyncAsync(ContentSourceState state, CancellationToken ct)
     {
         var uri = new Uri(state.Endpoint ?? DefaultEndpoint);
-        var json = await fetcher.GetStringAsync(uri, ct);
-        return Parse(json, DateTimeOffset.UtcNow);
+        var cursor = FeedCursor.Read(state.Cursor);
+
+        var fetch = await fetcher.GetStringConditionalAsync(uri, cursor.ETag, cursor.LastModified, ct);
+
+        // Hand the stored value straight back, validators and all. Re-formatting it would work;
+        // returning state.Cursor verbatim makes it impossible for this path to lose a validator.
+        if (fetch.NotModified)
+            return new NormalizedBatch { Cursor = state.Cursor };
+
+        var batch = Parse(fetch.Content!, DateTimeOffset.UtcNow);
+        return batch with { Cursor = FeedCursor.From(batch.Cursor, fetch).Format() };
     }
 
     public static NormalizedBatch Parse(string json, DateTimeOffset retrievedAt)
@@ -48,8 +62,8 @@ public sealed class KevConnector(IHttpContentFetcher fetcher) : IContentConnecto
                 Provenance: new ProvenanceEntry(Feeds.Kev, retrievedAt, SourceRecordId: cve, Url: CatalogUrl)));
         }
 
-        // The catalog version is a natural incremental bookmark, though KEV is small enough to
-        // re-scan fully; carry it so a future delta fetch has something to compare.
+        // The catalogue version is the semantic half of the cursor. The half that reaches CISA is
+        // the HTTP validators SyncAsync pairs with it — this file offers no filter parameter.
         var cursor = root.StringOrNull("catalogVersion") ?? root.StringOrNull("dateReleased");
 
         return new NormalizedBatch { KevOverlays = overlays, Cursor = cursor };

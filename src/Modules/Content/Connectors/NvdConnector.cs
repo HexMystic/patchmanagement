@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using PatchManagement.Content.Abstractions;
 using PatchManagement.Contracts.Content;
@@ -13,13 +14,21 @@ namespace PatchManagement.Content.Connectors;
 ///
 /// Idempotent: a re-run upserts the same rows.
 ///
-/// <para><b>NOT incremental, despite emitting a cursor.</b> <c>Parse</c> computes the latest
-/// <c>lastModified</c> and <c>ContentSyncService</c> persists it, but <c>SyncAsync</c> never reads
-/// <c>state.Cursor</c> and never appends <c>lastModStartDate</c> to the request — so every run
-/// re-fetches the same window. This doc previously claimed the opposite. <b>Pagination is ignored
-/// too</b>: <c>startIndex</c>/<c>totalResults</c>/<c>resultsPerPage</c> are never read, so a
-/// response spanning more than one page is silently truncated to the first. Both are recorded in
-/// <c>docs/phases/phase-5.md</c>.</para>
+/// <para><b>Incremental via <c>lastModStartDate</c> — and this time the request carries it.</b> The
+/// cursor is the newest <c>lastModified</c> seen, and it goes back out as the start of the window.
+/// NVD rejects that parameter unless <c>lastModEndDate</c> accompanies it, so both are always sent
+/// together or neither is. A doc comment here once made this claim while <c>SyncAsync</c> sent
+/// nothing; <c>IncrementalSyncTests</c> is what makes it true rather than asserted.</para>
+///
+/// <para><b>Pagination is followed.</b> <c>startIndex</c>/<c>resultsPerPage</c>/<c>totalResults</c>
+/// were read by nothing, so a response spanning more than one page was truncated to the first and
+/// reported <c>ok</c>. The loop below walks to the last page and is bounded by
+/// <see cref="MaxPages"/> — a malformed counter must stop the sync loudly rather than spin.</para>
+///
+/// <para><b>A cursor older than NVD's 120-day window limit falls back to a full fetch</b>, which is
+/// expensive and correct, rather than being clamped forward, which is cheap and silently lossy. A
+/// feed this stale is a recovery case; walking it in 120-day chunks is the obvious refinement and is
+/// named as a gap in <c>docs/phases/phase-5.md</c> rather than half-built here.</para>
 /// </summary>
 public sealed class NvdConnector(IHttpContentFetcher fetcher) : IContentConnector
 {
@@ -30,12 +39,113 @@ public sealed class NvdConnector(IHttpContentFetcher fetcher) : IContentConnecto
 
     public string Kind => Feeds.Nvd;
 
+    /// <summary>NVD's documented ceiling on a single <c>lastMod</c> window.</summary>
+    private static readonly TimeSpan MaxWindow = TimeSpan.FromDays(120);
+
+    /// <summary>
+    /// Enough for a full catalogue at NVD's 2,000-per-page maximum, with headroom. Exceeding it
+    /// means the counters are not describing a real result set, which must fail loudly.
+    /// </summary>
+    private const int MaxPages = 1_000;
+
     public async Task<NormalizedBatch> SyncAsync(ContentSourceState state, CancellationToken ct)
     {
-        var uri = new Uri(state.Endpoint ?? DefaultEndpoint);
-        var json = await fetcher.GetStringAsync(uri, ct);
-        return Parse(json, DateTimeOffset.UtcNow);
+        var baseUri = new Uri(state.Endpoint ?? DefaultEndpoint);
+        var retrievedAt = DateTimeOffset.UtcNow;
+        var window = WindowFrom(FeedCursor.Read(state.Cursor).Semantic, retrievedAt);
+
+        var advisories = new List<NormalizedAdvisory>();
+        string? newest = null;
+        int? startIndex = 0;
+
+        for (var page = 0; startIndex is { } offset; page++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (page >= MaxPages)
+                throw new InvalidOperationException(
+                    $"The nvd feed reported more than {MaxPages} pages. Its paging counters are not "
+                    + "describing a real result set — refusing to keep requesting indefinitely.");
+
+            var json = await fetcher.GetStringAsync(
+                FeedUri.With(
+                    baseUri,
+                    ("lastModStartDate", window.Start),
+                    ("lastModEndDate", window.End),
+                    ("startIndex", offset == 0 ? null : offset.ToString(CultureInfo.InvariantCulture))),
+                ct);
+
+            var batch = Parse(json, retrievedAt);
+            advisories.AddRange(batch.Advisories);
+            newest = Later(newest, batch.Cursor);
+            startIndex = ReadPaging(json).NextStartIndex;
+        }
+
+        return new NormalizedBatch
+        {
+            Advisories = advisories,
+            // Hold the old cursor when a window returned nothing: null would re-open the whole
+            // catalogue on the next run, turning one quiet sync into a full re-ingest.
+            Cursor = newest ?? state.Cursor,
+        };
     }
+
+    /// <summary>
+    /// The window to request. Both bounds or neither: NVD 404s a lone <c>lastModStartDate</c>, so a
+    /// half-built window would fail every incremental run after release rather than at review time.
+    /// </summary>
+    private static (string? Start, string? End) WindowFrom(string? cursor, DateTimeOffset now)
+    {
+        if (!DateTimeOffset.TryParse(
+                cursor, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var since))
+            return (null, null);
+
+        // Older than the ceiling: ask for everything rather than silently starting the window
+        // 120 days ago and skipping the gap in between.
+        if (now - since > MaxWindow)
+            return (null, null);
+
+        return (NvdInstant(since), NvdInstant(now));
+    }
+
+    /// <summary>NVD's ISO-8601 form: millisecond precision, explicit UTC.</summary>
+    private static string NvdInstant(DateTimeOffset value) =>
+        value.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
+
+    /// <summary>Keeps the later of two cursors while pages are merged.</summary>
+    private static string? Later(string? a, string? b)
+    {
+        if (a is null)
+            return b;
+        if (b is null)
+            return a;
+
+        return string.CompareOrdinal(a, b) >= 0 ? a : b;
+    }
+
+    /// <summary>
+    /// Reads the paging counters. Exposed as its own step because <see cref="Parse"/> is the pure
+    /// record transform and must stay callable on a single page with no notion of the run around it.
+    /// </summary>
+    public static NvdPaging ReadPaging(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        return new NvdPaging(
+            IntOr(root, "startIndex", 0),
+            IntOr(root, "resultsPerPage", 0),
+            IntOr(root, "totalResults", 0));
+    }
+
+    private static int IntOr(JsonElement e, string name, int fallback) =>
+        e.ValueKind == JsonValueKind.Object
+        && e.TryGetProperty(name, out var v)
+        && v.ValueKind == JsonValueKind.Number
+        && v.TryGetInt32(out var i)
+            ? i
+            : fallback;
 
     /// <summary>Pure parse — exposed so tests can drive it without the fetcher.</summary>
     public static NormalizedBatch Parse(string json, DateTimeOffset retrievedAt)

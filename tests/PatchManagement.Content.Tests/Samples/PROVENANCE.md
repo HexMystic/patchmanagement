@@ -31,6 +31,14 @@ Two facts worth recording, because they justify the selection rather than making
   carry *byte-identical* vectors and scores, so a test using it would pass whether the parser picked
   the right metric or the wrong one. It is the exact shape of a test that cannot fail.
 
+**No two-page NVD sample is committed, deliberately.** `IncrementalSyncTests` needs a paginated
+response to prove the connector follows `startIndex`/`totalResults` rather than truncating to page
+one. It builds that response **at run time from two of the captures above**, rewriting only the three
+paging counters so they describe the composition; every CVE record stays byte-for-byte what NVD
+served. Committing a hand-written two-page envelope would have been the same mistake this file's
+opening rule exists to prevent — the connector would then be tested against a shape chosen by us
+rather than by the feed.
+
 Also observed while selecting: in this window every CVE with **no** `metrics` at all was a
 **Rejected** CVE. No no-metrics fixture is included, because asserting against one would bake in the
 claim that a rejected CVE should become an advisory — a separate question, recorded in
@@ -197,8 +205,9 @@ fallback is unreachable from this data and is left untested rather than fabricat
 Captured **2026-08-21 UTC**. **6,519 advisories**, 2002-07-30 to 2026-08-20.
 
 Not JSON. This is Debian's line-oriented advisory list, and it is the only source carrying both DSA
-identifiers and per-suite fixed versions — see **ADR 0022** (on `main`; this branch predates the
-file), which accepts it with its stability risk named.
+identifiers and per-suite fixed versions — see
+[ADR 0022](../../../docs/adr/0022-debian-dsa-source.md), which accepts it with its stability risk
+named.
 
 **Kept whole, which is a departure worth justifying.** At 1.1 MB it is ~15× the largest other
 sample. It is kept entire because the edge cases are the point and they are scattered through
