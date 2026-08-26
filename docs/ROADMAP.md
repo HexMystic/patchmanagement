@@ -479,7 +479,10 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   attempt log printed — `[("10.0.0.0", 22), ("10.0.0.1", 22), ("10.0.0.2", 22), ("10.0.0.3", 22)]`,
   an unguarded sweep enumerating an out-of-lab RFC1918 range. The other two were criterion (i),
   failing before `PatchManagement.Api.csproj` gained its `ProjectReference`. Green at **38** in
-  `PatchManagement.Discovery.Tests`, plus 8 of 8 in `HostModuleDiscoveryTests`.
+  `PatchManagement.Discovery.Tests`, plus 8 of 8 in `HostModuleDiscoveryTests`. **`main` is green
+  at 571 across all eight projects** (531 + 40 — the 38 new unit tests and the 2 reachability
+  tests), with Postgres, Redis and the five lab containers up; the SSH fleet suite is 54 of 54
+  against the real fleet, not skipped.
   **The refusal is all-or-nothing** — one out-of-scope range refuses the whole request rather than
   sweeping the rest, because a partially-swept estate reported as a success is a coverage gap that
   reads as a clean bill of health, which is the shape Phase 5's empty-batch-green-status connectors
