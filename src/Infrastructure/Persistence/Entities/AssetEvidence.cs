@@ -20,7 +20,7 @@ public sealed class AssetEvidence
     public Guid AssetId { get; set; }
 
     /// <summary>Which source produced this observation: discovery / ad / dhcp / inventory.</summary>
-    public string Source { get; set; } = AssetEvidenceSources.Discovery;
+    public string Source { get; set; } = AssetSources.Discovery;
 
     /// <summary>
     /// True when the source held this asset; false when the source was consulted and did not.
@@ -46,19 +46,3 @@ public sealed class AssetEvidence
     public DateTimeOffset CreatedAt { get; set; }
 }
 
-/// <summary>
-/// The evidence-source vocabulary, matching <c>assets.source</c> as documented in Phase 1.
-///
-/// <para>Note that <c>assets.source</c> itself carries no CHECK — the vocabulary is documented there
-/// but not enforced. Adding one would edit a frozen table for no functional gain, so this table
-/// enforces its own copy and the divergence is recorded rather than papered over.</para>
-/// </summary>
-public static class AssetEvidenceSources
-{
-    public const string Discovery = "discovery";
-    public const string Ad = "ad";
-    public const string Dhcp = "dhcp";
-    public const string Inventory = "inventory";
-
-    public static readonly IReadOnlyList<string> All = [Discovery, Ad, Dhcp, Inventory];
-}

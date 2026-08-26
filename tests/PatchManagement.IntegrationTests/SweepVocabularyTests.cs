@@ -1,5 +1,4 @@
 using System.Text.RegularExpressions;
-using Npgsql;
 using PatchManagement.Contracts.Discovery;
 using Xunit;
 
@@ -102,36 +101,11 @@ public sealed class SweepVocabularyTests(PostgresFixture fx)
         Regex.Replace(outcome.ToString(), "(?<!^)([A-Z])", "-$1").ToLowerInvariant();
 
     /// <summary>
-    /// The literals <c>ck_discovery_runs_outcome</c> actually admits, read from the live catalog.
+    /// The literals <c>ck_discovery_runs_outcome</c> actually admits, read from the live catalog by
+    /// the shared reader — see <see cref="CheckConstraintCatalog"/> for why the catalog and not the
+    /// C# source.
     /// </summary>
-    private async Task<SortedSet<string>> AcceptedOutcomesAsync()
-    {
-        await using var conn = new NpgsqlConnection(fx.OwnerConnectionString);
-        await conn.OpenAsync();
-
-        await using var cmd = new NpgsqlCommand(
-            """
-            SELECT pg_get_constraintdef(c.oid)
-            FROM pg_constraint c
-            JOIN pg_class t ON t.oid = c.conrelid
-            JOIN pg_namespace n ON n.oid = t.relnamespace
-            WHERE n.nspname = 'public'
-              AND t.relname = 'discovery_runs'
-              AND c.conname = 'ck_discovery_runs_outcome'
-            """,
-            conn);
-
-        var definition = await cmd.ExecuteScalarAsync() as string;
-
-        Assert.False(
-            string.IsNullOrWhiteSpace(definition),
-            "ck_discovery_runs_outcome is not present on public.discovery_runs. Either the migration "
-            + "has not been applied, or the constraint was renamed — both make this pin inert.");
-
-        // CHECK ((outcome = ANY (ARRAY['running'::text, 'ok'::text, ...])))
-        var literals = Regex.Matches(definition!, @"'(?<value>[^']*)'::text")
-            .Select(m => m.Groups["value"].Value);
-
-        return new SortedSet<string>(literals, StringComparer.Ordinal);
-    }
+    private Task<SortedSet<string>> AcceptedOutcomesAsync() =>
+        CheckConstraintCatalog.AcceptedLiteralsAsync(
+            fx.OwnerConnectionString, "discovery_runs", "ck_discovery_runs_outcome");
 }

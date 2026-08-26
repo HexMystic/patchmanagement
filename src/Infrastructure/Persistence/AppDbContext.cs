@@ -168,7 +168,13 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
         b.Entity<Asset>(e =>
         {
-            e.ToTable("assets");
+            e.ToTable("assets", t =>
+                // Review M8: the source vocabulary was documented in three places and enforced in
+                // none, so any raw-SQL or non-.NET writer could put an unknown value here. It also
+                // silently underpins ux_assets_discovery_candidate below, whose predicate matches
+                // the literal 'discovery' — a typo'd or retired value would make that index match
+                // nothing and the natural key stop keying, with nothing failing.
+                t.HasCheckConstraint("ck_assets_source", InList("source", AssetSources.All)));
             e.HasKey(x => x.Id);
             // Target for the tenant-consistent FKs from asset_packages and findings.
             e.HasAlternateKey(x => new { x.TenantId, x.Id });
@@ -278,7 +284,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.ToTable("asset_evidence", t =>
             {
                 t.HasCheckConstraint(
-                    "ck_asset_evidence_source", InList("source", AssetEvidenceSources.All));
+                    "ck_asset_evidence_source", InList("source", AssetSources.All));
 
                 // Discovery evidence with no run is not provenance, and every other source has no
                 // run to name.

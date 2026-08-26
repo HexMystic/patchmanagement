@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict rzjetWFsfeMbRsXsq3IhbuBqvCOcd85VRgCvfjA6RcXvWlbF6euWnL4QGQV0LCx
+\restrict yl64ncbU7Fu4XXrzAWwJbdlJqA5ktVzyd9QxbPubnpPn9eeEvCvtXwCEJ1aRUkH
 
 -- Dumped from database version 16.14
 -- Dumped by pg_dump version 16.14
@@ -147,7 +147,8 @@ CREATE TABLE public.assets (
     last_seen timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    endpoint_port integer
+    endpoint_port integer,
+    CONSTRAINT ck_assets_source CHECK ((source = ANY (ARRAY['discovery'::text, 'ad'::text, 'dhcp'::text, 'inventory'::text])))
 );
 
 ALTER TABLE ONLY public.assets FORCE ROW LEVEL SECURITY;
@@ -1113,5 +1114,5 @@ GRANT SELECT ON TABLE public.tenants TO patchmgmt_app;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict rzjetWFsfeMbRsXsq3IhbuBqvCOcd85VRgCvfjA6RcXvWlbF6euWnL4QGQV0LCx
+\unrestrict yl64ncbU7Fu4XXrzAWwJbdlJqA5ktVzyd9QxbPubnpPn9eeEvCvtXwCEJ1aRUkH
 

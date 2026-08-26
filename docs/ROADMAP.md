@@ -533,6 +533,22 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   decision that belongs to whoever owns the schema-contract surface. **`main` is green at 580
   across nine projects** (576 + 4 — three `SweepVocabularyTests` and the grant-posture test), with
   the SSH fleet suite still 54 of 54.
+- **`assets.source` constrained 2026-08-26**, before slice 3 — an **addendum to ADR 0024**, not a new
+  ADR, because the natural key is a partial index whose predicate *is* a claim about this vocabulary;
+  the two are one contract seen from opposite sides. A codebase-wide sweep of every writer found
+  exactly **one** value ever written (`discovery` — the entity default, `RlsTests`, and two raw-SQL
+  inserts in `ContentCatalogueTests`; `/diag/assets` is read-only). All four documented values are in
+  the CHECK regardless: scoping it to what exists today would turn slice 4's first correlation write
+  into a `23514`. **The silent failure this closes:** retire or typo `'discovery'` and
+  `ux_assets_discovery_candidate` matches no rows, the upsert loses what it conflicts against, and
+  duplicate candidates accumulate every sweep with nothing failing.
+  `AssetVocabularyTests` (4) reads the index predicate AND the CHECK from the live catalog and
+  requires them to agree; the parse is shared with `SweepVocabularyTests` via `CheckConstraintCatalog`
+  rather than forked. Mutation-verified both ways: an accepted-but-undeclared value reds 2 of 4,
+  retiring `'discovery'` reds the predicate test with the exact message it exists to print.
+  This closes the `assets.source` part of review **M8**; the other four columns it named
+  (`assets.state`, `findings.state`, `credentials.kind`, `tenants.status`) remain open and are not
+  Phase 4's. **`main` is green at 584 across nine projects** (580 + the four `AssetVocabularyTests`).
 - **One NEVER #6 ask remains open** — `EndpointTarget.Bastion` becoming a chain, for D-306 at slice 5: the new tables (`discovery_runs`,
   `asset_evidence`, `host_keys`) and the `EndpointTarget` bastion-chain shape for D-306. Both are
   detailed in `docs/phases/phase-4.md`.

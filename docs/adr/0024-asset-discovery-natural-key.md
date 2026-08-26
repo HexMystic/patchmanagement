@@ -100,6 +100,57 @@ endpoint_port)` duplicates among `source = 'discovery'` rows before this migrati
 because a stale candidate at a reassigned address is exactly the row someone will want to delete, and
 the `RESTRICT` foreign keys from `asset_evidence` will refuse while its evidence stands.
 
+## Addendum, 2026-08-26 — `assets.source` is now a database contract
+
+**Recorded here rather than as ADR 0025, and the reason is structural rather than
+administrative.** This decision has no independent existence: the key above is a *partial* index
+whose predicate is `source = 'discovery'`. Its correctness is a claim about the `source` vocabulary,
+so constraining that vocabulary is the same decision seen from the other side. Splitting them would
+put a contract and the thing it depends on in two documents that could be read separately.
+
+```sql
+ALTER TABLE public.assets
+    ADD CONSTRAINT ck_assets_source
+    CHECK (source IN ('discovery', 'ad', 'dhcp', 'inventory'));
+```
+
+### The failure this closes is silent, which is why it earns a constraint
+
+Before it, `source` was unconstrained `text`. Nothing stopped a raw-SQL writer, a later migration or
+a non-.NET consumer putting an unknown value there. The interesting consequence is not a bad row —
+it is what happens to the key: **retire, rename or typo `'discovery'` and
+`ux_assets_discovery_candidate` matches no rows at all.** The discovery upsert then has nothing to
+conflict against, duplicate candidates accumulate on every sweep, and **nothing fails**. No error, no
+constraint violation — an idempotency guarantee (criterion (h)) that quietly stopped being one.
+
+That dependency was documented in three places and enforced in none.
+`AssetVocabularyTests.The_discovery_candidate_index_predicate_uses_a_source_the_check_admits` now
+reads the index predicate and the CHECK **both from the live catalog** and requires them to agree,
+so neither can move without the other.
+
+### All four values, though only one is ever written
+
+A codebase-wide sweep of every writer of this column — the entity default, `RlsTests`, two raw-SQL
+inserts in `ContentCatalogueTests`, and the read-only `/diag/assets` endpoint — found exactly one
+value in use: `discovery`. `ad`, `dhcp` and `inventory` appear nowhere yet.
+
+They are in the constraint anyway. A CHECK scoped to what happens to exist today would turn slice
+4's first correlation write into a Postgres `23514`, and the constraint would have to be widened by
+a migration at exactly the moment someone is trying to ship the feature. The vocabulary is the
+documented one (`DIFFERENTIATORS.md` §2), not the observed one.
+
+**A documentation divergence surfaced and was corrected:** `docs/phases/phase-1.md` listed
+`source(discovery/ad/dhcp)` — three values, omitting `inventory` — while `DIFFERENTIATORS.md` and
+the entity's own doc comment listed four. Four is authoritative; the phase-1 line was the outlier.
+
+### What this does not close
+
+Review **M8** named *five* enum-shaped columns typed as unconstrained `text`: `assets.state`,
+`findings.state`, `credentials.kind`, `tenants.status`, and this one. **Only `assets.source` is
+closed.** The other four are untouched — each belongs to the phase that owns its vocabulary, and
+`assets.state` in particular is the frozen Phase-1 state machine, whose CHECK is a larger question
+than this addendum should decide.
+
 ## When to revisit
 
 - **When slice 3 lands a durable machine id.** That is the trigger to add `assets.machine_id` with

@@ -43,7 +43,7 @@ named test proves it — never because the code looks right.
 
 **2 of 9 ticked** as of 2026-08-26. Slice 1 (sweep + target policy) landed and criterion (a)
 closed against the real fleet the same day; slice 2 (schema) landed the same day too. `main` is
-green at **580** across nine projects.
+green at **584** across nine projects.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
@@ -195,11 +195,19 @@ and a test that fails when anything drifts from it* — and records that OpenAPI
 missing both halves. `db/schema.sql` is missing the second half.
 
 **Why Phase 4 is not the phase to close it.** The fix is a test that dumps the live schema and
-compares it to the checked-in export, which needs a decision about normalisation (a `pg_dump` from a
-different client version reorders and rewords enough to make a naive comparison useless — this slice
-hit exactly that, twice, on `--no-owner` and `--no-privileges`). That is a piece of test
-infrastructure with its own design question, and it belongs to whoever owns the schema-contract
-surface rather than to the phase that happened to touch it next.
+compares it to the checked-in export, and that needs a normalisation decision this slice kept
+running into:
+
+- Flag choice changes the output wholesale. `--no-privileges` and `--no-owner` each produced an
+  export differing from the checked-in one for reasons unrelated to the schema.
+- **`pg_dump` emits a fresh random nonce on every run.** Each export opens with
+  `\restrict <20-odd random characters>` and closes with the matching `\unrestrict`. Two dumps of a
+  byte-identical database therefore differ, always. A naive text comparison would fail on **every**
+  run, and the obvious fix — strip those two lines — is the first clause of a normalisation policy
+  that should be decided deliberately rather than accreted one surprise at a time.
+
+That is test infrastructure with its own design question, and it belongs to whoever owns the
+schema-contract surface rather than to the phase that happened to touch it next.
 
 **It therefore needs a named owner before it can be called a deferral at all**
 (`DIFFERENTIATORS.md:88`). Proposed: **Phase 13** (audit, compliance, evidence), which already owns

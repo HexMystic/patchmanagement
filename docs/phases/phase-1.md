@@ -67,7 +67,7 @@ groups below are the frozen scope of Phase 1.
 | `operators` | email, role, auth refs *(console users; not endpoint creds)* |
 | `credentials` | name, kind(win/ssh), **envelope**(ciphertext), dek_id, target_scope — see Phase 2 |
 | `data_keys` | per-tenant DEK (wrapped), retired_at — see Phase 2 |
-| `assets` | hostname, ip, os_family, os_version, managed(bool), source(discovery/ad/dhcp), **state** |
+| `assets` | hostname, ip, os_family, os_version, managed(bool), source(discovery/ad/dhcp/inventory), **state** |
 | `asset_packages` | asset_id, name, version, epoch, arch, source(pkgmgr) |
 | `findings` | asset_id, advisory_id, patch_id, **state**, reversible, risk_score, risk_explanation(jsonb) |
 | `audit_log` | actor, action, target, at, detail(jsonb) — **append-only**, never contains secrets |

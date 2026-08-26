@@ -36,3 +36,29 @@ public sealed class Asset
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }
+
+/// <summary>
+/// Where an asset — or an observation about one — came from. The canonical copy, shared by
+/// <c>assets.source</c> and <c>asset_evidence.source</c> because they are the same vocabulary
+/// asked about two different rows.
+///
+/// <para><b>Only <see cref="Discovery"/> is written today.</b> The other three are what slice 4's
+/// correlation will write, and they are in the constraint from the start deliberately: a CHECK
+/// admitting only the value that happens to exist would turn the next legitimate write into a
+/// Postgres 23514 at the moment correlation first runs.</para>
+///
+/// <para>Constraining this closes the <c>assets.source</c> part of review <b>M8</b>, open since
+/// Phase 1 — five enum-shaped columns typed as unconstrained <c>text</c>, where "the frozen
+/// vocabulary is a database contract" was promised and never delivered. The other four
+/// (<c>assets.state</c>, <c>findings.state</c>, <c>credentials.kind</c>, <c>tenants.status</c>)
+/// are still open and are not Phase 4's to close.</para>
+/// </summary>
+public static class AssetSources
+{
+    public const string Discovery = "discovery";
+    public const string Ad = "ad";
+    public const string Dhcp = "dhcp";
+    public const string Inventory = "inventory";
+
+    public static readonly IReadOnlyList<string> All = [Discovery, Ad, Dhcp, Inventory];
+}
