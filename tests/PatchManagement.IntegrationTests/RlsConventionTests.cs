@@ -135,6 +135,57 @@ public sealed class RlsConventionTests(PostgresFixture fx)
     }
 
     /// <summary>
+    /// Phase 4's three tables carry NON-uniform grants, and the absence of a privilege is the
+    /// load-bearing half of each — so it is asserted rather than assumed.
+    ///
+    /// <para>Every table above this one is full CRUD, which means a migration that granted these
+    /// three the same way would look entirely normal in review and silently remove three
+    /// guarantees: that a discovery run cannot be deleted, that an observation cannot be edited
+    /// after the fact, and that the record of a host key having once been trusted cannot be
+    /// erased. The third is the one that matters most — a key CHANGE is the security-relevant
+    /// event <c>host_keys</c> exists to capture (D-301), and a DELETE grant would make it
+    /// deniable.</para>
+    ///
+    /// <para>Written as a table of expected privileges rather than as prose assertions so that
+    /// adding a fourth table with its own posture is an obvious edit, not a copy-paste.</para>
+    /// </summary>
+    [Fact]
+    public async Task Phase4_tables_carry_their_declared_grant_posture_including_what_is_withheld()
+    {
+        (string Table, string[] Granted, string[] Withheld)[] posture =
+        [
+            // A run is opened then closed. Never deleted.
+            ("discovery_runs", ["SELECT", "INSERT", "UPDATE"], ["DELETE"]),
+
+            // Append-only, the audit_log posture: an observation is a fact about a moment, and
+            // correcting it means recording a later one.
+            ("asset_evidence", ["SELECT", "INSERT"], ["UPDATE", "DELETE"]),
+
+            // Pinned, then superseded. Never erased.
+            ("host_keys", ["SELECT", "INSERT", "UPDATE"], ["DELETE"]),
+        ];
+
+        foreach (var (table, granted, withheld) in posture)
+        {
+            foreach (var privilege in granted)
+            {
+                Assert.True(
+                    await HasPrivilegeAsync(AppRole, table, privilege),
+                    $"{AppRole} needs {privilege} on {table}");
+            }
+
+            foreach (var privilege in withheld)
+            {
+                Assert.False(
+                    await HasPrivilegeAsync(AppRole, table, privilege),
+                    $"{AppRole} must NOT have {privilege} on {table} — see the migration's summary "
+                    + "for why this table is not full CRUD. If the posture genuinely changed, that "
+                    + "is a deliberate edit here, not a test to relax.");
+            }
+        }
+    }
+
+    /// <summary>
     /// The anti-drift assertion. If a later phase adds a table without tenant_id, this fails —
     /// forcing whoever added it to either fix the table or justify a new exemption in review.
     /// </summary>

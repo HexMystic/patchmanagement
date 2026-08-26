@@ -84,6 +84,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<Asset> Assets => Set<Asset>();
     public DbSet<AssetPackage> AssetPackages => Set<AssetPackage>();
     public DbSet<Finding> Findings => Set<Finding>();
+    public DbSet<DiscoveryRun> DiscoveryRuns => Set<DiscoveryRun>();
+    public DbSet<AssetEvidence> AssetEvidence => Set<AssetEvidence>();
+    public DbSet<HostKey> HostKeys => Set<HostKey>();
 
     // Global content catalogue (no tenant_id, no RLS) — see the class summary and ADR 0010.
     public DbSet<ContentSource> ContentSources => Set<ContentSource>();
@@ -173,6 +176,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(x => x.Source).IsRequired();
             e.Property(x => x.State).HasConversion(stateConverter).IsRequired();
             e.HasIndex(x => new { x.TenantId, x.Hostname });
+
+            // The discovery natural key (ADR 0024). PARTIAL, and that is the point: a sweep observes
+            // a reachability coordinate, not a machine identity — it cannot read a machine id without
+            // logging in — so this key is valid only for the pre-identity state and stops being the
+            // arbiter once inventory establishes one. Keyed on ip AND port because the five lab
+            // containers share 127.0.0.1; without the port they collapse into one asset.
+            e.HasIndex(x => new { x.TenantId, x.Ip, x.EndpointPort })
+                .HasDatabaseName("ux_assets_discovery_candidate")
+                .IsUnique()
+                .HasFilter("source = 'discovery' AND ip IS NOT NULL AND endpoint_port IS NOT NULL");
+
             TenantFk(e);
         });
 
@@ -224,6 +238,114 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasOne<Patch>()
                 .WithMany()
                 .HasForeignKey(x => x.PatchId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<DiscoveryRun>(e =>
+        {
+            e.ToTable("discovery_runs", t =>
+            {
+                t.HasCheckConstraint(
+                    "ck_discovery_runs_outcome", InList("outcome", DiscoveryRunOutcomes.All));
+
+                // A refused sweep probed nothing. Enforced rather than trusted, because "refused"
+                // and "found nothing" being indistinguishable is the defect this phase keeps
+                // designing against — Phase 5 shipped it three times as an empty batch with a green
+                // status and an advanced cursor.
+                t.HasCheckConstraint(
+                    "ck_discovery_runs_refusal_probed_nothing",
+                    "outcome NOT IN ('refused-by-policy', 'invalid-range') OR addresses_probed = 0");
+
+                // Open exactly while it has no completion time.
+                t.HasCheckConstraint(
+                    "ck_discovery_runs_completion",
+                    "(outcome = 'running') = (completed_at IS NULL)");
+            });
+
+            e.HasKey(x => x.Id);
+            // Target for the tenant-consistent FK from asset_evidence.
+            e.HasAlternateKey(x => new { x.TenantId, x.Id });
+            e.Property(x => x.Outcome).IsRequired();
+            e.Property(x => x.RequestedRanges).HasColumnType("jsonb").IsRequired();
+            e.Property(x => x.RequestedPorts).HasColumnType("jsonb").IsRequired();
+            e.Property(x => x.RefusedRanges).HasColumnType("jsonb").IsRequired();
+            e.HasIndex(x => new { x.TenantId, x.StartedAt });
+            TenantFk(e);
+        });
+
+        b.Entity<AssetEvidence>(e =>
+        {
+            e.ToTable("asset_evidence", t =>
+            {
+                t.HasCheckConstraint(
+                    "ck_asset_evidence_source", InList("source", AssetEvidenceSources.All));
+
+                // Discovery evidence with no run is not provenance, and every other source has no
+                // run to name.
+                t.HasCheckConstraint(
+                    "ck_asset_evidence_discovery_names_its_run",
+                    "(source = 'discovery') = (discovery_run_id IS NOT NULL)");
+            });
+
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Source).IsRequired();
+            e.Property(x => x.Detail).HasColumnType("jsonb");
+            e.HasIndex(x => new { x.TenantId, x.AssetId });
+            e.HasIndex(x => new { x.TenantId, x.Source, x.Present });
+            TenantFk(e);
+
+            // Restrict, not Cascade — the departure from asset_packages is deliberate. This row is
+            // WHY an asset is flagged what it is flagged (CLAUDE.md §4.6); letting a delete erase it
+            // would make the flag retroactively unexplainable.
+            e.HasOne<Asset>()
+                .WithMany()
+                .HasPrincipalKey(x => new { x.TenantId, x.Id })
+                .HasForeignKey(x => new { x.TenantId, x.AssetId })
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne<DiscoveryRun>()
+                .WithMany()
+                .HasPrincipalKey(x => new { x.TenantId, x.Id })
+                .HasForeignKey(x => new { x.TenantId, x.DiscoveryRunId })
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<HostKey>(e =>
+        {
+            e.ToTable("host_keys", t =>
+            {
+                t.HasCheckConstraint("ck_host_keys_status", InList("status", HostKeyStatuses.All));
+                t.HasCheckConstraint("ck_host_keys_port", "port BETWEEN 1 AND 65535");
+                t.HasCheckConstraint(
+                    "ck_host_keys_superseded_at",
+                    $"(status IN ({string.Join(", ", HostKeyStatuses.Closed.Select(v => $"'{v}'"))}))"
+                    + " = (superseded_at IS NOT NULL)");
+                t.HasCheckConstraint(
+                    "ck_host_keys_verified_after_first_seen", "last_verified_at >= first_seen_at");
+            });
+
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Host).IsRequired();
+            e.Property(x => x.KeyAlgorithm).IsRequired();
+            e.Property(x => x.FingerprintSha256).IsRequired();
+            e.Property(x => x.PublicKey).IsRequired();
+            e.Property(x => x.Status).IsRequired();
+
+            // THE PIN: at most one trusted key per endpoint, so "which key do we trust" has exactly
+            // one answer and a changed key must supersede rather than accumulate alongside.
+            e.HasIndex(x => new { x.TenantId, x.Host, x.Port })
+                .HasDatabaseName("ux_host_keys_trusted_endpoint")
+                .IsUnique()
+                .HasFilter("status = 'trusted'");
+
+            e.HasIndex(x => new { x.TenantId, x.FingerprintSha256 });
+            e.HasIndex(x => new { x.TenantId, x.AssetId });
+            TenantFk(e);
+
+            e.HasOne<Asset>()
+                .WithMany()
+                .HasPrincipalKey(x => new { x.TenantId, x.Id })
+                .HasForeignKey(x => new { x.TenantId, x.AssetId })
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

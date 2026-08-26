@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict rxzcPkWEvulvZfXwWhybT9NJCAthqxao1fClSPX66khWYe5oealv2DZecOlE04w
+\restrict rzjetWFsfeMbRsXsq3IhbuBqvCOcd85VRgCvfjA6RcXvWlbF6euWnL4QGQV0LCx
 
 -- Dumped from database version 16.14
 -- Dumped by pg_dump version 16.14
@@ -89,6 +89,29 @@ CREATE TABLE public.advisory_affects (
 
 
 --
+-- Name: asset_evidence; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.asset_evidence (
+    id uuid NOT NULL,
+    tenant_id uuid NOT NULL,
+    asset_id uuid NOT NULL,
+    source text NOT NULL,
+    present boolean NOT NULL,
+    discovery_run_id uuid,
+    observed_at timestamp with time zone NOT NULL,
+    address text,
+    port integer,
+    detail jsonb,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_asset_evidence_discovery_names_its_run CHECK (((source = 'discovery'::text) = (discovery_run_id IS NOT NULL))),
+    CONSTRAINT ck_asset_evidence_source CHECK ((source = ANY (ARRAY['discovery'::text, 'ad'::text, 'dhcp'::text, 'inventory'::text])))
+);
+
+ALTER TABLE ONLY public.asset_evidence FORCE ROW LEVEL SECURITY;
+
+
+--
 -- Name: asset_packages; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -123,7 +146,8 @@ CREATE TABLE public.assets (
     state text NOT NULL,
     last_seen timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL
+    updated_at timestamp with time zone NOT NULL,
+    endpoint_port integer
 );
 
 ALTER TABLE ONLY public.assets FORCE ROW LEVEL SECURITY;
@@ -203,6 +227,31 @@ ALTER TABLE ONLY public.data_keys FORCE ROW LEVEL SECURITY;
 
 
 --
+-- Name: discovery_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.discovery_runs (
+    id uuid NOT NULL,
+    tenant_id uuid NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    outcome text NOT NULL,
+    requested_ranges jsonb NOT NULL,
+    requested_ports jsonb NOT NULL,
+    refused_ranges jsonb NOT NULL,
+    addresses_probed integer NOT NULL,
+    hosts_found integer NOT NULL,
+    detail text,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_discovery_runs_completion CHECK (((outcome = 'running'::text) = (completed_at IS NULL))),
+    CONSTRAINT ck_discovery_runs_outcome CHECK ((outcome = ANY (ARRAY['running'::text, 'ok'::text, 'refused-by-policy'::text, 'invalid-range'::text, 'failed'::text]))),
+    CONSTRAINT ck_discovery_runs_refusal_probed_nothing CHECK (((outcome <> ALL (ARRAY['refused-by-policy'::text, 'invalid-range'::text])) OR (addresses_probed = 0)))
+);
+
+ALTER TABLE ONLY public.discovery_runs FORCE ROW LEVEL SECURITY;
+
+
+--
 -- Name: findings; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -223,6 +272,33 @@ CREATE TABLE public.findings (
 );
 
 ALTER TABLE ONLY public.findings FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: host_keys; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.host_keys (
+    id uuid NOT NULL,
+    tenant_id uuid NOT NULL,
+    host text NOT NULL,
+    port integer NOT NULL,
+    asset_id uuid,
+    key_algorithm text NOT NULL,
+    fingerprint_sha256 text NOT NULL,
+    public_key bytea NOT NULL,
+    status text NOT NULL,
+    first_seen_at timestamp with time zone NOT NULL,
+    last_verified_at timestamp with time zone NOT NULL,
+    superseded_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_host_keys_port CHECK (((port >= 1) AND (port <= 65535))),
+    CONSTRAINT ck_host_keys_status CHECK ((status = ANY (ARRAY['trusted'::text, 'pending'::text, 'superseded'::text, 'revoked'::text]))),
+    CONSTRAINT ck_host_keys_superseded_at CHECK (((status = ANY (ARRAY['superseded'::text, 'revoked'::text])) = (superseded_at IS NOT NULL))),
+    CONSTRAINT ck_host_keys_verified_after_first_seen CHECK ((last_verified_at >= first_seen_at))
+);
+
+ALTER TABLE ONLY public.host_keys FORCE ROW LEVEL SECURITY;
 
 
 --
@@ -307,6 +383,14 @@ ALTER TABLE ONLY public.data_keys
 
 
 --
+-- Name: discovery_runs ak_discovery_runs_tenant_id_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.discovery_runs
+    ADD CONSTRAINT ak_discovery_runs_tenant_id_id UNIQUE (tenant_id, id);
+
+
+--
 -- Name: __EFMigrationsHistory pk___ef_migrations_history; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -328,6 +412,14 @@ ALTER TABLE ONLY public.advisories
 
 ALTER TABLE ONLY public.advisory_affects
     ADD CONSTRAINT pk_advisory_affects PRIMARY KEY (id);
+
+
+--
+-- Name: asset_evidence pk_asset_evidence; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.asset_evidence
+    ADD CONSTRAINT pk_asset_evidence PRIMARY KEY (id);
 
 
 --
@@ -379,11 +471,27 @@ ALTER TABLE ONLY public.data_keys
 
 
 --
+-- Name: discovery_runs pk_discovery_runs; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.discovery_runs
+    ADD CONSTRAINT pk_discovery_runs PRIMARY KEY (id);
+
+
+--
 -- Name: findings pk_findings; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.findings
     ADD CONSTRAINT pk_findings PRIMARY KEY (id);
+
+
+--
+-- Name: host_keys pk_host_keys; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.host_keys
+    ADD CONSTRAINT pk_host_keys PRIMARY KEY (id);
 
 
 --
@@ -440,6 +548,27 @@ CREATE INDEX ix_advisory_affects_package_name_ecosystem ON public.advisory_affec
 
 
 --
+-- Name: ix_asset_evidence_tenant_id_asset_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_asset_evidence_tenant_id_asset_id ON public.asset_evidence USING btree (tenant_id, asset_id);
+
+
+--
+-- Name: ix_asset_evidence_tenant_id_discovery_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_asset_evidence_tenant_id_discovery_run_id ON public.asset_evidence USING btree (tenant_id, discovery_run_id);
+
+
+--
+-- Name: ix_asset_evidence_tenant_id_source_present; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_asset_evidence_tenant_id_source_present ON public.asset_evidence USING btree (tenant_id, source, present);
+
+
+--
 -- Name: ix_asset_packages_tenant_id_asset_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -475,6 +604,13 @@ CREATE INDEX ix_credentials_tenant_id_data_key_id ON public.credentials USING bt
 
 
 --
+-- Name: ix_discovery_runs_tenant_id_started_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_discovery_runs_tenant_id_started_at ON public.discovery_runs USING btree (tenant_id, started_at);
+
+
+--
 -- Name: ix_findings_advisory_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -503,6 +639,20 @@ CREATE INDEX ix_findings_tenant_id_state ON public.findings USING btree (tenant_
 
 
 --
+-- Name: ix_host_keys_tenant_id_asset_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_host_keys_tenant_id_asset_id ON public.host_keys USING btree (tenant_id, asset_id);
+
+
+--
+-- Name: ix_host_keys_tenant_id_fingerprint_sha256; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_host_keys_tenant_id_fingerprint_sha256 ON public.host_keys USING btree (tenant_id, fingerprint_sha256);
+
+
+--
 -- Name: ix_operators_tenant_id_email; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -524,11 +674,49 @@ CREATE UNIQUE INDEX ix_patches_source_vendor_id ON public.patches USING btree (s
 
 
 --
+-- Name: ux_assets_discovery_candidate; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ux_assets_discovery_candidate ON public.assets USING btree (tenant_id, ip, endpoint_port) WHERE ((source = 'discovery'::text) AND (ip IS NOT NULL) AND (endpoint_port IS NOT NULL));
+
+
+--
+-- Name: ux_host_keys_trusted_endpoint; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ux_host_keys_trusted_endpoint ON public.host_keys USING btree (tenant_id, host, port) WHERE (status = 'trusted'::text);
+
+
+--
 -- Name: advisory_affects fk_advisory_affects_advisories_advisory_id; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.advisory_affects
     ADD CONSTRAINT fk_advisory_affects_advisories_advisory_id FOREIGN KEY (advisory_id) REFERENCES public.advisories(id) ON DELETE CASCADE;
+
+
+--
+-- Name: asset_evidence fk_asset_evidence_assets_tenant_id_asset_id; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.asset_evidence
+    ADD CONSTRAINT fk_asset_evidence_assets_tenant_id_asset_id FOREIGN KEY (tenant_id, asset_id) REFERENCES public.assets(tenant_id, id) ON DELETE RESTRICT;
+
+
+--
+-- Name: asset_evidence fk_asset_evidence_discovery_runs_tenant_id_discovery_run_id; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.asset_evidence
+    ADD CONSTRAINT fk_asset_evidence_discovery_runs_tenant_id_discovery_run_id FOREIGN KEY (tenant_id, discovery_run_id) REFERENCES public.discovery_runs(tenant_id, id) ON DELETE RESTRICT;
+
+
+--
+-- Name: asset_evidence fk_asset_evidence_tenants_tenant_id; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.asset_evidence
+    ADD CONSTRAINT fk_asset_evidence_tenants_tenant_id FOREIGN KEY (tenant_id) REFERENCES public.tenants(id) ON DELETE RESTRICT;
 
 
 --
@@ -588,6 +776,14 @@ ALTER TABLE ONLY public.data_keys
 
 
 --
+-- Name: discovery_runs fk_discovery_runs_tenants_tenant_id; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.discovery_runs
+    ADD CONSTRAINT fk_discovery_runs_tenants_tenant_id FOREIGN KEY (tenant_id) REFERENCES public.tenants(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: findings fk_findings_advisories_advisory_id; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -620,6 +816,22 @@ ALTER TABLE ONLY public.findings
 
 
 --
+-- Name: host_keys fk_host_keys_assets_tenant_id_asset_id; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.host_keys
+    ADD CONSTRAINT fk_host_keys_assets_tenant_id_asset_id FOREIGN KEY (tenant_id, asset_id) REFERENCES public.assets(tenant_id, id) ON DELETE RESTRICT;
+
+
+--
+-- Name: host_keys fk_host_keys_tenants_tenant_id; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.host_keys
+    ADD CONSTRAINT fk_host_keys_tenants_tenant_id FOREIGN KEY (tenant_id) REFERENCES public.tenants(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: operators fk_operators_tenants_tenant_id; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -642,6 +854,12 @@ ALTER TABLE ONLY public.patch_supersedence
 ALTER TABLE ONLY public.patch_supersedence
     ADD CONSTRAINT fk_patch_supersedence_patches_superseded_by_patch_id FOREIGN KEY (superseded_by_patch_id) REFERENCES public.patches(id) ON DELETE CASCADE;
 
+
+--
+-- Name: asset_evidence; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.asset_evidence ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: asset_packages; Type: ROW SECURITY; Schema: public; Owner: -
@@ -674,16 +892,35 @@ ALTER TABLE public.credentials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.data_keys ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: discovery_runs; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.discovery_runs ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: findings; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.findings ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: host_keys; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.host_keys ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: operators; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.operators ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: asset_evidence tenant_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY tenant_isolation ON public.asset_evidence USING ((tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)) WITH CHECK ((tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid));
+
 
 --
 -- Name: asset_packages tenant_isolation; Type: POLICY; Schema: public; Owner: -
@@ -721,10 +958,24 @@ CREATE POLICY tenant_isolation ON public.data_keys USING ((tenant_id = (NULLIF(c
 
 
 --
+-- Name: discovery_runs tenant_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY tenant_isolation ON public.discovery_runs USING ((tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)) WITH CHECK ((tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid));
+
+
+--
 -- Name: findings tenant_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY tenant_isolation ON public.findings USING ((tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)) WITH CHECK ((tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid));
+
+
+--
+-- Name: host_keys tenant_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY tenant_isolation ON public.host_keys USING ((tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)) WITH CHECK ((tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid));
 
 
 --
@@ -756,6 +1007,13 @@ GRANT SELECT,INSERT,UPDATE ON TABLE public.advisories TO patchmgmt_content;
 
 GRANT SELECT ON TABLE public.advisory_affects TO patchmgmt_app;
 GRANT SELECT,INSERT,UPDATE ON TABLE public.advisory_affects TO patchmgmt_content;
+
+
+--
+-- Name: TABLE asset_evidence; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT ON TABLE public.asset_evidence TO patchmgmt_app;
 
 
 --
@@ -801,10 +1059,24 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.data_keys TO patchmgmt_app;
 
 
 --
+-- Name: TABLE discovery_runs; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.discovery_runs TO patchmgmt_app;
+
+
+--
 -- Name: TABLE findings; Type: ACL; Schema: public; Owner: -
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.findings TO patchmgmt_app;
+
+
+--
+-- Name: TABLE host_keys; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.host_keys TO patchmgmt_app;
 
 
 --
@@ -841,5 +1113,5 @@ GRANT SELECT ON TABLE public.tenants TO patchmgmt_app;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict rxzcPkWEvulvZfXwWhybT9NJCAthqxao1fClSPX66khWYe5oealv2DZecOlE04w
+\unrestrict rzjetWFsfeMbRsXsq3IhbuBqvCOcd85VRgCvfjA6RcXvWlbF6euWnL4QGQV0LCx
 

@@ -42,7 +42,8 @@ Two sources state them. `docs/ROADMAP.md` states them abstractly; the table belo
 named test proves it — never because the code looks right.
 
 **2 of 9 ticked** as of 2026-08-26. Slice 1 (sweep + target policy) landed and criterion (a)
-closed against the real fleet the same day. `main` is green at **576** across nine projects.
+closed against the real fleet the same day; slice 2 (schema) landed the same day too. `main` is
+green at **580** across nine projects.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
@@ -180,6 +181,31 @@ different ports, so five containers are observed as one host with five open port
 hosts. Establishing that those endpoints are five distinct machines requires a login, which is
 slice 3's job.
 
+## `db/schema.sql` has no drift test — candidate deferral, needs an owner
+
+**Flagged, deliberately NOT fixed here.** `db/schema.sql` is a `pg_dump --schema-only --no-owner`
+export. It was regenerated after the slice-2 migration and the diff was verified purely additive —
+only the new objects, no incidental drift from a different dump invocation.
+
+**Nothing enforces that it stays current.** Review **L4** named this in Phase 1 and it is still open:
+of the five frozen contract artifacts, this is the one with an authoritative source (the migrations)
+and no test that fails when the export falls behind it. [ADR 0021](../adr/0021-openapi-design-first.md)
+states the invariant this violates — *every frozen contract has exactly one authoritative artifact,
+and a test that fails when anything drifts from it* — and records that OpenAPI was the only contract
+missing both halves. `db/schema.sql` is missing the second half.
+
+**Why Phase 4 is not the phase to close it.** The fix is a test that dumps the live schema and
+compares it to the checked-in export, which needs a decision about normalisation (a `pg_dump` from a
+different client version reorders and rewords enough to make a naive comparison useless — this slice
+hit exactly that, twice, on `--no-owner` and `--no-privileges`). That is a piece of test
+infrastructure with its own design question, and it belongs to whoever owns the schema-contract
+surface rather than to the phase that happened to touch it next.
+
+**It therefore needs a named owner before it can be called a deferral at all**
+(`DIFFERENTIATORS.md:88`). Proposed: **Phase 13** (audit, compliance, evidence), which already owns
+proving that what is checked in matches what is running. Not assigned here — that is the reader's
+call, and until it is assigned this is a flagged gap rather than a deferral.
+
 ## Deferrals this phase must itself name
 
 `DIFFERENTIATORS.md:88` — deferring is allowed; deferring **without a named owner** is not.
@@ -188,13 +214,33 @@ The lab fleet has **no AD and no DHCP**, so correlation ships as a pluggable evi
 proven against synthetic / file-backed sources — which is exactly what criterion (f) asks for. Real
 LDAP and DHCP-lease ingestion are therefore deferred and need owners assigned before the phase closes.
 
+### Landed 2026-08-26 (slice 2) — schema
+
+`discovery_runs`, `asset_evidence`, `host_keys`, all tenant-scoped with FORCE RLS and exactly one
+`tenant_isolation` policy each, verified in the live catalog. No RLS exemption sought: CLAUDE.md
+§4.1's single named exemption stays at five global content tables and `RlsConventionTests`'
+allowlist is untouched.
+
+The `assets` edit — `endpoint_port` plus `ux_assets_discovery_candidate` — is
+[ADR 0024](../adr/0024-asset-discovery-natural-key.md), written **before** the migration because it
+changes a frozen contract.
+
+**Two departures from house convention, both deliberate and both now asserted rather than assumed:**
+
+- **The grants are not full CRUD.** `discovery_runs` and `host_keys` have no DELETE; `asset_evidence`
+  is append-only like `audit_log`. Every other tenant table is full CRUD, so a migration granting
+  these three the same way would look entirely normal in review and silently remove three
+  guarantees. `Phase4_tables_carry_their_declared_grant_posture_including_what_is_withheld` asserts
+  the **absence** of each withheld privilege, which is the load-bearing half.
+- **`asset_evidence` is RESTRICT, not CASCADE**, unlike `asset_packages`. The row is *why* an asset
+  is flagged what it is flagged (§4.6); letting a delete erase it would make the flag retroactively
+  unexplainable.
+
 ## Open asks (NEVER #6) — required before the slices that need them
 
-1. **Schema.** New tables `discovery_runs`, `asset_evidence`, `host_keys` — all tenant-scoped with
-   RLS, none joining the global-catalogue exemption. The first two are pre-authorized in spirit by
-   the Data section above; `host_keys` is new, from D-301. Exact DDL goes for approval before the
-   migration is written. Note `ix_assets_tenant_id_hostname` is **non-unique**, so criterion (h)
-   needs a natural key for idempotent upsert decided as part of this.
+1. ~~**Schema.**~~ **CLOSED 2026-08-26** — approved and migrated as
+   `20260826140155_DiscoveryAssetProvenanceAndHostKeys`. The `assets` natural key it turned on is
+   [ADR 0024](../adr/0024-asset-discovery-natural-key.md).
 2. **Connector contract, for D-306.** Either widen `EndpointTarget.Bastion` to a list (breaking) or
    add a `BastionChain` alongside it, keeping `Bastion` as the one-hop shorthand (additive).
    **Additive is recommended** — no existing caller changes.

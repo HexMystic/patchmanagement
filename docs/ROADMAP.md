@@ -508,7 +508,32 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   set. Five containers are observed as **one host with five open ports** — proving they are five
   distinct machines needs a login, which is slice 3. **`main` is green at 576 across all nine
   projects** (571 + the 5 new fleet tests), with the SSH fleet suite still 54 of 54.
-- **Two open NEVER #6 asks** before the slices that need them: the new tables (`discovery_runs`,
+- **Slice 2 landed 2026-08-26 — schema.** Three net-new tenant-scoped tables (`discovery_runs`,
+  `asset_evidence`, `host_keys`), plus one EDIT to the frozen `assets` table: `endpoint_port` and the
+  partial unique index `ux_assets_discovery_candidate`. **[ADR 0024](adr/0024-asset-discovery-natural-key.md)
+  was written before the migration, not at phase close** — the edit changes a frozen contract, and
+  0019-0023 set the convention that such decisions are recorded when they are made. The key is a
+  **reachability coordinate, not a machine identity**: a sweep cannot read a machine id without
+  logging in, so `(tenant_id, ip)` was rejected for collapsing the five lab containers into one asset
+  AND for letting DHCP reassignment silently merge two hosts, and `(tenant_id, hostname)` for keying
+  on a value discovery does not have. It **over-splits** — a Windows host on 5985+5986 yields two
+  candidates — because a redundant row is recoverable and a merged row is not.
+  **The grants are deliberately not full CRUD**: `discovery_runs` and `host_keys` get no DELETE, and
+  `asset_evidence` is append-only like `audit_log`. Erasing what was once a trusted host key would
+  destroy the record of a key CHANGE, which is the event D-301's store exists to capture.
+  **Two tests landed in the same commit, each mutation-verified**: `RlsConventionTests`
+  `Phase4_tables_carry_their_declared_grant_posture_including_what_is_withheld` (granting DELETE on
+  `host_keys` turns it red) and `SweepVocabularyTests` (3), which pins `SweepOutcome` against the live
+  `ck_discovery_runs_outcome` read via `pg_get_constraintdef` — adding an accepted value nothing can
+  produce turns two of the three red. This is the pin `ContentVocabularyTests` deliberately could not
+  add retroactively; both sides were authored in one slice, so it closes the gap before it opens.
+- **`db/schema.sql` was regenerated** (diff verified purely additive) and **still has no drift test —
+  review L4, open since Phase 1.** Flagged in `docs/phases/phase-4.md` as a candidate deferral
+  needing a named owner (proposed Phase 13), not silently fixed: the fix needs a normalisation
+  decision that belongs to whoever owns the schema-contract surface. **`main` is green at 580
+  across nine projects** (576 + 4 — three `SweepVocabularyTests` and the grant-posture test), with
+  the SSH fleet suite still 54 of 54.
+- **One NEVER #6 ask remains open** — `EndpointTarget.Bastion` becoming a chain, for D-306 at slice 5: the new tables (`discovery_runs`,
   `asset_evidence`, `host_keys`) and the `EndpointTarget` bastion-chain shape for D-306. Both are
   detailed in `docs/phases/phase-4.md`.
 
