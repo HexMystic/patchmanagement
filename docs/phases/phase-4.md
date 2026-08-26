@@ -35,8 +35,81 @@ detection** (a designed-in differentiator).
 Extends Phase 1: `assets` (managed, source), `asset_packages`; a discovery-run record
 for provenance; correlation results linking an asset to AD/DHCP evidence.
 
-## Exit criteria
-Sweep finds the lab containers on `localhost` ports; Linux package inventory populated
-for all 5 distros over SSH; a synthetic "seen but not in inventory" host is correctly
-flagged unmanaged; everything tenant-scoped (RLS holds); all connector calls
-time-bounded and idempotent.
+## Exit criteria — status
+
+Two sources state them. `docs/ROADMAP.md` states them abstractly; the table below is the
+**operative** form, because it names observable conditions. A criterion is ticked only when a
+named test proves it — never because the code looks right.
+
+**0 of 9 ticked** as of 2026-08-26 (phase opened).
+
+| # | Criterion | Proven by | Status |
+|---|-----------|-----------|--------|
+| a | Tenant-scoped IP-range/CIDR sweep finds the 5 lab containers on `localhost:2201-2205` and reports open management ports (22 / 5985 / 5986 / 445) | fleet integration test against the real lab | ☐ |
+| b | OS family classified from banner/probe **before** a connector is chosen | unit tests over captured banners | ☐ |
+| c | Candidates persisted to `assets` with `source = 'discovery'`, `managed = false` until inventoried | store integration test against real Postgres | ☐ |
+| d | Linux package inventory populated for **all 5 distros** over SSH → `asset_packages` (name, version, epoch, arch, source), plus kernel / OS-release onto `assets` | fleet integration test, per-distro theory | ☐ |
+| e | Failure sets the asset state **honestly** — `unreachable` / `auth-failed` / `scan-failed`, never collapsed into compliant (HARD-PROBLEMS #8) | outcome→state mapping tests, including a real wrong-key host | ☐ |
+| f | A synthetic "seen but in no inventory" host is flagged unmanaged **with its evidence** (seen at IP X by run Y; absent from AD / DHCP / inventory) | correlation tests — the explainability half is CLAUDE.md §4.6, not decoration | ☐ |
+| g | Everything tenant-scoped; RLS holds on every new table; `RlsConventionTests` stays green with **no new exemption** | the existing convention suite, unmodified | ☐ |
+| h | Every connector call time-bounded and idempotent (NEVER #5); a re-run writes the **same rows with stable ids**, not merely un-duplicated | idempotency tests, to Phase 5's standard | ☐ |
+| i | The Discovery module is **reachable in the shipped host** | `Api_project_ships_the_discovery_module` + `Real_host_container_resolves_the_discovery_module` | ☐ |
+
+**Why (i) is on the list from day one.** The unreferenced-module defect has now shipped three
+times — the Vault at `a50d9ec`, Phase 3's WIP, and Phase 5's foundation slice. Phase 4 adds the
+fourth module, so the reachability test is written before the module exists, not after.
+
+## Inherited deferrals — this phase owns three
+
+Each was verified **in code** at `48f3cf1` when the phase opened. None is assumed done.
+
+| ID | Verified state at phase open | What closing it requires |
+|----|------------------------------|--------------------------|
+| **D-301** — persistent verified-host-key (TOFU) store | **OPEN.** `ConnectorSecurityOptions.cs:26` is a single bool; `SshNetSessionFactory.cs:278-279` sets `e.CanTrust = _security.AllowUnknownHostKeys` — a blanket yes/no. No fingerprint is read, compared or persisted anywhere in `src/` | A `host_keys` store, and a test proving a **changed** fingerprint is refused. Until then the `AllowUnknownHostKeys` gate stands and the connector cannot be pointed at a real fleet |
+| **D-306** — multi-hop (>1) bastion chains | **OPEN, and larger than the factory.** `SshNetSessionFactory.cs:184-190` refuses `Hops.Count > 1` by name (`BastionPlanningTests.cs:105-127` proves it), but **that branch is unreachable from the planner**: `EndpointTarget.Bastion` is a single `BastionHop?`, so `ConnectionPlanner.Plan` can only ever emit 0 or 1 hops. The two-hop plan in that test is hand-constructed | A change to the **topology model on the target** — a `Shared/Contracts/Connectors` change under ADR 0017, and therefore a NEVER #6 ask — not merely implementing a loop |
+| **D-310** — `AcquireAsync` runs a full eviction sweep per borrow | **OPEN.** `SshConnectionPool.AcquireAsync:80` calls `EvictIdle()` on every borrow; `EvictIdle` takes `lock (_lifetime)` and scans all entries, so acquires serialise on an O(entries) scan | **Measurement, not reasoning.** A sweep is the first thing to borrow hard against many hosts at once. Whether dropping the call changes eviction timing observably is the question to answer with evidence |
+
+**A name collision worth knowing before reading the connector.** `ConnectionKey.HostKeyFor` is a
+**governor concurrency key**, not a cryptographic host key. Grepping `HostKey` in `src/` returns it
+alongside the D-301 policy line; skimming the results could suggest a key store exists. It does not.
+
+## The sweep is the first feature that can contact an arbitrary IP
+
+`.claude/hooks/lab_only_guard.py` (ADR 0007) inspects **Bash `ssh`/`scp`/`sftp` command strings**. It
+structurally cannot see a socket opened by our own C#. Every prior phase reached endpoints only along
+paths that hook could observe; a CIDR sweep does not.
+
+So NEVER #4 needs an **in-product** equivalent: a dev-mode target allowlist that refuses to sweep
+anything outside loopback, **defaulted closed**, in the same shape as
+`ConnectorSecurityOptions.AllowUnknownHostKeys` — configuration, opt-in per environment, and the
+gating is the point rather than a side effect. It ships in the sweep slice, not as a later addition.
+
+## Deferrals this phase must itself name
+
+`DIFFERENTIATORS.md:88` — deferring is allowed; deferring **without a named owner** is not.
+
+The lab fleet has **no AD and no DHCP**, so correlation ships as a pluggable evidence-source seam
+proven against synthetic / file-backed sources — which is exactly what criterion (f) asks for. Real
+LDAP and DHCP-lease ingestion are therefore deferred and need owners assigned before the phase closes.
+
+## Open asks (NEVER #6) — required before the slices that need them
+
+1. **Schema.** New tables `discovery_runs`, `asset_evidence`, `host_keys` — all tenant-scoped with
+   RLS, none joining the global-catalogue exemption. The first two are pre-authorized in spirit by
+   the Data section above; `host_keys` is new, from D-301. Exact DDL goes for approval before the
+   migration is written. Note `ix_assets_tenant_id_hostname` is **non-unique**, so criterion (h)
+   needs a natural key for idempotent upsert decided as part of this.
+2. **Connector contract, for D-306.** Either widen `EndpointTarget.Bastion` to a list (breaking) or
+   add a `BastionChain` alongside it, keeping `Bastion` as the one-hop shorthand (additive).
+   **Additive is recommended** — no existing caller changes.
+
+## Slice plan — red-first
+
+| # | Slice | Gated on |
+|---|-------|----------|
+| 0 | Docs: status → in-progress, this criteria table | — |
+| 1 | Sweep + in-product lab-only guard | Docker (lab fleet) |
+| 2 | Persistence + RLS | ask 1 · Docker (Postgres) |
+| 3 | Inventory over the 5-distro fleet | Docker (lab fleet) |
+| 4 | Correlation + evidence | slice 2 |
+| 5 | Deferrals: D-301 store, D-306 chain, D-310 measurement | ask 2 |

@@ -92,7 +92,7 @@ ecosystem-extensible (decision 1, `docs/phases/phase-6.md`).
 | 1 | Contracts | solo | 0 | **complete** |
 | 2 | Credential vault | parallel | 1 | **complete** |
 | 3 | Endpoint connector | parallel | 1 | **complete** — merged to `main`, **311 green on `main` post-merge**, 0 skipped. Four review passes. **SSH verified against the lab fleet; WinRM written and unit-proven but NEVER run against a Windows host (D-303)** |
-| 4 | Discovery & inventory | parallel | 3 | not-started |
+| 4 | Discovery & inventory | parallel | 3 | in-progress |
 | 5 | Content ingestion | parallel | 1 | **complete** — merged to `main` 2026-08-25, **531 green on `main` post-merge**, 0 skipped. Store criteria (c)–(f) proven against real Postgres. **(a) is 8 of 8 feeds** — `rhsa`, `msrc`, `dsa` and `wsusscn2` were rewritten 2026-08-21 against captured payloads, each failing loudly on an unexpected shape. **(b) incrementality landed 2026-08-25** ([ADR 0023](adr/0023-incremental-cursor-mechanisms.md)): all eight connectors consume their cursor, by four mechanisms chosen per feed, asserted through the outgoing request. **(i)** carries a residual — the `AppDbContext` CHECK copy — which ADR 0018 assigns to **Phase 6**, not to this phase. **Deferred, not done:** `ContentSyncService` is invoked by nothing — no job, no endpoint (owner Phase 11) — plus D-502, D-503, `msrc` back-fill and NVD 120-day window chunking |
 | 6 | Assessment | solo | 4, 5 | not-started |
 | 7 | Risk scoring | parallel | 6 | not-started |
@@ -448,7 +448,7 @@ inherits and what it cannot claim until then.
 only against a fake session. The lab grants `NOPASSWD` sudo with a locked account password, so it
 **structurally cannot** exercise it — a green fleet run says nothing about it.
 
-## Phase 4 — Discovery & inventory  · parallel · Status: not-started
+## Phase 4 — Discovery & inventory  · parallel · Status: in-progress
 - **Goal:** Discover endpoints; build inventory; surface **unmanaged assets**.
 - **Dependencies:** Phase 3.
 - **Exit criteria:** IP-range sweep; per-host inventory (OS, packages, patch level)
@@ -456,6 +456,26 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   results persisted with tenant scoping.
 - **Owned paths:** `src/Modules/Discovery`.
 - **Detail:** `docs/phases/phase-4.md`. See `docs/DIFFERENTIATORS.md` (unmanaged assets).
+- **Opened 2026-08-26 at `48f3cf1`. 0 of 9 exit criteria ticked** — the operative, testable form of
+  the criteria above is the table in `docs/phases/phase-4.md`, which adds one this line does not
+  imply: **the Discovery module must be reachable in the shipped host**, proven red-first. The
+  unreferenced-module defect has shipped three times (Vault `a50d9ec`, Phase 3 WIP, Phase 5
+  foundation); Phase 4 adds the fourth module, so that test is written before the module exists.
+- **This phase owns three inherited deferrals, and all three were verified OPEN in code at phase
+  open — none is assumed done.** `D-301` (TOFU store): `ConnectorSecurityOptions.cs:26` is still a
+  single bool and no fingerprint is read, compared or persisted anywhere in `src/`, so the
+  `AllowUnknownHostKeys` gate still stands. `D-306` (multi-hop bastion): the `Hops.Count > 1`
+  refusal at `SshNetSessionFactory.cs:184-190` is **unreachable from the planner** — `EndpointTarget`
+  carries one nullable `BastionHop`, so opening it is a change to the **topology model** under ADR
+  0017, a NEVER #6 ask, not a loop. `D-310` (per-borrow eviction sweep): still called from
+  `AcquireAsync`, and it resolves by **measurement**, not by reasoning about redundancy.
+- **NEVER #4 gains an in-product half here.** The sweep is the first feature that can, by design,
+  contact an arbitrary IP, and `.claude/hooks/lab_only_guard.py` inspects Bash command strings — it
+  structurally cannot see a socket opened by our own C#. A dev-mode target allowlist, defaulted
+  closed, ships in the sweep slice.
+- **Two open NEVER #6 asks** before the slices that need them: the new tables (`discovery_runs`,
+  `asset_evidence`, `host_keys`) and the `EndpointTarget` bastion-chain shape for D-306. Both are
+  detailed in `docs/phases/phase-4.md`.
 
 ## Phase 5 — Content ingestion  · parallel · Status: in-progress
 - **Goal:** Ingest authoritative vuln/patch content.
