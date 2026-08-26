@@ -9,6 +9,7 @@
     <ProjectReference Include="..\..\Modules\Vault\PatchManagement.Vault.csproj" />
     <ProjectReference Include="..\..\Modules\Connectors\PatchManagement.Connectors.csproj" />
     <ProjectReference Include="..\..\Modules\Content\PatchManagement.Content.csproj" />
+    <ProjectReference Include="..\..\Modules\Discovery\PatchManagement.Discovery.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -473,6 +473,22 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   contact an arbitrary IP, and `.claude/hooks/lab_only_guard.py` inspects Bash command strings — it
   structurally cannot see a socket opened by our own C#. A dev-mode target allowlist, defaulted
   closed, ships in the sweep slice.
+- **Slice 1 landed 2026-08-26 — CIDR sweep + the in-product NEVER #4 guard. Red-first: 9 of 9 red
+  before implementation**, and the red run is the point. Seven `TargetPolicyTests` failed
+  `Expected: RefusedByPolicy / Actual: Ok`, and `A_refused_range_is_never_probed` failed with the
+  attempt log printed — `[("10.0.0.0", 22), ("10.0.0.1", 22), ("10.0.0.2", 22), ("10.0.0.3", 22)]`,
+  an unguarded sweep enumerating an out-of-lab RFC1918 range. The other two were criterion (i),
+  failing before `PatchManagement.Api.csproj` gained its `ProjectReference`. Green at **38** in
+  `PatchManagement.Discovery.Tests`, plus 8 of 8 in `HostModuleDiscoveryTests`.
+  **The refusal is all-or-nothing** — one out-of-scope range refuses the whole request rather than
+  sweeping the rest, because a partially-swept estate reported as a success is a coverage gap that
+  reads as a clean bill of health, which is the shape Phase 5's empty-batch-green-status connectors
+  already shipped once. Ranges are also refused **by name** when they cannot be bounded: IPv6 (a
+  `/64` is 1.8e19 addresses) and anything above the per-range host cap, never truncated.
+  **`SocketChokePointTests` is the durable half.** The policy tests prove the policy stops the
+  sweeper; only the choke-point scan proves it stops the *module*, by pinning
+  `src/Modules/Discovery` to exactly one file permitted to open a network connection. Verified
+  non-inert by mutation — emptying its allowlist turns it red.
 - **Two open NEVER #6 asks** before the slices that need them: the new tables (`discovery_runs`,
   `asset_evidence`, `host_keys`) and the `EndpointTarget` bastion-chain shape for D-306. Both are
   detailed in `docs/phases/phase-4.md`.

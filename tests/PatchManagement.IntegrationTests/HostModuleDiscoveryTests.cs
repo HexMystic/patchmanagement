@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using PatchManagement.Contracts.Connectors;
 using PatchManagement.Contracts.Content;
 using PatchManagement.Contracts.Credentials;
+using PatchManagement.Contracts.Discovery;
 
 namespace PatchManagement.IntegrationTests;
 
@@ -175,6 +176,50 @@ public sealed class HostModuleDiscoveryTests
                 Feeds.Dsa, Feeds.Rhsa, Feeds.Msrc, Feeds.Wsusscn2,
             },
             new SortedSet<string>(connectors.Select(c => c.Kind), StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Same guard, for the Discovery module — written before the module was referenced, which is
+    /// the only order in which it can be trusted. This defect has shipped three times: the Vault at
+    /// <c>a50d9ec</c>, Phase 3's WIP, and Phase 5's WIP, that last one a complete module with eight
+    /// feed connectors and no path by which its registrar could ever be discovered. Phase 4 adds the
+    /// fourth module, so the test exists before the <c>ProjectReference</c> does.
+    /// </summary>
+    [Fact]
+    public void Api_project_ships_the_discovery_module()
+    {
+        var deps = ApiDepsJsonPath();
+        Assert.True(File.Exists(deps), $"Expected the API's build output at '{deps}'.");
+
+        Assert.True(
+            File.ReadAllText(deps).Contains("PatchManagement.Discovery", StringComparison.Ordinal),
+            "PatchManagement.Api.deps.json does not list PatchManagement.Discovery, so the module "
+            + "never reaches the host output and CompositionRoot cannot discover "
+            + "DiscoveryModuleRegistrar — network discovery would be unreachable in production. Add "
+            + @"<ProjectReference Include=""..\..\Modules\Discovery\PatchManagement.Discovery.csproj"" /> "
+            + $"to src/Host/Api/PatchManagement.Api.csproj.{Environment.NewLine}Checked: {deps}");
+    }
+
+    /// <summary>
+    /// The behavioural half for Discovery, asserted through <see cref="INetworkSweeper"/> — which
+    /// lives in PatchManagement.Contracts for exactly this reason (see the class remarks): a test
+    /// project that referenced the module would copy its DLL into its own output, discovery would
+    /// succeed on that copy, and this test would pass while the API shipped without the module.
+    /// </summary>
+    [Fact]
+    public void Real_host_container_resolves_the_discovery_module()
+    {
+        using var factory = new WebApplicationFactory<Program>();
+        using var scope = factory.Services.CreateScope();
+
+        var sweeper = scope.ServiceProvider.GetService<INetworkSweeper>();
+
+        Assert.True(sweeper is not null,
+            "The real host's container has no INetworkSweeper — DiscoveryModuleRegistrar was not "
+            + "discovered by CompositionRoot, so the Discovery module is not loaded in the shipped app.");
+
+        // Compared as a string so this project needs no compile-time reference to the module.
+        Assert.Equal("PatchManagement.Discovery", sweeper.GetType().Assembly.GetName().Name);
     }
 
     /// <summary>Path to the API's own build output, matching this test run's configuration.</summary>

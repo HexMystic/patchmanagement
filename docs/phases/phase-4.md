@@ -41,11 +41,12 @@ Two sources state them. `docs/ROADMAP.md` states them abstractly; the table belo
 **operative** form, because it names observable conditions. A criterion is ticked only when a
 named test proves it — never because the code looks right.
 
-**0 of 9 ticked** as of 2026-08-26 (phase opened).
+**1 of 9 ticked** as of 2026-08-26. Slice 1 (sweep + target policy) landed; criterion (i) is
+proven. Criterion (a) is **half-proven** — see its row.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
-| a | Tenant-scoped IP-range/CIDR sweep finds the 5 lab containers on `localhost:2201-2205` and reports open management ports (22 / 5985 / 5986 / 445) | fleet integration test against the real lab | ☐ |
+| a | Tenant-scoped IP-range/CIDR sweep finds the 5 lab containers on `localhost:2201-2205` and reports open management ports (22 / 5985 / 5986 / 445) | fleet integration test against the real lab | ☐ **half** — the sweep engine, the bounded-range rules and the target policy are proven by `NetworkSweeperTests` (11) + `CidrBlockTests` (18) + `TargetPolicyTests` (9), all against a fake probe that opens no socket. **The half that is unproven is the half that touches the lab**: nothing has yet demonstrated the sweep finding a real container on a real port, because Docker was down for the whole slice |
 | b | OS family classified from banner/probe **before** a connector is chosen | unit tests over captured banners | ☐ |
 | c | Candidates persisted to `assets` with `source = 'discovery'`, `managed = false` until inventoried | store integration test against real Postgres | ☐ |
 | d | Linux package inventory populated for **all 5 distros** over SSH → `asset_packages` (name, version, epoch, arch, source), plus kernel / OS-release onto `assets` | fleet integration test, per-distro theory | ☐ |
@@ -53,11 +54,29 @@ named test proves it — never because the code looks right.
 | f | A synthetic "seen but in no inventory" host is flagged unmanaged **with its evidence** (seen at IP X by run Y; absent from AD / DHCP / inventory) | correlation tests — the explainability half is CLAUDE.md §4.6, not decoration | ☐ |
 | g | Everything tenant-scoped; RLS holds on every new table; `RlsConventionTests` stays green with **no new exemption** | the existing convention suite, unmodified | ☐ |
 | h | Every connector call time-bounded and idempotent (NEVER #5); a re-run writes the **same rows with stable ids**, not merely un-duplicated | idempotency tests, to Phase 5's standard | ☐ |
-| i | The Discovery module is **reachable in the shipped host** | `Api_project_ships_the_discovery_module` + `Real_host_container_resolves_the_discovery_module` | ☐ |
+| i | The Discovery module is **reachable in the shipped host** | `Api_project_ships_the_discovery_module` + `Real_host_container_resolves_the_discovery_module` | ☑ **proven red-first**, both failed before `PatchManagement.Api.csproj` gained its `ProjectReference` — the deps.json guard on the missing entry, the container guard on a null `INetworkSweeper` |
 
 **Why (i) is on the list from day one.** The unreferenced-module defect has now shipped three
 times — the Vault at `a50d9ec`, Phase 3's WIP, and Phase 5's foundation slice. Phase 4 adds the
 fourth module, so the reachability test is written before the module exists, not after.
+
+## This phase runs on `main`, by explicit decision
+
+**Deviation from WORKFLOW §4, decided 2026-08-26 and recorded here rather than left implicit.**
+Phase 4 commits directly to `main`; no `phase/4-discovery` branch is cut.
+
+The branch convention exists to keep `main` green while several phases are in flight and to give the
+§4 merge sequence something to merge. Neither applies here: this is a **single-worktree setup with
+nothing else in flight**, so a phase branch would be overhead that buys no isolation — the merge
+sequence would be a fast-forward of one branch onto a `main` no one else is touching.
+
+What is given up, stated plainly so it is not rediscovered later: **`main` is no longer guaranteed
+green between slices.** A slice that lands red leaves `main` red until the next commit, where the
+branch convention would have contained it. That is the accepted cost, and it raises the bar on the
+red-first discipline rather than lowering it — each slice's green run is what keeps `main` honest,
+because nothing else will.
+
+If a second phase starts in parallel, this decision lapses and the branch convention resumes.
 
 ## Inherited deferrals — this phase owns three
 
@@ -83,6 +102,33 @@ So NEVER #4 needs an **in-product** equivalent: a dev-mode target allowlist that
 anything outside loopback, **defaulted closed**, in the same shape as
 `ConnectorSecurityOptions.AllowUnknownHostKeys` — configuration, opt-in per environment, and the
 gating is the point rather than a side effect. It ships in the sweep slice, not as a later addition.
+
+### Landed 2026-08-26 (slice 1)
+
+`DiscoverySecurityOptions.AllowedTargets` — empty by default, so a deployment that has not declared
+its scope sweeps nothing. `DiscoveryTargetPolicy` evaluates every parsed range **before a socket is
+opened**, and a request is permitted only when a single allowed block contains it *entirely*;
+partial overlap is refused rather than clipped. `appsettings.Development.json` declares
+`127.0.0.0/8` and nothing else; the production baseline in `appsettings.json` declares nothing.
+
+Two properties are worth separating, because only one of them is about the sweeper:
+
+- **The policy stops the sweep.** `TargetPolicyTests` asserts on the *probe attempt log*, not on the
+  returned host list — "no hosts came back" is also what a fully-executed sweep of an empty subnet
+  looks like, so only the absence of attempts distinguishes refusing to look from looking and
+  finding nothing.
+- **The policy stops the module.** `SocketChokePointTests` pins `src/Modules/Discovery` to exactly
+  one file that may open a network connection. Without it, a later slice could reach the network
+  down a freshly-written second path and leave every policy test green. Widening its allowlist is
+  the place that decision has to be recorded — inventory (slice 3) will need it.
+
+**One residual, named rather than left to be rediscovered.** `NetworkSweeper` creates one task per
+address up front and lets `MaxConcurrentProbes` throttle them at a semaphore. Concurrency is
+genuinely bounded — that is what the cap is for — but *task creation* is not: a `/16` allocates
+65,536 pending waiters before the first probe returns. It is correct and the memory is small, so it
+is not worth churning now; it is worth revisiting in slice 3, where address counts stop being
+hypothetical, alongside **D-310** (the pool's per-borrow eviction sweep), which this phase already
+owns and which is the same question one layer down.
 
 ## Deferrals this phase must itself name
 
