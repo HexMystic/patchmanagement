@@ -573,6 +573,34 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   `PatchManagement.IntegrationTests`, which must reference no module or its reachability test passes
   on its own copy of the DLL; collapsing the four onto `TestSupport` is adjacent to **D-308**.
   **`main` is green at 595** across nine projects (584 + 11).
+- **Slice 3 landed 2026-08-26 — classification, inventory, honest failure states. (b), (d) and (e)
+  tick; 8 of 9, and only (f) correlation remains.** `main` green at **624** (595 + 29).
+  **(b) closes for less than its wording implies, and the captures are why.** All five lab banners
+  were captured under the Phase 5 PROVENANCE rule. Ubuntu and Debian name themselves; **Rocky and
+  Alma emit byte-identical `SSH-2.0-OpenSSH_9.9` and name nothing.** "No vendor suffix ⇒ Red Hat" is
+  true on this fleet and false everywhere else, so the classifier reports `unknown` rather than
+  guessing — protocol is always determined (which is what selects a connector), family only for the
+  Debian side. Both identical captures are kept, because one alone reads as an unrecognised value
+  rather than as proof the banner carries no distro information. Red-first: the naive classifier gave
+  `Expected: "unknown" / Actual: "rhel"`.
+  **(e) is proven by a host, not a mapping table** — a real rejected key and a real closed port.
+  `InventoryService` probes `TestConnectivityAsync` FIRST, because `EndpointFactsCollector` reports
+  every failure as one exception type and a plain try/catch would record `scan-failed` for a rejected
+  credential, an unreachable host and a broken command alike (HARD-PROBLEMS #12).
+  **TWO REAL DEFECTS FOUND IN PHASE 3**, handled differently and both worth reading:
+  (1) `EndpointFactsCollector` takes a single `IEndpointConnector` while the module registers two, so
+  DI hands it the last one — observed as `COLLECTOR_USES=WinRmConnector`, making every SSH inventory
+  through it `AuthFailed`, and WinRM facts are deferred anyway (D-302). **Fixed in the consumer only**
+  (dispatch via `IEndpointConnectorRegistry`); the module registration is untouched and the defect is
+  still live in the shipped host — the proper fix changes Phase 3's API.
+  (2) The rpm query asked only for `VERSION-RELEASE`, so **every RPM epoch was silently dropped**
+  between a host that knows it and `asset_packages.epoch`, a column that exists because the epoch
+  DOMINATES version comparison (HARD-PROBLEMS #3). **Fixed in `src/Modules/Connectors`** — criterion
+  (d) names epoch and Discovery has no workaround, since the data never arrives. `Connectors.
+  IntegrationTests` stays 54 of 54. dpkg needed nothing; its `${Version}` already carries the epoch.
+  **A doc correction, not an implementation:** `phase-4.md` said inventory sets "ready-for-assessment
+  on success" — a state the frozen Phase-1 machine does not have. Success is `managed = true` plus a
+  fresh package set; assessment owns the compliance states.
 - **One NEVER #6 ask remains open** — `EndpointTarget.Bastion` becoming a chain, for D-306 at slice 5: the new tables (`discovery_runs`,
   `asset_evidence`, `host_keys`) and the `EndpointTarget` bastion-chain shape for D-306. Both are
   detailed in `docs/phases/phase-4.md`.

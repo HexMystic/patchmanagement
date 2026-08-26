@@ -39,6 +39,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Modules\Discovery\PatchManagement.Discovery.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Connectors\PatchManagement.Connectors.csproj" />
     <ProjectReference Include="..\..\src\Shared\Contracts\PatchManagement.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Infrastructure\Persistence\PatchManagement.Persistence.csproj" />
     <ProjectReference Include="..\PatchManagement.TestSupport\PatchManagement.TestSupport.csproj" />

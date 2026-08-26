@@ -3,6 +3,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using PatchManagement.Contracts.Discovery;
 using Microsoft.Extensions.Logging;
+using PatchManagement.Connectors;
+using PatchManagement.Discovery.Inventory;
 using PatchManagement.Discovery.Store;
 using PatchManagement.Discovery.Sweep;
 using PatchManagement.Persistence;
@@ -45,6 +47,14 @@ public static class DiscoveryServiceCollectionExtensions
         services.TryAddScoped<IDiscoveryStore>(sp => new DiscoveryStore(
             sp.GetRequiredService<AppDbContext>(),
             sp.GetRequiredService<TimeProvider>()));
+
+        services.TryAddScoped<IInventoryService>(sp => new InventoryService(
+            // The REGISTRY, not a connector: EndpointFactsCollector takes a single
+            // IEndpointConnector and two are registered, so resolving it from DI hands it whichever
+            // was registered last (WinRmConnector). See InventoryService's remarks.
+            sp.GetRequiredService<IEndpointConnectorRegistry>(),
+            sp.GetRequiredService<IDiscoveryStore>(),
+            sp.GetRequiredService<ILogger<InventoryService>>()));
 
         services.TryAddScoped<IDiscoveryService>(sp => new DiscoveryService(
             sp.GetRequiredService<INetworkSweeper>(),

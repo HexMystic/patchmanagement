@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using PatchManagement.Contracts.Connectors;
 using PatchManagement.Contracts.Discovery;
 using PatchManagement.Persistence;
 using PatchManagement.Contracts.States;
@@ -173,6 +174,80 @@ internal sealed class DiscoveryStore(AppDbContext db, TimeProvider time) : IDisc
     private static IReadOnlyList<(string Address, int Port, IReadOnlyList<int> AllOpenPorts)> Flatten(
         IReadOnlyList<DiscoveredHost> hosts) =>
         [.. hosts.SelectMany(h => h.OpenPorts.Select(p => (h.Address, Port: p, AllOpenPorts: h.OpenPorts)))];
+
+    public async Task<int> ReplacePackagesAsync(
+        Guid assetId, EndpointFacts facts, CancellationToken ct)
+    {
+        var asset = await db.Assets.SingleAsync(a => a.Id == assetId, ct).ConfigureAwait(false);
+        var now = time.GetUtcNow();
+
+        asset.OsFamily = facts.OsFamily;
+        asset.OsVersion = facts.OsVersion;
+        asset.Managed = true;
+        asset.LastSeen = now;
+        asset.UpdatedAt = now;
+        // State is deliberately NOT changed. The frozen machine has no "inventoried" state, and
+        // assessment (Phase 6) is the only thing entitled to decide compliance. See InventoryResult.
+
+        // Replace, not merge — see IDiscoveryStore. ExecuteDelete issues one DELETE rather than
+        // loading every row to delete it, which matters on a host with 2,000 packages.
+        await db.AssetPackages
+            .Where(p => p.AssetId == assetId)
+            .ExecuteDeleteAsync(ct)
+            .ConfigureAwait(false);
+
+        foreach (var package in facts.Packages)
+        {
+            var (version, epoch) = SplitEpoch(package.Version);
+
+            db.AssetPackages.Add(new AssetPackage
+            {
+                Id = Guid.NewGuid(),
+                TenantId = asset.TenantId,
+                AssetId = assetId,
+                Name = package.Name,
+                Version = version,
+                Epoch = epoch,
+                Arch = package.Architecture,
+                Source = facts.PackageManager,
+                CreatedAt = now,
+            });
+        }
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        return facts.Packages.Count;
+    }
+
+    public async Task RecordFailureAsync(Guid assetId, EndpointState state, CancellationToken ct)
+    {
+        var asset = await db.Assets.SingleAsync(a => a.Id == assetId, ct).ConfigureAwait(false);
+
+        asset.State = state;
+        asset.UpdatedAt = time.GetUtcNow();
+        // last_seen is NOT advanced: we did not see it. That is what the column means, and an
+        // unreachable host whose last_seen kept moving would never show up as stale.
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Splits an RPM <c>epoch:version-release</c> into its parts. Debian versions can also carry an
+    /// epoch in the same <c>1:2.3</c> form, so this is not rpm-specific.
+    ///
+    /// <para>The epoch is stored SEPARATELY because it dominates version comparison and is invisible
+    /// in the version string a naive compare would use (HARD-PROBLEMS #3). Losing it here would make
+    /// Phase 6 compare <c>2.3</c> against <c>1:2.3</c> as though they were the same release.</para>
+    /// </summary>
+    private static (string Version, int? Epoch) SplitEpoch(string raw)
+    {
+        var colon = raw.IndexOf(':');
+        if (colon <= 0 || !int.TryParse(raw[..colon], out var epoch))
+        {
+            return (raw, null);
+        }
+
+        return (raw[(colon + 1)..], epoch);
+    }
 
     private static string OutcomeName(SweepOutcome outcome) => outcome switch
     {

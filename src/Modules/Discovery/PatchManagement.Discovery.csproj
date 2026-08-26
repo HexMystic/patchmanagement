@@ -22,6 +22,10 @@
          a second place to get tenant isolation wrong. Content is NOT the precedent: it owns the
          global catalogue, which has no RLS (ADR 0010). -->
     <ProjectReference Include="..\..\Infrastructure\Persistence\PatchManagement.Persistence.csproj" />
+    <!-- Inventory reaches endpoints through the connector rather than reimplementing SSH:
+         "per-host inventory via the connector" is the phase's own wording, and
+         EndpointFactsCollector already speaks dpkg and rpm. -->
+    <ProjectReference Include="..\Connectors\PatchManagement.Connectors.csproj" />
   </ItemGroup>
 
   <ItemGroup>

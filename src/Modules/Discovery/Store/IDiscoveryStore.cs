@@ -29,4 +29,23 @@ internal interface IDiscoveryStore
     /// </summary>
     Task<IReadOnlyList<Guid>> UpsertCandidatesAsync(
         Guid runId, IReadOnlyList<DiscoveredHost> hosts, CancellationToken ct);
+
+    /// <summary>
+    /// Records a successful inventory: OS identity onto the asset, <c>managed = true</c>, and the
+    /// package set replaced wholesale. Returns the number of packages written.
+    ///
+    /// <para><b>Replace, not merge.</b> A package set is a snapshot of what is installed NOW, so
+    /// merging would leave a package that had been REMOVED sitting in the inventory forever — and
+    /// Phase 6 would then assess a host against software it no longer has. Removal is exactly as
+    /// important as installation to a patch product.</para>
+    /// </summary>
+    Task<int> ReplacePackagesAsync(
+        Guid assetId, Contracts.Connectors.EndpointFacts facts, CancellationToken ct);
+
+    /// <summary>
+    /// Records that inventory could not be completed, moving the asset to an honest failure state.
+    /// Never collapses "couldn't check" into compliant (HARD-PROBLEMS #8).
+    /// </summary>
+    Task RecordFailureAsync(
+        Guid assetId, Contracts.States.EndpointState state, CancellationToken ct);
 }

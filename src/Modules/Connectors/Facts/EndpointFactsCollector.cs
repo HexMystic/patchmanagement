@@ -32,7 +32,15 @@ public sealed class EndpointFactsCollector
             return Build("debian", osId, osVersion, arch, "dpkg", LinuxFactsParser.ParseDpkg(listing));
         }
 
-        var rpmListing = await RunOrThrow(target, @"rpm -qa --qf '%{NAME}\t%{VERSION}-%{RELEASE}\t%{ARCH}\n'", timeout, ct).ConfigureAwait(false);
+        // The EPOCH is emitted, conditionally, and omitting it was a real defect: asset_packages.epoch
+        // exists precisely because the epoch DOMINATES version comparison (HARD-PROBLEMS #3), and this
+        // query asked only for VERSION-RELEASE — so every RPM epoch was lost between a host that knows
+        // it and a column built to hold it, silently, with the column simply staying null.
+        //
+        // %|EPOCH?{...}| is rpm's conditional format: it emits "N:" only where an epoch is set, rather
+        // than the literal "(none)" a bare %{EPOCH} yields for the majority of packages. dpkg needs no
+        // equivalent change — its ${Version} already carries the epoch.
+        var rpmListing = await RunOrThrow(target, @"rpm -qa --qf '%{NAME}\t%|EPOCH?{%{EPOCH}:}|%{VERSION}-%{RELEASE}\t%{ARCH}\n'", timeout, ct).ConfigureAwait(false);
         return Build("rhel", osId, osVersion, arch, "rpm", LinuxFactsParser.ParseRpm(rpmListing));
     }
 

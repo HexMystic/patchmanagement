@@ -22,7 +22,9 @@ detection** (a designed-in differentiator).
 - **Windows (later, remote cloud VMs):** installed updates/hotfixes + product
   versions via WMI/PowerShell over WinRM.
 - Set the asset **state** honestly: `unreachable` / `auth-failed` / `scan-failed`
-  on failure; ready-for-assessment on success.
+  on failure. **On success the state is left alone** — this line used to say
+  "ready-for-assessment on success", which names a state the frozen Phase-1 machine does not have.
+  Success is `managed = true` plus a fresh package set; the compliance states belong to assessment.
 
 ## Unmanaged-asset correlation (differentiator)
 - Cross-reference discovered hosts against **AD**, **DHCP leases**, and the managed
@@ -41,17 +43,16 @@ Two sources state them. `docs/ROADMAP.md` states them abstractly; the table belo
 **operative** form, because it names observable conditions. A criterion is ticked only when a
 named test proves it — never because the code looks right.
 
-**5 of 9 ticked** as of 2026-08-26 — (a), (c), (g), (h), (i). Slices 1 and 2 both landed this day,
-schema and store. What remains is (b) OS classification, (d) inventory, (e) honest failure states,
-and (f) correlation. `main` is green at **595** across nine projects.
+**8 of 9 ticked** as of 2026-08-26 — everything but **(f)**, unmanaged-asset correlation. Slices 1,
+2 and 3 all landed this day. `main` is green at **624** across nine projects.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
 | a | Tenant-scoped IP-range/CIDR sweep finds the 5 lab containers on `localhost:2201-2205` and reports open management ports | `LabSweepTests` (5) against the real fleet, plus `NetworkSweeperTests` (11) + `CidrBlockTests` (18) + `TargetPolicyTests` (9) against a fake probe | ☑ — the sweep of `127.0.0.1/32` returns exactly `[2201, 2202, 2203, 2204, 2205]`, compared by **equality** against the ports `lab/docker-compose.yml` publishes, read at test time rather than hardcoded. **Not red-first, and could not be** — see the note below |
-| b | OS family classified from banner/probe **before** a connector is chosen | unit tests over captured banners | ☐ |
+| b | OS family classified from banner/probe **before** a connector is chosen | `SshBannerClassifierTests` (17) over **captured** banners (`Samples/PROVENANCE.md`) | ☑ **for what a banner can establish, which is less than expected.** Protocol is settled for all five distros, so the connector choice is always determined. **Family is determined for Debian/Ubuntu only** — Rocky and Alma emit byte-identical `SSH-2.0-OpenSSH_9.9` naming no distro, so they classify `unknown` rather than being guessed as `rhel`. See the note below |
 | c | Candidates persisted to `assets` with `source = 'discovery'`, `managed = false` until inventoried | `DiscoveryStoreTests` (11) against real Postgres, as the restricted `patchmgmt_app` role | ☑ — one candidate per **open port**, not per address (ADR 0024's over-split; the lab forces it — five containers share `127.0.0.1`). `hostname` records the observed address rather than inventing a name, because a sweep never logs in. State is `scan-failed`: something answered a TCP probe, which is not a successful scan |
-| d | Linux package inventory populated for **all 5 distros** over SSH → `asset_packages` (name, version, epoch, arch, source), plus kernel / OS-release onto `assets` | fleet integration test, per-distro theory | ☐ |
-| e | Failure sets the asset state **honestly** — `unreachable` / `auth-failed` / `scan-failed`, never collapsed into compliant (HARD-PROBLEMS #8) | outcome→state mapping tests, including a real wrong-key host | ☐ |
+| d | Linux package inventory populated for **all 5 distros** over SSH → `asset_packages` (name, version, epoch, arch, source), plus OS-release onto `assets` | `LabInventoryTests` (12) against the real fleet | ☑ — all five distros, >50 packages each, `source` matching the package manager. **Epoch required fixing the collector**: the rpm query asked only for VERSION-RELEASE, so every epoch was being dropped between a host that knows it and a column built to hold it |
+| e | Failure sets the asset state **honestly** — `unreachable` / `auth-failed` / `scan-failed`, never collapsed into compliant (HARD-PROBLEMS #8) | `LabInventoryTests` — a **real** rejected key against a live host, and a real closed port | ☑ — proven by what a host actually did, not by a mapping table. A failed inventory also leaves `last_seen` alone and `managed` false |
 | f | A synthetic "seen but in no inventory" host is flagged unmanaged **with its evidence** (seen at IP X by run Y; absent from AD / DHCP / inventory) | correlation tests — the explainability half is CLAUDE.md §4.6, not decoration | ☐ |
 | g | Everything tenant-scoped; RLS holds on every new table; `RlsConventionTests` stays green with **no new exemption** | `RlsConventionTests` (unmodified allowlist) + `DiscoveryStoreTests` two-tenant cases | ☑ **for the tables that now carry rows.** Two tenants sweeping the same address get separate, mutually invisible assets, runs and evidence — asserted through the real `RlsConnectionInterceptor` as `patchmgmt_app`, not as the owner. `host_keys` has RLS and a policy but **no writer yet**, so its isolation is proven structurally (catalog) and not yet behaviourally; that lands with D-301 in slice 5 |
 | h | Every connector call time-bounded and idempotent (NEVER #5); a re-run writes the **same rows with stable ids**, not merely un-duplicated | `Re_running_a_sweep_writes_the_same_rows_with_the_same_ids` + `Re_running_advances_last_seen_on_the_same_row` | ☑ **for discovery.** Asserted on **ids**, not counts: a count is satisfied by delete-and-reinsert, by a no-op on conflict, and by a second run that wrote nothing. Findings, packages and evidence all hang off the asset id, so an id that changes silently orphans them. **Not yet closed for inventory** — slice 3 has no writes to be idempotent about |
@@ -222,6 +223,43 @@ to **D-308** — flagged, not done here.
 
 **Nothing invokes `IDiscoveryService`** — no job, no endpoint. Same shape as `ContentSyncService`,
 and it needs the same decision (owner: Phase 11).
+
+### Landed 2026-08-26 (slice 3) — classification, inventory, honest failure states
+
+**Criterion (b) closes for less than the wording implies, and the captures are why.** All five lab
+banners were captured to `tests/PatchManagement.Discovery.Tests/Samples/` under the Phase 5
+PROVENANCE rule (real payloads only; a fixture written to the parser proves nothing). What they show:
+
+| Distro | Banner |
+|---|---|
+| Ubuntu 22.04 / 24.04 | `SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.16` / `…9.6p1 Ubuntu-3ubuntu13.18` |
+| Debian 12 | `SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u10` |
+| Rocky 9 | `SSH-2.0-OpenSSH_9.9` |
+| Alma 9 | `SSH-2.0-OpenSSH_9.9` |
+
+**Rocky and Alma are byte-identical and name nothing.** The tempting rule — "no vendor suffix ⇒ Red
+Hat family" — is true on this fleet and false everywhere else (upstream OpenSSH, Alpine, anything
+that ships the version string unpatched), so it would be right for the lab and wrong in the field
+with a green suite either way. The classifier reports `unknown`. Both identical captures are kept
+deliberately: one alone would read as a single unrecognised value rather than as proof the banner
+carries no distro information.
+
+So **protocol** is always determined — which is what actually selects a connector — and **family**
+is determined only for the Debian side. Establishing that a bare banner is Rocky rather than Alma
+needs `/etc/os-release`, which needs a login, which is inventory.
+
+**Criterion (e) is proven by a host, not by a table.** The connector already mapped `AuthFailed` to
+`auth-failed` in C#; a unit test asserting that maps a constant to a constant. What was unproven is
+that a host which *actually rejects a credential* is classified as a rejection rather than a
+timeout — the exact confusion HARD-PROBLEMS #12 records happening once already. `InventoryService`
+therefore probes `TestConnectivityAsync` **first**: `EndpointFactsCollector` reports every failure as
+one exception type, so a plain try/catch would record `scan-failed` for a rejected credential, an
+unreachable host and a broken command alike.
+
+**A successful inventory sets no state, and that is deliberate.** The frozen Phase-1 machine has no
+"inventoried" state; success is recorded as `managed = true` with a fresh package set. **The phase
+doc's own wording — "ready-for-assessment on success" — names a state that does not exist**, and is
+corrected below rather than implemented.
 
 ## `db/schema.sql` has no drift test — candidate deferral, needs an owner
 
