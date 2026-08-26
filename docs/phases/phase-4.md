@@ -339,17 +339,18 @@ call, and until it is assigned this is a flagged gap rather than a deferral.
 ## Deferrals this phase names — D-401 and D-402
 
 `DIFFERENTIATORS.md:88` — deferring is allowed; deferring **without a named owner** is not. Both
-owners below are **proposals awaiting ratification**, not decisions this phase made alone.
+owners below were proposed by this phase and **RATIFIED 2026-08-27**. They are now owners, not
+suggestions: Phase 14 and Phase 11 each inherit a gate they cannot quietly drop.
 
 The lab has no Active Directory and no DHCP server, so correlation ships as a pluggable
 `IAssetEvidenceSource` seam proven against file-backed synthetic sources — which is exactly what
 criterion (f) asks for, and what makes "absent from AD" assertable at all. What is deferred is the
 *real* ingestion behind that seam.
 
-| ID | Deferred | Proposed owner | Gate — what cannot be claimed until it lands |
+| ID | Deferred | Owner (ratified 2026-08-27) | Gate — what cannot be claimed until it lands |
 |----|----------|----------------|----------------------------------------------|
-| **D-401** | Real **Active Directory / LDAP** evidence source | **Phase 14** (identity & access) | The unmanaged finding is only as good as the sources consulted. Until AD is real, "absent from AD" means "absent from a file someone maintained", and the differentiator cannot be demonstrated to a customer against their own estate. Phase 14 is proposed because it is where directory integration already lands — `operators.external_auth_ref` and federated login need an LDAP client, and two LDAP clients in one product is one too many |
-| **D-402** | Real **DHCP lease** ingestion | **Phase 11** (scheduling & reporting) | Same gate. A lease file is a point-in-time export; real ingestion is a *scheduled import* with its own freshness question — a stale lease table makes a live host look absent, which manufactures the exact false positive this feature exists to avoid. Phase 11 is proposed because it owns schedules; the freshness rule belongs with whatever runs the import |
+| **D-401** | Real **Active Directory / LDAP** evidence source | **Phase 14** (identity & access) | The unmanaged finding is only as good as the sources consulted. Until AD is real, "absent from AD" means "absent from a file someone maintained", and the differentiator cannot be demonstrated to a customer against their own estate. Phase 14 owns it because it is where directory integration already lands — `operators.external_auth_ref` and federated login need an LDAP client, and two LDAP clients in one product is one too many |
+| **D-402** | Real **DHCP lease** ingestion | **Phase 11** (scheduling & reporting) | Same gate. A lease file is a point-in-time export; real ingestion is a *scheduled import* with its own freshness question — a stale lease table makes a live host look absent, which manufactures the exact false positive this feature exists to avoid. Phase 11 owns it because it owns schedules; the freshness rule belongs with whatever runs the import |
 
 **Both share one hazard worth stating once.** `IAssetEvidenceSource` requires a source that cannot be
 consulted to **throw**, never to report absence — an unreachable domain controller would otherwise
@@ -390,9 +391,13 @@ changes a frozen contract.
 1. ~~**Schema.**~~ **CLOSED 2026-08-26** — approved and migrated as
    `20260826140155_DiscoveryAssetProvenanceAndHostKeys`. The `assets` natural key it turned on is
    [ADR 0024](../adr/0024-asset-discovery-natural-key.md).
-2. **Connector contract, for D-306.** Either widen `EndpointTarget.Bastion` to a list (breaking) or
-   add a `BastionChain` alongside it, keeping `Bastion` as the one-hop shorthand (additive).
-   **Additive is recommended** — no existing caller changes.
+2. ~~**Connector contract, for D-306.**~~ **DECIDED AND APPROVED 2026-08-27 — additive.** A
+   `BastionChain` is added alongside `EndpointTarget.Bastion`, which stays as the one-hop shorthand.
+   The breaking alternative (widening `Bastion` to a list) was rejected: no existing caller changes
+   under the additive shape, and ADR 0017's contract surface is extended rather than altered.
+   **Approved, NOT YET BUILT** — this is slice 5's first item. The refusal branch in
+   `SshNetSessionFactory` is currently unreachable from the planner, so what lands is a change to the
+   topology model, not the implementation of a loop.
 
 ## Slice plan — red-first
 

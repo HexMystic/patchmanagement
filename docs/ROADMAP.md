@@ -614,8 +614,8 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   Red 4 of 6, and two were different problems: the intended `Expected: 3 / Actual: 0` (absences never
   recorded), and a real defect of ours — `22P02: invalid input syntax for type json`, a bare string
   written into the `jsonb` `asset_evidence.detail`.
-  **D-401 (real AD/LDAP, proposed Phase 14) and D-402 (real DHCP ingestion, proposed Phase 11)** are
-  named per `DIFFERENTIATORS.md:88`. **Both owners await ratification.** Both inherit the rule already
+  **D-401 (real AD/LDAP) and D-402 (real DHCP ingestion)** are named per `DIFFERENTIATORS.md:88`.
+  **Owners RATIFIED 2026-08-27: D-401 → Phase 14, D-402 → Phase 11.** Both inherit the rule already
   enforced here: a source that cannot be consulted must THROW, never report absence — an unreachable
   domain controller would otherwise flag an entire estate as unmanaged, an outage rendered as a
   finding.
@@ -634,9 +634,14 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   means no test exercises the container the host builds, so a defect living purely in
   `AddConnectorsModule` is invisible to it. Two such have now bitten. **Proposed owner Phase 8**,
   which inherits the connector and is where an unexercised WinRM path first becomes load-bearing.
-- **One NEVER #6 ask remains open** — `EndpointTarget.Bastion` becoming a chain, for D-306 at slice 5: the new tables (`discovery_runs`,
-  `asset_evidence`, `host_keys`) and the `EndpointTarget` bastion-chain shape for D-306. Both are
-  detailed in `docs/phases/phase-4.md`.
+- **Both NEVER #6 asks are now settled.** The schema ask (`discovery_runs`, `asset_evidence`,
+  `host_keys`, plus the `assets` natural key) was **approved and migrated 2026-08-26** as
+  `20260826140155_DiscoveryAssetProvenanceAndHostKeys` ([ADR 0024](adr/0024-asset-discovery-natural-key.md)).
+  The connector-contract ask is **DECIDED 2026-08-27: additive** — a `BastionChain` alongside
+  `EndpointTarget.Bastion`, which stays the one-hop shorthand; the breaking widen-to-a-list option
+  was rejected. **Approved, not yet built**; it is slice 5's first item.
+  *(This bullet previously said "one ask remains open" and then listed two, including the schema ask
+  that had already closed — a stale sentence tail left by an edit on 2026-08-26.)*
 
 ## Phase 5 — Content ingestion  · parallel · Status: in-progress
 - **Goal:** Ingest authoritative vuln/patch content.
