@@ -41,20 +41,20 @@ Two sources state them. `docs/ROADMAP.md` states them abstractly; the table belo
 **operative** form, because it names observable conditions. A criterion is ticked only when a
 named test proves it — never because the code looks right.
 
-**2 of 9 ticked** as of 2026-08-26. Slice 1 (sweep + target policy) landed and criterion (a)
-closed against the real fleet the same day; slice 2 (schema) landed the same day too. `main` is
-green at **584** across nine projects.
+**5 of 9 ticked** as of 2026-08-26 — (a), (c), (g), (h), (i). Slices 1 and 2 both landed this day,
+schema and store. What remains is (b) OS classification, (d) inventory, (e) honest failure states,
+and (f) correlation. `main` is green at **595** across nine projects.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
 | a | Tenant-scoped IP-range/CIDR sweep finds the 5 lab containers on `localhost:2201-2205` and reports open management ports | `LabSweepTests` (5) against the real fleet, plus `NetworkSweeperTests` (11) + `CidrBlockTests` (18) + `TargetPolicyTests` (9) against a fake probe | ☑ — the sweep of `127.0.0.1/32` returns exactly `[2201, 2202, 2203, 2204, 2205]`, compared by **equality** against the ports `lab/docker-compose.yml` publishes, read at test time rather than hardcoded. **Not red-first, and could not be** — see the note below |
 | b | OS family classified from banner/probe **before** a connector is chosen | unit tests over captured banners | ☐ |
-| c | Candidates persisted to `assets` with `source = 'discovery'`, `managed = false` until inventoried | store integration test against real Postgres | ☐ |
+| c | Candidates persisted to `assets` with `source = 'discovery'`, `managed = false` until inventoried | `DiscoveryStoreTests` (11) against real Postgres, as the restricted `patchmgmt_app` role | ☑ — one candidate per **open port**, not per address (ADR 0024's over-split; the lab forces it — five containers share `127.0.0.1`). `hostname` records the observed address rather than inventing a name, because a sweep never logs in. State is `scan-failed`: something answered a TCP probe, which is not a successful scan |
 | d | Linux package inventory populated for **all 5 distros** over SSH → `asset_packages` (name, version, epoch, arch, source), plus kernel / OS-release onto `assets` | fleet integration test, per-distro theory | ☐ |
 | e | Failure sets the asset state **honestly** — `unreachable` / `auth-failed` / `scan-failed`, never collapsed into compliant (HARD-PROBLEMS #8) | outcome→state mapping tests, including a real wrong-key host | ☐ |
 | f | A synthetic "seen but in no inventory" host is flagged unmanaged **with its evidence** (seen at IP X by run Y; absent from AD / DHCP / inventory) | correlation tests — the explainability half is CLAUDE.md §4.6, not decoration | ☐ |
-| g | Everything tenant-scoped; RLS holds on every new table; `RlsConventionTests` stays green with **no new exemption** | the existing convention suite, unmodified | ☐ |
-| h | Every connector call time-bounded and idempotent (NEVER #5); a re-run writes the **same rows with stable ids**, not merely un-duplicated | idempotency tests, to Phase 5's standard | ☐ |
+| g | Everything tenant-scoped; RLS holds on every new table; `RlsConventionTests` stays green with **no new exemption** | `RlsConventionTests` (unmodified allowlist) + `DiscoveryStoreTests` two-tenant cases | ☑ **for the tables that now carry rows.** Two tenants sweeping the same address get separate, mutually invisible assets, runs and evidence — asserted through the real `RlsConnectionInterceptor` as `patchmgmt_app`, not as the owner. `host_keys` has RLS and a policy but **no writer yet**, so its isolation is proven structurally (catalog) and not yet behaviourally; that lands with D-301 in slice 5 |
+| h | Every connector call time-bounded and idempotent (NEVER #5); a re-run writes the **same rows with stable ids**, not merely un-duplicated | `Re_running_a_sweep_writes_the_same_rows_with_the_same_ids` + `Re_running_advances_last_seen_on_the_same_row` | ☑ **for discovery.** Asserted on **ids**, not counts: a count is satisfied by delete-and-reinsert, by a no-op on conflict, and by a second run that wrote nothing. Findings, packages and evidence all hang off the asset id, so an id that changes silently orphans them. **Not yet closed for inventory** — slice 3 has no writes to be idempotent about |
 | i | The Discovery module is **reachable in the shipped host** | `Api_project_ships_the_discovery_module` + `Real_host_container_resolves_the_discovery_module` | ☑ **proven red-first**, both failed before `PatchManagement.Api.csproj` gained its `ProjectReference` — the deps.json guard on the missing entry, the container guard on a null `INetworkSweeper` |
 
 **Why (i) is on the list from day one.** The unreferenced-module defect has now shipped three
@@ -180,6 +180,48 @@ with the real probe wired in, since every other policy proof substitutes it.
 different ports, so five containers are observed as one host with five open ports, not as five
 hosts. Establishing that those endpoints are five distinct machines requires a login, which is
 slice 3's job.
+
+### Landed 2026-08-26 (slice 2, second half) — the store and upsert
+
+`IDiscoveryService` sweeps, then persists: a `discovery_runs` row opened **before** probing and
+closed after, one `assets` candidate per open port, and an `asset_evidence` row per candidate.
+
+**Red-first, and the red is the interesting part.** The naive implementation — insert a candidate
+per sighting — was written first and run against real Postgres. Five tests failed with:
+
+```
+Npgsql.PostgresException : 23505: duplicate key value violates unique constraint
+"ux_assets_discovery_candidate"
+```
+
+That single line is worth more than the green run: it proves the slice-2 natural key is real and
+biting, that the partial index actually covers the coordinates the store writes, and that a
+re-sweep genuinely collides rather than quietly duplicating.
+
+**A second red followed the fix**, and is recorded because the next person will hit it too. The
+first `ON CONFLICT` named only `WHERE source = 'discovery'` and every test failed with
+`42P10: there is no unique or exclusion constraint matching the ON CONFLICT specification`.
+Postgres infers a partial index only when the conflict predicate implies the index's, and its prover
+does not accept a prefix — the predicate must be repeated in **full**, NULL clauses included.
+
+**`DO UPDATE`, not `DO NOTHING`.** The latter returns no row, so the caller learns no id and must
+re-SELECT — and `last_seen` would never advance, making every live host read as abandoned
+(HARD-PROBLEMS #10). `Re_running_advances_last_seen_on_the_same_row` pins that.
+
+**The store is scoped, the sweep stays singleton.** The store consumes `AppDbContext`, which is
+scoped and carries the tenant through `RlsConnectionInterceptor`. Registering the service as a
+singleton would capture it — the captive dependency that stopped the Connectors module resolving at
+all. Raw SQL is issued on a connection opened *through EF* so the interceptor fires and sets
+`app.tenant_id`; opened any other way the policy denies all and the insert fails closed.
+
+**A fourth Postgres fixture.** `PatchManagement.IntegrationTests` cannot host these tests: it
+deliberately references no module, and referencing Discovery would copy the DLL into its output and
+make `Real_host_container_resolves_the_discovery_module` pass on that copy while the shipped API
+lacked the module. Collapsing the four fixtures onto `TestSupport` is the right fix and is adjacent
+to **D-308** — flagged, not done here.
+
+**Nothing invokes `IDiscoveryService`** — no job, no endpoint. Same shape as `ContentSyncService`,
+and it needs the same decision (owner: Phase 11).
 
 ## `db/schema.sql` has no drift test — candidate deferral, needs an owner
 

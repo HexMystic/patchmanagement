@@ -2,18 +2,28 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using PatchManagement.Contracts.Discovery;
+using Microsoft.Extensions.Logging;
+using PatchManagement.Discovery.Store;
 using PatchManagement.Discovery.Sweep;
+using PatchManagement.Persistence;
 
 namespace PatchManagement.Discovery.DependencyInjection;
 
 /// <summary>
 /// Wires the Discovery module.
 ///
-/// <para>Everything here is a <b>singleton</b>: the sweep holds no per-request state and consumes
-/// no scoped service. That is deliberate rather than incidental — the moment it needs
-/// <c>ICredentialProvider</c> (slice 3, inventory) it will have to become scoped for the same
-/// captive-dependency reason the Connectors module documents, so the lifetime is worth revisiting
-/// then instead of inheriting silently.</para>
+/// <para><b>The lifetime split, and why it is not arbitrary.</b> The sweep and its target policy
+/// hold no per-request state and consume no scoped service, so they are <b>singletons</b>. The store
+/// and the service that composes them are <b>scoped</b>, because the store consumes
+/// <c>AppDbContext</c> — which the persistence module registers scoped and which carries the
+/// per-request tenant through <c>RlsConnectionInterceptor</c>.</para>
+///
+/// <para>Registering the service as a singleton would capture that scoped context: a captive
+/// dependency .NET's scope validation rejects outright, so the module would not resolve in the
+/// shipped host at all. Resolving a fresh scope inside a singleton would not fix it either — the
+/// tenant is ambient to the request, and a new scope would silently lose it, which is the
+/// fail-closed hole ADR 0014 exists to close. The Connectors module documents the same split for
+/// the same reason.</para>
 /// </summary>
 public static class DiscoveryServiceCollectionExtensions
 {
@@ -27,8 +37,19 @@ public static class DiscoveryServiceCollectionExtensions
         services.AddOptions<DiscoverySecurityOptions>()
             .Bind(configuration.GetSection(DiscoverySecurityOptions.SectionName));
 
+        services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IPortProbe, TcpPortProbe>();
         services.TryAddSingleton<INetworkSweeper, NetworkSweeper>();
+
+        // Scoped: AppDbContext is scoped and carries the request's tenant. See the class remarks.
+        services.TryAddScoped<IDiscoveryStore>(sp => new DiscoveryStore(
+            sp.GetRequiredService<AppDbContext>(),
+            sp.GetRequiredService<TimeProvider>()));
+
+        services.TryAddScoped<IDiscoveryService>(sp => new DiscoveryService(
+            sp.GetRequiredService<INetworkSweeper>(),
+            sp.GetRequiredService<IDiscoveryStore>(),
+            sp.GetRequiredService<ILogger<DiscoveryService>>()));
 
         return services;
     }

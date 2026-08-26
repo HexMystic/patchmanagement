@@ -549,6 +549,30 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   This closes the `assets.source` part of review **M8**; the other four columns it named
   (`assets.state`, `findings.state`, `credentials.kind`, `tenants.status`) remain open and are not
   Phase 4's. **`main` is green at 584 across nine projects** (580 + the four `AssetVocabularyTests`).
+- **Slice 2's second half landed 2026-08-26 — the store and upsert. Criteria (c), (g) and (h) now
+  tick; 5 of 9.** `IDiscoveryService` sweeps then persists: a `discovery_runs` row opened before
+  probing and closed after (a refused sweep is recorded too), one `assets` candidate **per open
+  port**, and an `asset_evidence` row each.
+  **Red-first, and the red is the interesting part.** The naive store — insert per sighting — went
+  red on real Postgres with `23505: duplicate key value violates unique constraint
+  "ux_assets_discovery_candidate"`, which proves slice 2's natural key is real, covers the
+  coordinates the store actually writes, and makes a re-sweep collide rather than quietly duplicate.
+  A **second** red followed the fix and is recorded because it will recur: naming only
+  `WHERE source = 'discovery'` in `ON CONFLICT` fails with `42P10`, because Postgres infers a partial
+  index only when the conflict predicate *implies* the index's and its prover rejects a prefix — the
+  predicate must be repeated in full, NULL clauses included.
+  **Criterion (h) is asserted on IDS, not counts.** A count is satisfied by delete-and-reinsert, by a
+  no-op on conflict, and by a second run that wrote nothing; findings, packages and evidence all hang
+  off the asset id, so an id that changes silently orphans them. `DO UPDATE` not `DO NOTHING` for the
+  same reason in miniature — the latter returns no row and never advances `last_seen`, making a live
+  host read as abandoned (HARD-PROBLEMS #10).
+  **(g) is closed for the tables that carry rows**; `host_keys` has RLS and a policy but no writer
+  yet, so its isolation is structural rather than behavioural until D-306/D-301 in slice 5.
+  **Nothing invokes `IDiscoveryService`** — no job, no endpoint, the `ContentSyncService` shape
+  again (owner: Phase 11). **A fourth Postgres fixture** was added rather than reusing
+  `PatchManagement.IntegrationTests`, which must reference no module or its reachability test passes
+  on its own copy of the DLL; collapsing the four onto `TestSupport` is adjacent to **D-308**.
+  **`main` is green at 595** across nine projects (584 + 11).
 - **One NEVER #6 ask remains open** — `EndpointTarget.Bastion` becoming a chain, for D-306 at slice 5: the new tables (`discovery_runs`,
   `asset_evidence`, `host_keys`) and the `EndpointTarget` bastion-chain shape for D-306. Both are
   detailed in `docs/phases/phase-4.md`.
