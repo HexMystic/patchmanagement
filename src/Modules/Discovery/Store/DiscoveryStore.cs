@@ -249,6 +249,91 @@ internal sealed class DiscoveryStore(AppDbContext db, TimeProvider time) : IDisc
         return (raw[(colon + 1)..], epoch);
     }
 
+    public async Task<IReadOnlyList<(Guid AssetId, string Address)>> AssetsFromRunAsync(
+        Guid discoveryRunId, CancellationToken ct)
+    {
+        var rows = await db.AssetEvidence
+            .Where(e => e.DiscoveryRunId == discoveryRunId)
+            .Select(e => new { e.AssetId, e.Address })
+            .Distinct()
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        return [.. rows.Select(r => (r.AssetId, r.Address ?? string.Empty))];
+    }
+
+    public async Task AppendEvidenceAsync(
+        Guid assetId, string source, bool present, string? address, string? detail, CancellationToken ct)
+    {
+        var asset = await db.Assets.SingleAsync(a => a.Id == assetId, ct).ConfigureAwait(false);
+        var now = time.GetUtcNow();
+
+        db.AssetEvidence.Add(new AssetEvidence
+        {
+            Id = Guid.NewGuid(),
+            TenantId = asset.TenantId,
+            AssetId = assetId,
+            Source = source,
+            Present = present,
+            // Only discovery evidence names a run; the CHECK enforces it either way.
+            DiscoveryRunId = null,
+            ObservedAt = now,
+            Address = address,
+            // asset_evidence.detail is jsonb. A source hands back a plain reference — a lease id, a
+            // distinguished name — so it is wrapped rather than written raw, which Postgres rejects
+            // with 22P02. Wrapping also leaves room for a source to carry more than one field later
+            // without changing the column.
+            Detail = detail is null ? null : JsonSerializer.Serialize(new { reference = detail }),
+            CreatedAt = now,
+        });
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// An UNMANAGED asset is one discovery saw that no other source corroborates.
+    ///
+    /// <para><b>That is not the same as <c>managed = false</c></b>, and the difference is the whole
+    /// feature. Every freshly discovered candidate is unmanaged in the column sense — it simply has
+    /// not been inventoried yet — including hosts Active Directory knows perfectly well. Returning
+    /// those would turn the differentiator into a list of everything discovery has not got round to,
+    /// which is noise an operator learns to scroll past. The claim being made is the strong one:
+    /// this host is on the network and in NOBODY's inventory.</para>
+    /// </summary>
+    public async Task<IReadOnlyList<UnmanagedAsset>> UnmanagedAsync(CancellationToken ct)
+    {
+        // Seen by a sweep, and corroborated by no source other than that sweep.
+        var assets = await db.Assets
+            .Where(a => db.AssetEvidence.Any(e =>
+                e.AssetId == a.Id && e.Source == AssetSources.Discovery && e.Present))
+            .Where(a => !db.AssetEvidence.Any(e =>
+                e.AssetId == a.Id && e.Source != AssetSources.Discovery && e.Present))
+            .Select(a => new { a.Id, a.Ip })
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        var results = new List<UnmanagedAsset>();
+
+        foreach (var asset in assets)
+        {
+            var evidence = await db.AssetEvidence
+                .Where(e => e.AssetId == asset.Id)
+                .OrderBy(e => e.ObservedAt)
+                .Select(e => new EvidenceEntry(e.Source, e.Present, e.ObservedAt, e.Address, e.Detail))
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+
+            results.Add(new UnmanagedAsset
+            {
+                AssetId = asset.Id,
+                Address = asset.Ip ?? string.Empty,
+                Evidence = evidence,
+            });
+        }
+
+        return results;
+    }
+
     private static string OutcomeName(SweepOutcome outcome) => outcome switch
     {
         SweepOutcome.Ok => DiscoveryRunOutcomes.Ok,

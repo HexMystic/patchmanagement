@@ -44,7 +44,7 @@ internal sealed class InventoryService(
         ArgumentNullException.ThrowIfNull(target);
 
         var connector = connectors.For(target);
-        var facts = new EndpointFactsCollector(connector);
+        var facts = new EndpointFactsCollector(connectors);
 
         var connectivity = await connector.TestConnectivityAsync(target, ct).ConfigureAwait(false);
 

@@ -601,6 +601,39 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   **A doc correction, not an implementation:** `phase-4.md` said inventory sets "ready-for-assessment
   on success" — a state the frozen Phase-1 machine does not have. Success is `managed = true` plus a
   fresh package set; assessment owns the compliance states.
+- **Slice 4 landed 2026-08-27 — correlation, plus a Phase 3 DI fix. All 9 exit criteria tick;
+  `main` green at 632.** The phase is NOT complete: D-301, D-306 and D-310 are still open, and
+  `host_keys` still has no writer.
+  **(f) closes over a pluggable `IAssetEvidenceSource` seam** proven against file-backed synthetic
+  sources — the lab has no AD and no DHCP, which is what criterion (f)'s own wording anticipates.
+  **The load-bearing test is the negative one:** a host AD knows about is NOT flagged, even though
+  `managed = false`. That distinction is the feature — `managed = false` means "not yet inventoried",
+  which every fresh candidate is; an *unmanaged asset* is one corroborated by nothing. Conflating
+  them turns the differentiator into a list of everything discovery has not got to yet. Absences are
+  **written as rows**, not computed and discarded, so a flag stays auditable after the fact.
+  Red 4 of 6, and two were different problems: the intended `Expected: 3 / Actual: 0` (absences never
+  recorded), and a real defect of ours — `22P02: invalid input syntax for type json`, a bare string
+  written into the `jsonb` `asset_evidence.detail`.
+  **D-401 (real AD/LDAP, proposed Phase 14) and D-402 (real DHCP ingestion, proposed Phase 11)** are
+  named per `DIFFERENTIATORS.md:88`. **Both owners await ratification.** Both inherit the rule already
+  enforced here: a source that cannot be consulted must THROW, never report absence — an unreachable
+  domain controller would otherwise flag an entire estate as unmanaged, an outage rendered as a
+  finding.
+- **`EndpointFactsCollector`'s DI resolution fixed (Phase 3), red-first through the container.** It
+  took a single `IEndpointConnector` while the module registers two, so DI handed it the last —
+  `WinRmConnector` — whatever the target said. Reproduced by resolving from a real
+  `AddConnectorsModule` container: `facts-command-failed (AuthFailed)`, the scripted SSH connector
+  never consulted. It now takes `IEndpointConnectorRegistry`. Connectors.Tests **122** (+2),
+  Connectors.IntegrationTests **54 of 54**.
+  **A correction to the earlier record:** this was NOT missed because a test built the collector by
+  hand. **Nothing anywhere constructed or exercised it** — no unit test, no integration test, only
+  source-scanning convention tests. It shipped with zero behavioural coverage and Phase 4's inventory
+  slice was the first code to resolve it.
+  **The general gap is recorded, not fixed:** `Connectors.IntegrationTests` composes by hand, which
+  is the right way to test connector behaviour and is why the fleet suite is trustworthy — but it
+  means no test exercises the container the host builds, so a defect living purely in
+  `AddConnectorsModule` is invisible to it. Two such have now bitten. **Proposed owner Phase 8**,
+  which inherits the connector and is where an unexercised WinRM path first becomes load-bearing.
 - **One NEVER #6 ask remains open** — `EndpointTarget.Bastion` becoming a chain, for D-306 at slice 5: the new tables (`discovery_runs`,
   `asset_evidence`, `host_keys`) and the `EndpointTarget` bastion-chain shape for D-306. Both are
   detailed in `docs/phases/phase-4.md`.

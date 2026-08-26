@@ -48,4 +48,20 @@ internal interface IDiscoveryStore
     /// </summary>
     Task RecordFailureAsync(
         Guid assetId, Contracts.States.EndpointState state, CancellationToken ct);
+
+    /// <summary>The (asset, address) pairs a given discovery run found.</summary>
+    Task<IReadOnlyList<(Guid AssetId, string Address)>> AssetsFromRunAsync(
+        Guid discoveryRunId, CancellationToken ct);
+
+    /// <summary>
+    /// Appends one correlation observation. <paramref name="present"/> false is a source that was
+    /// consulted and did not hold the host — the half that establishes an unmanaged asset.
+    /// </summary>
+    Task AppendEvidenceAsync(
+        Guid assetId, string source, bool present, string? address, string? detail, CancellationToken ct);
+
+    /// <summary>
+    /// Assets discovery saw that no other source corroborates, each with the evidence explaining it.
+    /// </summary>
+    Task<IReadOnlyList<UnmanagedAsset>> UnmanagedAsync(CancellationToken ct);
 }

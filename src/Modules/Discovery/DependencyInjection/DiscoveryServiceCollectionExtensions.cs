@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using PatchManagement.Contracts.Discovery;
 using Microsoft.Extensions.Logging;
 using PatchManagement.Connectors;
+using PatchManagement.Discovery.Correlation;
 using PatchManagement.Discovery.Inventory;
 using PatchManagement.Discovery.Store;
 using PatchManagement.Discovery.Sweep;
@@ -55,6 +56,16 @@ public static class DiscoveryServiceCollectionExtensions
             sp.GetRequiredService<IEndpointConnectorRegistry>(),
             sp.GetRequiredService<IDiscoveryStore>(),
             sp.GetRequiredService<ILogger<InventoryService>>()));
+
+        // No IAssetEvidenceSource is registered here, and that is not an omission. The only
+        // implementations today are file-backed and synthetic (criterion (f)); a deployment declares
+        // its own sources, and registering a fake by default would let an estate correlate against
+        // nothing while appearing to correlate. With no sources, every discovered host is reported
+        // unmanaged — which is the honest answer when nothing has been asked.
+        services.TryAddScoped<ICorrelationService>(sp => new CorrelationService(
+            sp.GetServices<IAssetEvidenceSource>(),
+            sp.GetRequiredService<IDiscoveryStore>(),
+            sp.GetRequiredService<ILogger<CorrelationService>>()));
 
         services.TryAddScoped<IDiscoveryService>(sp => new DiscoveryService(
             sp.GetRequiredService<INetworkSweeper>(),

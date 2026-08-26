@@ -43,8 +43,14 @@ Two sources state them. `docs/ROADMAP.md` states them abstractly; the table belo
 **operative** form, because it names observable conditions. A criterion is ticked only when a
 named test proves it — never because the code looks right.
 
-**8 of 9 ticked** as of 2026-08-26 — everything but **(f)**, unmanaged-asset correlation. Slices 1,
-2 and 3 all landed this day. `main` is green at **624** across nine projects.
+**9 of 9 ticked** as of 2026-08-27. `main` is green at **632** across nine projects.
+
+**The exit criteria are met; the PHASE is not closed.** It still owns three inherited deferrals —
+**D-301** (host-key store), **D-306** (multi-hop bastion) and **D-310** (per-borrow eviction sweep) —
+and `host_keys` still has no writer, so criterion (g) holds for it structurally rather than
+behaviourally. Slice 5 is what closes those. `docs/WORKFLOW.md` §5 requires every criterion met AND
+tests passing before the status moves; the deferral table requires the owner to discharge or
+re-assign what it inherited.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
@@ -53,7 +59,7 @@ named test proves it — never because the code looks right.
 | c | Candidates persisted to `assets` with `source = 'discovery'`, `managed = false` until inventoried | `DiscoveryStoreTests` (11) against real Postgres, as the restricted `patchmgmt_app` role | ☑ — one candidate per **open port**, not per address (ADR 0024's over-split; the lab forces it — five containers share `127.0.0.1`). `hostname` records the observed address rather than inventing a name, because a sweep never logs in. State is `scan-failed`: something answered a TCP probe, which is not a successful scan |
 | d | Linux package inventory populated for **all 5 distros** over SSH → `asset_packages` (name, version, epoch, arch, source), plus OS-release onto `assets` | `LabInventoryTests` (12) against the real fleet | ☑ — all five distros, >50 packages each, `source` matching the package manager. **Epoch required fixing the collector**: the rpm query asked only for VERSION-RELEASE, so every epoch was being dropped between a host that knows it and a column built to hold it |
 | e | Failure sets the asset state **honestly** — `unreachable` / `auth-failed` / `scan-failed`, never collapsed into compliant (HARD-PROBLEMS #8) | `LabInventoryTests` — a **real** rejected key against a live host, and a real closed port | ☑ — proven by what a host actually did, not by a mapping table. A failed inventory also leaves `last_seen` alone and `managed` false |
-| f | A synthetic "seen but in no inventory" host is flagged unmanaged **with its evidence** (seen at IP X by run Y; absent from AD / DHCP / inventory) | correlation tests — the explainability half is CLAUDE.md §4.6, not decoration | ☐ |
+| f | A synthetic "seen but in no inventory" host is flagged unmanaged **with its evidence** (seen at IP X by run Y; absent from AD / DHCP / inventory) | `CorrelationTests` (6) over file-backed synthetic sources | ☑ — **and the load-bearing test is the negative one**: a host AD knows about is NOT flagged, even though `managed = false`. Absences are written as rows, not computed and discarded, so the flag is auditable later. Real LDAP/DHCP ingestion is **D-401 / D-402** below |
 | g | Everything tenant-scoped; RLS holds on every new table; `RlsConventionTests` stays green with **no new exemption** | `RlsConventionTests` (unmodified allowlist) + `DiscoveryStoreTests` two-tenant cases | ☑ **for the tables that now carry rows.** Two tenants sweeping the same address get separate, mutually invisible assets, runs and evidence — asserted through the real `RlsConnectionInterceptor` as `patchmgmt_app`, not as the owner. `host_keys` has RLS and a policy but **no writer yet**, so its isolation is proven structurally (catalog) and not yet behaviourally; that lands with D-301 in slice 5 |
 | h | Every connector call time-bounded and idempotent (NEVER #5); a re-run writes the **same rows with stable ids**, not merely un-duplicated | `Re_running_a_sweep_writes_the_same_rows_with_the_same_ids` + `Re_running_advances_last_seen_on_the_same_row` | ☑ **for discovery.** Asserted on **ids**, not counts: a count is satisfied by delete-and-reinsert, by a no-op on conflict, and by a second run that wrote nothing. Findings, packages and evidence all hang off the asset id, so an id that changes silently orphans them. **Not yet closed for inventory** — slice 3 has no writes to be idempotent about |
 | i | The Discovery module is **reachable in the shipped host** | `Api_project_ships_the_discovery_module` + `Real_host_container_resolves_the_discovery_module` | ☑ **proven red-first**, both failed before `PatchManagement.Api.csproj` gained its `ProjectReference` — the deps.json guard on the missing entry, the container guard on a null `INetworkSweeper` |
@@ -261,6 +267,42 @@ unreachable host and a broken command alike.
 doc's own wording — "ready-for-assessment on success" — names a state that does not exist**, and is
 corrected below rather than implemented.
 
+## Test-fidelity gap: hand-built objects are not the shipped composition — owner TBD
+
+**Found 2026-08-26 while fixing `EndpointFactsCollector`'s DI resolution, and recorded rather than
+fixed. It is not Phase 4's to close.**
+
+That collector took a single `IEndpointConnector` while the module registers two, so DI handed every
+container-resolved instance the **last** registration — `WinRmConnector` — whatever protocol the
+target named. It is fixed now (it takes `IEndpointConnectorRegistry`), and
+`FactsCollectorResolutionTests` pins the dispatch **through the real `AddConnectorsModule`
+container**.
+
+**The reason it survived is worth stating precisely, because a first reading gets it wrong.** It was
+not that a test built the collector by hand and so missed the wiring — **nothing built it at all.**
+A repo-wide search found no test that constructed or exercised `EndpointFactsCollector` or
+`LinuxFactsParser` in any suite; the only references were source-scanning convention tests. It
+shipped in Phase 3 with **no behavioural coverage of any kind**, and Phase 4's inventory slice was
+the first code anywhere to resolve it.
+
+**The general gap.** `Connectors.IntegrationTests` proves the connector works against the real
+fleet by composing it **by hand** — `new SshConnector(...)` with explicit collaborators. That is
+the right way to test the connector's behaviour, and it is why the fleet suite is trustworthy. But
+it means **no test in that suite exercises the container the host actually builds**, so any defect
+that lives purely in `AddConnectorsModule` — a wrong lifetime, a captive dependency, a
+single-service resolution with two registrations — is invisible to it. Two of those three have now
+bitten this repo.
+
+`HostModuleDiscoveryTests` covers the adjacent question (is the module *reachable*), not this one
+(does the module resolve the *right* collaborators).
+
+**Not fixed here**, and it needs an owner before it is a deferral at all
+(`DIFFERENTIATORS.md:88`). The fix is a small container-fidelity suite per module — resolve each
+public service from a real composition and assert its collaborators — which is test infrastructure
+with its own shape, belonging to whoever owns the connector surface rather than to the phase that
+tripped over it. **Proposed: Phase 8**, which inherits the connector (D-302, D-303, D-304, D-309)
+and is where an unexercised WinRM path first becomes load-bearing.
+
 ## `db/schema.sql` has no drift test — candidate deferral, needs an owner
 
 **Flagged, deliberately NOT fixed here.** `db/schema.sql` is a `pg_dump --schema-only --no-owner`
@@ -294,13 +336,32 @@ schema-contract surface rather than to the phase that happened to touch it next.
 proving that what is checked in matches what is running. Not assigned here — that is the reader's
 call, and until it is assigned this is a flagged gap rather than a deferral.
 
-## Deferrals this phase must itself name
+## Deferrals this phase names — D-401 and D-402
 
-`DIFFERENTIATORS.md:88` — deferring is allowed; deferring **without a named owner** is not.
+`DIFFERENTIATORS.md:88` — deferring is allowed; deferring **without a named owner** is not. Both
+owners below are **proposals awaiting ratification**, not decisions this phase made alone.
 
-The lab fleet has **no AD and no DHCP**, so correlation ships as a pluggable evidence-source seam
-proven against synthetic / file-backed sources — which is exactly what criterion (f) asks for. Real
-LDAP and DHCP-lease ingestion are therefore deferred and need owners assigned before the phase closes.
+The lab has no Active Directory and no DHCP server, so correlation ships as a pluggable
+`IAssetEvidenceSource` seam proven against file-backed synthetic sources — which is exactly what
+criterion (f) asks for, and what makes "absent from AD" assertable at all. What is deferred is the
+*real* ingestion behind that seam.
+
+| ID | Deferred | Proposed owner | Gate — what cannot be claimed until it lands |
+|----|----------|----------------|----------------------------------------------|
+| **D-401** | Real **Active Directory / LDAP** evidence source | **Phase 14** (identity & access) | The unmanaged finding is only as good as the sources consulted. Until AD is real, "absent from AD" means "absent from a file someone maintained", and the differentiator cannot be demonstrated to a customer against their own estate. Phase 14 is proposed because it is where directory integration already lands — `operators.external_auth_ref` and federated login need an LDAP client, and two LDAP clients in one product is one too many |
+| **D-402** | Real **DHCP lease** ingestion | **Phase 11** (scheduling & reporting) | Same gate. A lease file is a point-in-time export; real ingestion is a *scheduled import* with its own freshness question — a stale lease table makes a live host look absent, which manufactures the exact false positive this feature exists to avoid. Phase 11 is proposed because it owns schedules; the freshness rule belongs with whatever runs the import |
+
+**Both share one hazard worth stating once.** `IAssetEvidenceSource` requires a source that cannot be
+consulted to **throw**, never to report absence — an unreachable domain controller would otherwise
+flag an entire estate as unmanaged, an outage rendered as a finding. That rule is enforced today
+(`An_unreadable_source_fails_rather_than_reporting_every_host_absent`) and whoever implements D-401
+or D-402 inherits it; a real network client has far more ways to be unavailable than a missing file
+does.
+
+**Also not registered by default:** the module registers no `IAssetEvidenceSource`. A deployment
+declares its own. Registering a synthetic one by default would let an estate correlate against
+nothing while appearing to correlate — and with no sources, every discovered host is reported
+unmanaged, which is the honest answer when nothing has been asked.
 
 ### Landed 2026-08-26 (slice 2) — schema
 
