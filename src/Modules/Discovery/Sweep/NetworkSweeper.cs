@@ -42,7 +42,7 @@ internal sealed class NetworkSweeper : INetworkSweeper
         _policy = new DiscoveryTargetPolicy(security.Value, logger);
     }
 
-    public async Task<SweepResult> SweepAsync(SweepRequest request, CancellationToken ct)
+    public async Task<SweepResult> ScanAsync(SweepRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
 

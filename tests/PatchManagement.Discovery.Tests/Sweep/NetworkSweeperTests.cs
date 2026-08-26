@@ -35,7 +35,7 @@ public sealed class NetworkSweeperTests
     {
         var sweeper = Sweeper(new FakePortProbe());
 
-        await Assert.ThrowsAsync<ArgumentException>(() => sweeper.SweepAsync(
+        await Assert.ThrowsAsync<ArgumentException>(() => sweeper.ScanAsync(
             new SweepRequest { TenantId = Guid.Empty, Ranges = ["127.0.0.1/32"] },
             CancellationToken.None));
     }
@@ -51,7 +51,7 @@ public sealed class NetworkSweeperTests
         var probe = new FakePortProbe();
         var sweeper = Sweeper(probe);
 
-        var result = await sweeper.SweepAsync(
+        var result = await sweeper.ScanAsync(
             new SweepRequest { TenantId = Tenant, Ranges = ["2001:db8::/64"] },
             CancellationToken.None);
 
@@ -73,7 +73,7 @@ public sealed class NetworkSweeperTests
         var options = new DiscoverySweepOptions { MaxHostsPerRange = 16 };
         var sweeper = Sweeper(probe, options, "10.0.0.0/8");
 
-        var result = await sweeper.SweepAsync(
+        var result = await sweeper.ScanAsync(
             new SweepRequest { TenantId = Tenant, Ranges = ["10.0.0.0/24"] },
             CancellationToken.None);
 
@@ -88,7 +88,7 @@ public sealed class NetworkSweeperTests
         var probe = new FakePortProbe();
         var sweeper = Sweeper(probe);
 
-        var result = await sweeper.SweepAsync(
+        var result = await sweeper.ScanAsync(
             new SweepRequest { TenantId = Tenant, Ranges = ["not-a-range"] },
             CancellationToken.None);
 
@@ -107,7 +107,7 @@ public sealed class NetworkSweeperTests
         var probe = new FakePortProbe();
         var sweeper = Sweeper(probe);
 
-        var result = await sweeper.SweepAsync(
+        var result = await sweeper.ScanAsync(
             new SweepRequest { TenantId = Tenant, Ranges = ["127.0.0.0/30"], Ports = [22] },
             CancellationToken.None);
 
@@ -128,7 +128,7 @@ public sealed class NetworkSweeperTests
         var probe = new FakePortProbe();
         var sweeper = Sweeper(probe);
 
-        await sweeper.SweepAsync(
+        await sweeper.ScanAsync(
             new SweepRequest { TenantId = Tenant, Ranges = ["127.0.0.1/32"] },
             CancellationToken.None);
 
@@ -144,7 +144,7 @@ public sealed class NetworkSweeperTests
         var probe = new FakePortProbe(("127.0.0.1", 22), ("127.0.0.1", 445));
         var sweeper = Sweeper(probe);
 
-        var result = await sweeper.SweepAsync(
+        var result = await sweeper.ScanAsync(
             new SweepRequest { TenantId = Tenant, Ranges = ["127.0.0.1/32"] },
             CancellationToken.None);
 
@@ -163,7 +163,7 @@ public sealed class NetworkSweeperTests
         var probe = new FakePortProbe();
         var sweeper = Sweeper(probe);
 
-        var result = await sweeper.SweepAsync(
+        var result = await sweeper.ScanAsync(
             new SweepRequest { TenantId = Tenant, Ranges = ["127.0.0.0/30"], Ports = [22] },
             CancellationToken.None);
 
@@ -182,7 +182,7 @@ public sealed class NetworkSweeperTests
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sweeper.SweepAsync(
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sweeper.ScanAsync(
             new SweepRequest { TenantId = Tenant, Ranges = ["127.0.0.0/24"], Ports = [22] },
             cts.Token));
     }

@@ -122,6 +122,24 @@ Two properties are worth separating, because only one of them is about the sweep
   down a freshly-written second path and leave every policy test green. Widening its allowlist is
   the place that decision has to be recorded — inventory (slice 3) will need it.
 
+**A name collision the full suite caught, worth recording because the obvious fix was the wrong
+one.** `INetworkSweeper`'s method was first written as `SweepAsync`, which turned
+`TenantScopeConventionTests` red — that Phase 2 guard fences ADR 0014's cross-tenant seam with a
+repo-wide source scan whose vocabulary includes the bare token `SweepAsync`. A network sweep and a
+tenant sweep are unrelated, but the scan cannot tell them apart.
+
+The tempting fixes were both wrong. Adding the Discovery files to that guard's allowlist would blind
+it to a *genuine* cross-tenant call from this module later — it is an allowlist of files, not of
+tokens. Loosening the guard's vocabulary would be Phase 4 weakening a Phase 2 convention to suit
+itself. So the newcomer gave way: the method is `ScanAsync`, the nouns stay `Sweep*` because that is
+the domain's word, and `INetworkSweeper` carries a comment saying why, so it does not get tidied
+back.
+
+Separately, and **for that guard's owner rather than this phase**: matching the bare token
+`SweepAsync` anywhere under `src/` will keep producing false positives as the tree grows, and a
+convention test that cries wolf is one people learn to silence. Worth tightening to co-occurrence
+with `ITenantScopeFactory` — but by Phase 2/15, who own it.
+
 **One residual, named rather than left to be rediscovered.** `NetworkSweeper` creates one task per
 address up front and lets `MaxConcurrentProbes` throttle them at a semaphore. Concurrency is
 genuinely bounded — that is what the cap is for — but *task creation* is not: a `/16` allocates

@@ -44,7 +44,7 @@ public sealed class TargetPolicyTests
         var probe = new FakePortProbe();
         var sweeper = Sweeper(probe, "127.0.0.0/8");
 
-        var result = await sweeper.SweepAsync(Request("10.0.0.0/30"), CancellationToken.None);
+        var result = await sweeper.ScanAsync(Request("10.0.0.0/30"), CancellationToken.None);
 
         Assert.Equal(SweepOutcome.RefusedByPolicy, result.Outcome);
         Assert.False(result.Succeeded);
@@ -62,7 +62,7 @@ public sealed class TargetPolicyTests
         var probe = new FakePortProbe();
         var sweeper = Sweeper(probe, "127.0.0.0/8");
 
-        var result = await sweeper.SweepAsync(Request("10.0.0.0/30"), CancellationToken.None);
+        var result = await sweeper.ScanAsync(Request("10.0.0.0/30"), CancellationToken.None);
 
         Assert.Empty(probe.Attempts);
         Assert.Equal(0, result.AddressesProbed);
@@ -78,7 +78,7 @@ public sealed class TargetPolicyTests
         var probe = new FakePortProbe();
         var sweeper = Sweeper(probe);
 
-        var result = await sweeper.SweepAsync(Request("127.0.0.1/32"), CancellationToken.None);
+        var result = await sweeper.ScanAsync(Request("127.0.0.1/32"), CancellationToken.None);
 
         Assert.Equal(SweepOutcome.RefusedByPolicy, result.Outcome);
         Assert.Empty(probe.Attempts);
@@ -96,7 +96,7 @@ public sealed class TargetPolicyTests
         var probe = new FakePortProbe(("127.0.0.1", 22));
         var sweeper = Sweeper(probe, "127.0.0.0/8");
 
-        var result = await sweeper.SweepAsync(
+        var result = await sweeper.ScanAsync(
             Request("127.0.0.1/32", "192.168.1.0/30"), CancellationToken.None);
 
         Assert.Equal(SweepOutcome.RefusedByPolicy, result.Outcome);
@@ -116,7 +116,7 @@ public sealed class TargetPolicyTests
         var probe = new FakePortProbe();
         var sweeper = Sweeper(probe, "192.168.1.0/24");
 
-        var result = await sweeper.SweepAsync(Request("192.168.0.0/16"), CancellationToken.None);
+        var result = await sweeper.ScanAsync(Request("192.168.0.0/16"), CancellationToken.None);
 
         Assert.Equal(SweepOutcome.RefusedByPolicy, result.Outcome);
         Assert.Empty(probe.Attempts);
@@ -129,7 +129,7 @@ public sealed class TargetPolicyTests
         var probe = new FakePortProbe(("127.0.0.1", 22));
         var sweeper = Sweeper(probe, "127.0.0.0/8");
 
-        var result = await sweeper.SweepAsync(Request("127.0.0.1/32"), CancellationToken.None);
+        var result = await sweeper.ScanAsync(Request("127.0.0.1/32"), CancellationToken.None);
 
         Assert.Equal(SweepOutcome.Ok, result.Outcome);
         Assert.NotEmpty(probe.Attempts);
@@ -148,7 +148,7 @@ public sealed class TargetPolicyTests
         var probe = new FakePortProbe();
         var sweeper = Sweeper(probe, "127.0.0.1");
 
-        var neighbour = await sweeper.SweepAsync(Request("127.0.0.2/32"), CancellationToken.None);
+        var neighbour = await sweeper.ScanAsync(Request("127.0.0.2/32"), CancellationToken.None);
 
         Assert.Equal(SweepOutcome.RefusedByPolicy, neighbour.Outcome);
         Assert.Empty(probe.Attempts);
@@ -164,7 +164,7 @@ public sealed class TargetPolicyTests
         var probe = new FakePortProbe();
         var sweeper = Sweeper(probe, "not-a-cidr", "999.1.1.1/24");
 
-        var result = await sweeper.SweepAsync(Request("127.0.0.1/32"), CancellationToken.None);
+        var result = await sweeper.ScanAsync(Request("127.0.0.1/32"), CancellationToken.None);
 
         Assert.Equal(SweepOutcome.RefusedByPolicy, result.Outcome);
         Assert.Empty(probe.Attempts);
@@ -180,8 +180,8 @@ public sealed class TargetPolicyTests
         var probe = new FakePortProbe(("127.0.0.1", 22));
         var sweeper = Sweeper(probe, "127.0.0.0/8");
 
-        var first = await sweeper.SweepAsync(Request("127.0.0.1/32"), CancellationToken.None);
-        var second = await sweeper.SweepAsync(Request("127.0.0.1/32"), CancellationToken.None);
+        var first = await sweeper.ScanAsync(Request("127.0.0.1/32"), CancellationToken.None);
+        var second = await sweeper.ScanAsync(Request("127.0.0.1/32"), CancellationToken.None);
 
         Assert.Equal(first.Outcome, second.Outcome);
         Assert.Equal(
