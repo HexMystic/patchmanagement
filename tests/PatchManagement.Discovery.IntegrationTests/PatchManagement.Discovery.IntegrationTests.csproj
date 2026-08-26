@@ -1,0 +1,43 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Integration suite: the real TcpPortProbe against the real lab fleet on localhost:2201-2205.
+    Requires the lab to be up (docker compose -f lab/docker-compose.yml up -d, from the MAIN
+    worktree per WORKFLOW.md section 3).
+
+    Separate from PatchManagement.Discovery.Tests on purpose: that project's header promises it
+    opens NO SOCKETS, which is what makes its target-policy proofs trustworthy. A fleet test
+    belongs on the other side of that line, not inside it.
+
+    When the lab is missing these tests FAIL rather than skip, matching LabFixture and
+    PostgresFixture: xunit 2.9.2 has no Assert.Skip, and ROADMAP.md records suite sizes as
+    absolute counts that silent skips would quietly corrupt.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="9.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Modules\Discovery\PatchManagement.Discovery.csproj" />
+    <ProjectReference Include="..\..\src\Shared\Contracts\PatchManagement.Contracts.csproj" />
+    <ProjectReference Include="..\PatchManagement.TestSupport\PatchManagement.TestSupport.csproj" />
+  </ItemGroup>
+
+</Project>

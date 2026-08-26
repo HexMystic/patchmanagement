@@ -41,12 +41,12 @@ Two sources state them. `docs/ROADMAP.md` states them abstractly; the table belo
 **operative** form, because it names observable conditions. A criterion is ticked only when a
 named test proves it — never because the code looks right.
 
-**1 of 9 ticked** as of 2026-08-26. Slice 1 (sweep + target policy) landed; criterion (i) is
-proven. Criterion (a) is **half-proven** — see its row.
+**2 of 9 ticked** as of 2026-08-26. Slice 1 (sweep + target policy) landed and criterion (a)
+closed against the real fleet the same day. `main` is green at **576** across nine projects.
 
 | # | Criterion | Proven by | Status |
 |---|-----------|-----------|--------|
-| a | Tenant-scoped IP-range/CIDR sweep finds the 5 lab containers on `localhost:2201-2205` and reports open management ports (22 / 5985 / 5986 / 445) | fleet integration test against the real lab | ☐ **half** — the sweep engine, the bounded-range rules and the target policy are proven by `NetworkSweeperTests` (11) + `CidrBlockTests` (18) + `TargetPolicyTests` (9), all against a fake probe that opens no socket. **The half that is unproven is the half that touches the lab**: nothing has yet demonstrated the sweep finding a real container on a real port, because Docker was down for the whole slice |
+| a | Tenant-scoped IP-range/CIDR sweep finds the 5 lab containers on `localhost:2201-2205` and reports open management ports | `LabSweepTests` (5) against the real fleet, plus `NetworkSweeperTests` (11) + `CidrBlockTests` (18) + `TargetPolicyTests` (9) against a fake probe | ☑ — the sweep of `127.0.0.1/32` returns exactly `[2201, 2202, 2203, 2204, 2205]`, compared by **equality** against the ports `lab/docker-compose.yml` publishes, read at test time rather than hardcoded. **Not red-first, and could not be** — see the note below |
 | b | OS family classified from banner/probe **before** a connector is chosen | unit tests over captured banners | ☐ |
 | c | Candidates persisted to `assets` with `source = 'discovery'`, `managed = false` until inventoried | store integration test against real Postgres | ☐ |
 | d | Linux package inventory populated for **all 5 distros** over SSH → `asset_packages` (name, version, epoch, arch, source), plus kernel / OS-release onto `assets` | fleet integration test, per-distro theory | ☐ |
@@ -147,6 +147,38 @@ genuinely bounded — that is what the cap is for — but *task creation* is not
 is not worth churning now; it is worth revisiting in slice 3, where address counts stop being
 hypothetical, alongside **D-310** (the pool's per-borrow eviction sweep), which this phase already
 owns and which is the same question one layer down.
+
+### Criterion (a) closed 2026-08-26 — and it was NOT red-first
+
+Stated plainly because the standing discipline says red-first: **no red run was available for this
+test, and pretending otherwise would be the dishonest option.** The sweep was already implemented and
+already green — that work was proven red-first in slice 1, where all nine policy and reachability
+tests failed before the guard existed. A fleet test written afterwards can only confirm what the
+unit suite already established; there was nothing left to implement that it could fail against.
+
+It ran green on its first execution, which was not a foregone conclusion: `TcpPortProbe` is the one
+component the unit suite deliberately never exercises — it substitutes a fake probe, because a suite
+that reached the network to prove the network guard works would be doing the thing the guard forbids
+— so before this suite existed, the only code in the module that opens a socket had never touched a
+real TCP stack.
+
+**What replaced the red run: two mutations, because a green test that cannot fail proves nothing.**
+
+- Appending a port nothing publishes turned it red, and the failure printed the fleet as observed:
+  `Expected: [···, 2202, 2203, 2204, 2205, 2299]` / `Actual: [···, 2202, 2203, 2204, 2205]`.
+- Comparing against an empty list printed the discovered set in full —
+  `Actual: [2201, 2202, 2203, 2204, 2205]` — which is exactly what `docker ps` publishes:
+  2201 ubuntu2204, 2202 ubuntu2404, 2203 debian12, 2204 rocky9, 2205 alma9.
+
+`A_port_nothing_listens_on_is_reported_closed` is the standing control: a probe that called every
+port open would satisfy "all five answered" perfectly, so a port bound and released a moment earlier
+must come back closed. And `A_non_lab_range_is_still_refused_with_the_real_probe` re-proves NEVER #4
+with the real probe wired in, since every other policy proof substitutes it.
+
+**One thing this suite does not claim.** The lab publishes all five distros on `127.0.0.1` at
+different ports, so five containers are observed as one host with five open ports, not as five
+hosts. Establishing that those endpoints are five distinct machines requires a login, which is
+slice 3's job.
 
 ## Deferrals this phase must itself name
 

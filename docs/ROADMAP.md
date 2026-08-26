@@ -492,6 +492,22 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   sweeper; only the choke-point scan proves it stops the *module*, by pinning
   `src/Modules/Discovery` to exactly one file permitted to open a network connection. Verified
   non-inert by mutation — emptying its allowlist turns it red.
+- **Criterion (a) closed 2026-08-26 against the real fleet, and it was NOT red-first.** Said plainly
+  because the discipline is red-first: no red run was available. The sweep was already implemented
+  and green — proven red-first in slice 1 — so a fleet test written afterwards had nothing left to
+  fail against. It passed on first execution, which was not a foregone conclusion: `TcpPortProbe` is
+  the one component the unit suite deliberately never exercises (it substitutes a fake probe,
+  because a suite that reached the network to prove the network guard works would be doing the thing
+  the guard forbids), so the only code in the module that opens a socket had never touched a real
+  TCP stack. **Two mutations stood in for the red run**, since a green test that cannot fail proves
+  nothing: appending an unpublished port turned it red, and comparing against an empty list printed
+  the fleet as observed — `Actual: [2201, 2202, 2203, 2204, 2205]`, exactly what `docker ps`
+  publishes (2201 ubuntu2204, 2202 ubuntu2404, 2203 debian12, 2204 rocky9, 2205 alma9). The expected
+  set is **read from `lab/docker-compose.yml` at test time**, compared by equality rather than
+  containment, and a parse that found no ports fails loudly instead of asserting against an empty
+  set. Five containers are observed as **one host with five open ports** — proving they are five
+  distinct machines needs a login, which is slice 3. **`main` is green at 576 across all nine
+  projects** (571 + the 5 new fleet tests), with the SSH fleet suite still 54 of 54.
 - **Two open NEVER #6 asks** before the slices that need them: the new tables (`discovery_runs`,
   `asset_evidence`, `host_keys`) and the `EndpointTarget` bastion-chain shape for D-306. Both are
   detailed in `docs/phases/phase-4.md`.

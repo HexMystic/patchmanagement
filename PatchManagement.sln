@@ -59,6 +59,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PatchManagement.Discovery",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PatchManagement.Discovery.Tests", "tests\PatchManagement.Discovery.Tests\PatchManagement.Discovery.Tests.csproj", "{D3D5BA26-C07F-4355-9EEE-FFEAA7C1B558}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PatchManagement.Discovery.IntegrationTests", "tests\PatchManagement.Discovery.IntegrationTests\PatchManagement.Discovery.IntegrationTests.csproj", "{37D30E63-888B-4256-B74C-1DA160AC12A2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -285,6 +287,18 @@ Global
 		{D3D5BA26-C07F-4355-9EEE-FFEAA7C1B558}.Release|x64.Build.0 = Release|Any CPU
 		{D3D5BA26-C07F-4355-9EEE-FFEAA7C1B558}.Release|x86.ActiveCfg = Release|Any CPU
 		{D3D5BA26-C07F-4355-9EEE-FFEAA7C1B558}.Release|x86.Build.0 = Release|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Debug|x64.Build.0 = Debug|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Debug|x86.Build.0 = Debug|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Release|x64.ActiveCfg = Release|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Release|x64.Build.0 = Release|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Release|x86.ActiveCfg = Release|Any CPU
+		{37D30E63-888B-4256-B74C-1DA160AC12A2}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -315,5 +329,6 @@ Global
 		{45D4843E-D65D-046D-A47C-6FD9A62F431A} = {EC447DCF-ABFA-6E24-52A5-D7FD48A5C558}
 		{97557777-76C6-4F8E-8677-7B79DFB45609} = {45D4843E-D65D-046D-A47C-6FD9A62F431A}
 		{D3D5BA26-C07F-4355-9EEE-FFEAA7C1B558} = {45D4843E-D65D-046D-A47C-6FD9A62F431A}
+		{37D30E63-888B-4256-B74C-1DA160AC12A2} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal
