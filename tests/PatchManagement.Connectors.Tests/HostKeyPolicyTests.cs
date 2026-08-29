@@ -11,6 +11,11 @@ namespace PatchManagement.Connectors.Tests;
 /// authenticates anything able to answer on the target's address and then sends it a private key —
 /// for a product whose whole job is privileged remote execution, the wrong default however
 /// convenient it is in a lab.</para>
+///
+/// <para>These two assertions still hold after D-301: the default is still refuse, and trust is
+/// still never hardcoded. What the flag MEANS narrowed — it now governs only whether an unpinned
+/// endpoint may be pinned on first sight. The comparison that refuses a CHANGED key lives in
+/// <c>HostKeyGateTests</c>, and deliberately does not consult this flag at all.</para>
 /// </summary>
 public sealed class HostKeyPolicyTests
 {

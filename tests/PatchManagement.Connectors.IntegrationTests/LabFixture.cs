@@ -76,8 +76,13 @@ public sealed class LabFixture : IAsyncLifetime
             Credentials,
             // The lab rebuilds its containers constantly and they regenerate host keys each time, so
             // there is nothing stable to pin. This opt-in is deliberate, explicit and scoped to the
-            // lab; the product default REFUSES unknown host keys, and a real fleet needs the verified
-            // -key store deferred to Phase 4 (D-301).
+            // lab; the product default REFUSES unknown host keys.
+            //
+            // No IHostKeyStore is supplied here, and that is not an oversight: this project has no
+            // database, and D-301's store is exercised where one exists (HostKeyTofuTests, in
+            // Discovery.IntegrationTests). These tests therefore run the pre-store posture on
+            // purpose — which is also the posture any deployment gets if it composes the Connectors
+            // module alone, so it is worth keeping under test rather than assuming away.
             new SshNetSessionFactory(new ConnectorSecurityOptions { AllowUnknownHostKeys = true }),
             new SshConnectionPool(options),
             Governor,
@@ -124,7 +129,7 @@ public sealed class LabFixture : IAsyncLifetime
         var plan = ConnectionPlanner.Plan(TargetFor(host));
 
         return await factory
-            .ConnectAsync(plan, Credentials.ResolveAsync, TimeSpan.FromSeconds(30), ct)
+            .ConnectAsync(plan, Credentials.ResolveAsync, hostKeys: null, TimeSpan.FromSeconds(30), ct)
             .ConfigureAwait(false);
     }
 

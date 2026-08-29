@@ -43,13 +43,13 @@ Two sources state them. `docs/ROADMAP.md` states them abstractly; the table belo
 **operative** form, because it names observable conditions. A criterion is ticked only when a
 named test proves it — never because the code looks right.
 
-**9 of 9 ticked** as of 2026-08-27. `main` is green at **642** across nine projects (632 at the
-criteria close; slice 5 has added 10 so far).
+**9 of 9 ticked** as of 2026-08-27. `main` is green at **658** across nine projects (632 at the
+criteria close; slice 5 has added 26 so far — 10 for D-306, 16 for D-301).
 
-**The exit criteria are met; the PHASE is not closed.** It still owns three inherited deferrals —
-**D-301** (host-key store), **D-306** (multi-hop bastion) and **D-310** (per-borrow eviction sweep) —
-and `host_keys` still has no writer, so criterion (g) holds for it structurally rather than
-behaviourally. Slice 5 is what closes those. `docs/WORKFLOW.md` §5 requires every criterion met AND
+**The exit criteria are met; the PHASE is not closed.** It inherited three deferrals — **D-301**
+(host-key store), **D-306** (multi-hop bastion) and **D-310** (per-borrow eviction sweep). Slice 5
+closed **D-306** and **D-301** on 2026-08-29; `host_keys` now has a writer, so criterion (g) holds
+behaviourally as well as structurally. **D-310 remains open.** `docs/WORKFLOW.md` §5 requires every criterion met AND
 tests passing before the status moves; the deferral table requires the owner to discharge or
 re-assign what it inherited.
 
@@ -61,7 +61,7 @@ re-assign what it inherited.
 | d | Linux package inventory populated for **all 5 distros** over SSH → `asset_packages` (name, version, epoch, arch, source), plus OS-release onto `assets` | `LabInventoryTests` (12) against the real fleet | ☑ — all five distros, >50 packages each, `source` matching the package manager. **Epoch required fixing the collector**: the rpm query asked only for VERSION-RELEASE, so every epoch was being dropped between a host that knows it and a column built to hold it |
 | e | Failure sets the asset state **honestly** — `unreachable` / `auth-failed` / `scan-failed`, never collapsed into compliant (HARD-PROBLEMS #8) | `LabInventoryTests` — a **real** rejected key against a live host, and a real closed port | ☑ — proven by what a host actually did, not by a mapping table. A failed inventory also leaves `last_seen` alone and `managed` false |
 | f | A synthetic "seen but in no inventory" host is flagged unmanaged **with its evidence** (seen at IP X by run Y; absent from AD / DHCP / inventory) | `CorrelationTests` (6) over file-backed synthetic sources | ☑ — **and the load-bearing test is the negative one**: a host AD knows about is NOT flagged, even though `managed = false`. Absences are written as rows, not computed and discarded, so the flag is auditable later. Real LDAP/DHCP ingestion is **D-401 / D-402** below |
-| g | Everything tenant-scoped; RLS holds on every new table; `RlsConventionTests` stays green with **no new exemption** | `RlsConventionTests` (unmodified allowlist) + `DiscoveryStoreTests` two-tenant cases | ☑ **for the tables that now carry rows.** Two tenants sweeping the same address get separate, mutually invisible assets, runs and evidence — asserted through the real `RlsConnectionInterceptor` as `patchmgmt_app`, not as the owner. `host_keys` has RLS and a policy but **no writer yet**, so its isolation is proven structurally (catalog) and not yet behaviourally; that lands with D-301 in slice 5 |
+| g | Everything tenant-scoped; RLS holds on every new table; `RlsConventionTests` stays green with **no new exemption** | `RlsConventionTests` (unmodified allowlist) + `DiscoveryStoreTests` two-tenant cases | ☑ **for the tables that now carry rows.** Two tenants sweeping the same address get separate, mutually invisible assets, runs and evidence — asserted through the real `RlsConnectionInterceptor` as `patchmgmt_app`, not as the owner. ~~`host_keys` has RLS and a policy but **no writer yet**~~ — **as of 2026-08-29 it does.** `HostKeyTofuTests` writes pins through the restricted `patchmgmt_app` role with the real `RlsConnectionInterceptor`, and asserts both halves behaviourally: two tenants pinning the same address get separate, mutually invisible rows, **and** one tenant's mismatched pin does not refuse another tenant at that address — the failure a store filtering in C# rather than at the database would produce, which would read as an outage rather than a bug. **Criterion (g) now holds behaviourally for every Phase 4 table** |
 | h | Every connector call time-bounded and idempotent (NEVER #5); a re-run writes the **same rows with stable ids**, not merely un-duplicated | `Re_running_a_sweep_writes_the_same_rows_with_the_same_ids` + `Re_running_advances_last_seen_on_the_same_row` | ☑ **for discovery.** Asserted on **ids**, not counts: a count is satisfied by delete-and-reinsert, by a no-op on conflict, and by a second run that wrote nothing. Findings, packages and evidence all hang off the asset id, so an id that changes silently orphans them. **Not yet closed for inventory** — slice 3 has no writes to be idempotent about |
 | i | The Discovery module is **reachable in the shipped host** | `Api_project_ships_the_discovery_module` + `Real_host_container_resolves_the_discovery_module` | ☑ **proven red-first**, both failed before `PatchManagement.Api.csproj` gained its `ProjectReference` — the deps.json guard on the missing entry, the container guard on a null `INetworkSweeper` |
 
@@ -93,7 +93,7 @@ Each was verified **in code** at `48f3cf1` when the phase opened. None is assume
 
 | ID | Verified state at phase open | What closing it requires |
 |----|------------------------------|--------------------------|
-| **D-301** — persistent verified-host-key (TOFU) store | **OPEN.** `ConnectorSecurityOptions.cs:26` is a single bool; `SshNetSessionFactory.cs:278-279` sets `e.CanTrust = _security.AllowUnknownHostKeys` — a blanket yes/no. No fingerprint is read, compared or persisted anywhere in `src/` | A `host_keys` store, and a test proving a **changed** fingerprint is refused. Until then the `AllowUnknownHostKeys` gate stands and the connector cannot be pointed at a real fleet |
+| **D-301** — persistent verified-host-key (TOFU) store | ~~**OPEN.**~~ **CLOSED 2026-08-29, slice 5.** At phase open `ConnectorSecurityOptions.cs:26` was a single bool and `SshNetSessionFactory.cs:278-279` set `e.CanTrust = _security.AllowUnknownHostKeys` — a blanket yes/no, with no fingerprint read, compared or persisted anywhere in `src/` | Done: `IHostKeyStore` (Connectors) implemented as `HostKeyStore` over `AppDbContext` (Discovery), and `A_changed_fingerprint_is_refused_and_the_presented_key_is_recorded` against the real fleet. See the slice-5 note below |
 | **D-306** — multi-hop (>1) bastion chains | ~~**OPEN, and larger than the factory.**~~ **CLOSED 2026-08-29, slice 5.** At phase open `SshNetSessionFactory.cs:184-190` refused `Hops.Count > 1` by name, but that branch was **unreachable from the planner** — `EndpointTarget.Bastion` is a single `BastionHop?`, so `ConnectionPlanner.Plan` could only ever emit 0 or 1 hops, and the two-hop plan proving the refusal was hand-constructed | Done: `BastionChain` (additive, ADR 0017), the planner emitting every hop, and the factory **walking** the chain. See the slice-5 note below |
 | **D-310** — `AcquireAsync` runs a full eviction sweep per borrow | **OPEN.** `SshConnectionPool.AcquireAsync:80` calls `EvictIdle()` on every borrow; `EvictIdle` takes `lock (_lifetime)` and scans all entries, so acquires serialise on an O(entries) scan | **Measurement, not reasoning.** A sweep is the first thing to borrow hard against many hosts at once. Whether dropping the call changes eviction timing observably is the question to answer with evidence |
 
@@ -435,6 +435,62 @@ plans are never `Equal`. The chain tests compare content explicitly and name the
 type's equality is a shared-type behaviour change with no caller demanding it, so it was not slipped
 into this slice.
 
+### D-301 closed 2026-08-29 — the store, and what the flag now means
+
+`IHostKeyStore` is declared in the **Connectors** module, which consults it during a handshake, and
+implemented as `HostKeyStore` over `AppDbContext` in **Discovery** — where HARD-PROBLEMS #11's owner
+note put it, "with asset persistence, where a fingerprint is just another observed fact about a
+host". That split is what keeps Connectors free of any persistence dependency, which
+`ProviderNeutralityTests` and the layering both require.
+
+**Read before, compare during, write after.** `HostKeyReceived` is raised synchronously in the middle
+of the key exchange, so consulting the store *there* would mean a database call blocking a transport
+thread — sync-over-async designed in at the one place this product has to scale (CLAUDE.md §2). The
+pin is fetched before the socket opens, the handler does nothing but an ordinal string comparison,
+and the observation is written afterwards. **Refusals are written too**: "the key at this endpoint
+changed on date X" is the event the table exists to capture, and a refusal that left no row would
+leave the estate unable to tell a rebuilt host from an interception later.
+
+**`AllowUnknownHostKeys` narrowed, and the narrowing is load-bearing.** It used to be the whole
+host-key decision; it now answers only *may we pin something never seen before*. A **changed** key is
+refused whatever it is set to. Had the flag covered both, the lab's convenience opt-in — set by every
+fleet fixture and by `LabInventoryTests` — would switch off the only check capable of detecting an
+endpoint being impersonated, and the store would be an audit log rather than a control.
+`HostKeyGateTests` asserts the refusal under **both** settings of the flag for exactly that reason.
+
+**A chained hop pins its configured address, not the one it is dialled at.** Hops after the first are
+reached at `127.0.0.1:<ephemeral>` through a local forward, so pinning what was dialled would pin a
+port that differs on every connection and would verify nothing at all.
+
+**The red run.** Before the connector consulted it, `host_keys` took no rows whatsoever — the
+first-sighting test failed with `Sequence contains no elements` — and an endpoint pinned to a key it
+does not have returned **`Ok`**: it connected, and was sent a private key. That is D-301 stated as an
+observation rather than as a worry.
+
+**Criterion (g) closes behaviourally.** `HostKeyTofuTests` writes through the restricted
+`patchmgmt_app` role with the real `RlsConnectionInterceptor`. Two tenants pinning the same address
+get separate, mutually invisible rows — and, the load-bearing half, one tenant's **mismatched** pin
+does not refuse another tenant at that address. That is the failure a store filtering in C# rather
+than at the database would produce, and it would present as an outage rather than as a bug.
+
+**The tests compose through `AddDiscoveryModule`, not a hand-written registration.** The module's own
+registrar is what the shipped host calls; wiring the store by hand in the test would have left the
+production path unproven — the unreferenced-module defect (criterion (i)) in a different costume.
+
+**Two things deliberately left as they are.** `LabFixture` still passes `hostKeys: null`: that project
+has no database, and it keeps the pre-store posture — what any deployment gets composing Connectors
+alone — under test rather than assumed away. And the store parameter on `ISshSessionFactory.ConnectAsync`
+is **required rather than defaulted**, because a caller that forgot it would silently downgrade
+verification to the blanket yes/no this work replaced, with no symptom until an endpoint is
+impersonated.
+
+**One limitation, named rather than left to be found.** A host-key mismatch surfaces as
+`ConnectorOutcome.ProtocolError` → `scan-failed`. It is honest — we could not complete the scan, and
+the detail names both fingerprints — but it is not *specific*: a dedicated outcome would be a change
+to the frozen `ConnectorOutcome` enum and therefore a NEVER #6 ask, which this slice did not have.
+`AuthFailed` was rejected as the alternative: our credential was never rejected, and it would send an
+operator to whoever owns credentials over what may be an interception.
+
 ## Open asks (NEVER #6) — required before the slices that need them
 
 1. ~~**Schema.**~~ **CLOSED 2026-08-26** — approved and migrated as
@@ -459,4 +515,5 @@ into this slice.
 | 4 | Correlation + evidence | slice 2 |
 | 5 | Deferrals: D-301 store, D-306 chain, D-310 measurement | ask 2 |
 
-**Slice 5 progress.** D-306 closed 2026-08-29 (`main` 632 → 642). D-301 and D-310 remain open.
+**Slice 5 progress.** D-306 closed 2026-08-29 (`main` 632 → 642); D-301 closed 2026-08-29
+(642 → 658). **D-310 remains open.**

@@ -25,6 +25,13 @@ public sealed class SshConnector : IEndpointConnector
     private readonly ICredentialProvider _credentials;
     private readonly ISshSessionFactory _sessionFactory;
     private readonly SshConnectionPool _pool;
+
+    /// <summary>
+    /// D-301's verified-host-key store, or null where none is registered (the pre-D-301 posture, in
+    /// which <c>AllowUnknownHostKeys</c> is the whole decision). Held here rather than in the session
+    /// factory because the store is scoped to the request's tenant while the factory is a singleton.
+    /// </summary>
+    private readonly IHostKeyStore? _hostKeys;
     private readonly IConnectionGovernor _governor;
     private readonly IOperationCoordinator _operations;
     private readonly ILogger<SshConnector> _logger;
@@ -39,7 +46,8 @@ public sealed class SshConnector : IEndpointConnector
         IOperationCoordinator operations,
         ILogger<SshConnector> logger,
         ConnectorTimeoutOptions? timeouts = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IHostKeyStore? hostKeys = null)
     {
         _credentials = credentials;
         _sessionFactory = sessionFactory;
@@ -49,6 +57,7 @@ public sealed class SshConnector : IEndpointConnector
         _logger = logger;
         _timeouts = timeouts ?? new ConnectorTimeoutOptions();
         _time = timeProvider ?? TimeProvider.System;
+        _hostKeys = hostKeys;
     }
 
     /// <summary>
@@ -305,7 +314,8 @@ public sealed class SshConnector : IEndpointConnector
                 key,
                 // The factory resolves each hop's secret at the moment of connect and disposes it
                 // immediately — this connector never holds credential material (NEVER #1/#2).
-                token => _sessionFactory.ConnectAsync(plan, _credentials.ResolveAsync, connectTimeout, token),
+                token => _sessionFactory.ConnectAsync(
+                    plan, _credentials.ResolveAsync, _hostKeys, connectTimeout, token),
                 ct).ConfigureAwait(false);
 
             return new SessionScope(lease, pooled);

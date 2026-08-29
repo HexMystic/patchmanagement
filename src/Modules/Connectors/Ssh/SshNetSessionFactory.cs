@@ -13,9 +13,12 @@ namespace PatchManagement.Connectors.Ssh;
 /// then authenticates the target over that tunnel — the connector above is unaware which path was
 /// taken (ADR 0003). Connect/auth failures are translated to honest <see cref="ConnectorOutcome"/>s.
 ///
-/// Host-key policy is configuration (<see cref="ConnectorSecurityOptions"/>) and refuses unknown
-/// keys by default. A verified-key store is deferred to Phase 4 with asset persistence; until then
-/// this flag is what keeps the connector off a real fleet.
+/// Host-key policy is decided per hop by <see cref="HostKeyGate"/>: a pin is read from the
+/// <see cref="IHostKeyStore"/> before the socket opens, compared inside the handshake, and the
+/// observation written afterwards. A CHANGED key is refused regardless of configuration. Where no
+/// store is registered the pre-D-301 posture applies, in which
+/// <see cref="ConnectorSecurityOptions.AllowUnknownHostKeys"/> — false by default — is the whole
+/// decision and is what keeps the connector off a real fleet.
 /// </summary>
 internal sealed class SshNetSessionFactory : ISshSessionFactory
 {
@@ -122,6 +125,7 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
     public async Task<ISshSession> ConnectAsync(
         ConnectionPlan plan,
         CredentialResolver resolve,
+        IHostKeyStore? hostKeys,
         TimeSpan connectTimeout,
         CancellationToken ct)
     {
@@ -131,8 +135,8 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
         try
         {
             return plan.IsDirect
-                ? await ConnectDirectAsync(plan.Destination, resolve, connectTimeout, cts.Token).ConfigureAwait(false)
-                : await ConnectThroughBastionAsync(plan, resolve, connectTimeout, cts.Token).ConfigureAwait(false);
+                ? await ConnectDirectAsync(plan, resolve, hostKeys, connectTimeout, cts.Token).ConfigureAwait(false)
+                : await ConnectThroughBastionAsync(plan, resolve, hostKeys, connectTimeout, cts.Token).ConfigureAwait(false);
         }
         catch (ConnectorConnectException)
         {
@@ -149,14 +153,18 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
     }
 
     private async Task<ISshSession> ConnectDirectAsync(
-        HopSpec destination, CredentialResolver resolve, TimeSpan timeout, CancellationToken ct)
+        ConnectionPlan plan, CredentialResolver resolve, IHostKeyStore? hostKeys,
+        TimeSpan timeout, CancellationToken ct)
     {
+        var destination = plan.Destination;
+
         // Reachability first, on its own short budget, so an unanswering host is reported as
         // Unreachable at once instead of consuming the authentication budget.
         await EnsureReachableAsync(destination.Host, destination.Port, ct).ConfigureAwait(false);
 
         var client = await AuthenticateAsync(
-            destination, destination.Host, destination.Port, resolve, timeout, ct).ConfigureAwait(false);
+            destination, destination.Host, destination.Port,
+            resolve, hostKeys, plan.TenantId, timeout, ct).ConfigureAwait(false);
 
         return new SshNetSession(client, client.ConnectionInfo);
     }
@@ -177,7 +185,8 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
     /// walk rather than each hop, so NEVER #5 holds however long the chain is.</para>
     /// </summary>
     private async Task<ISshSession> ConnectThroughBastionAsync(
-        ConnectionPlan plan, CredentialResolver resolve, TimeSpan timeout, CancellationToken ct)
+        ConnectionPlan plan, CredentialResolver resolve, IHostKeyStore? hostKeys,
+        TimeSpan timeout, CancellationToken ct)
     {
         // Only the FIRST hop is probed. Every later leg is dialled at 127.0.0.1 against a listener
         // SSH.NET has already opened, so a reachability probe there would always succeed and would
@@ -199,13 +208,15 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
                     ? (hop.Host, hop.Port)
                     : Forward(previous, hop.Host, hop.Port, opened);
 
-                previous = await AuthenticateAsync(hop, host, port, resolve, timeout, ct).ConfigureAwait(false);
+                previous = await AuthenticateAsync(
+                    hop, host, port, resolve, hostKeys, plan.TenantId, timeout, ct).ConfigureAwait(false);
                 opened.Add(previous);
             }
 
             var (destHost, destPort) = Forward(previous!, plan.Destination.Host, plan.Destination.Port, opened);
             var client = await AuthenticateAsync(
-                plan.Destination, destHost, destPort, resolve, timeout, ct).ConfigureAwait(false);
+                plan.Destination, destHost, destPort,
+                resolve, hostKeys, plan.TenantId, timeout, ct).ConfigureAwait(false);
 
             // The session owns the whole chain: disposing it tears down every forward and every
             // intermediate client, innermost first.
@@ -245,22 +256,50 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
     /// jump host would be a silent authorization change.
     /// </summary>
     private async Task<SshClient> AuthenticateAsync(
-        HopSpec hop, string host, int port, CredentialResolver resolve, TimeSpan timeout, CancellationToken ct)
+        HopSpec hop, string host, int port, CredentialResolver resolve,
+        IHostKeyStore? hostKeys, Guid tenantId, TimeSpan timeout, CancellationToken ct)
     {
+        // The pin is read BEFORE the socket opens. HostKeyReceived is raised synchronously in the
+        // middle of the handshake, so a store lookup there would be sync-over-async on a transport
+        // thread — thread-pool starvation designed in at the one place this product has to scale
+        // (CLAUDE.md 2). Reading first and writing after leaves the handler doing a string compare.
+        //
+        // The identity is the hop's CONFIGURED address, never the dialled one: a chained hop is
+        // dialled at 127.0.0.1:<ephemeral> through a forward, so pinning what was dialled would pin
+        // a port that differs every connection and would verify nothing.
+        var gate = await HostKeyGate
+            .OpenAsync(hostKeys, tenantId, hop.Host, hop.Port, _security.AllowUnknownHostKeys, ct)
+            .ConfigureAwait(false);
+
         using var credential = await resolve(hop.Credential, ct).ConfigureAwait(false);
         var info = BuildConnectionInfo(host, port, UsernameFor(hop, credential), credential, timeout);
 
         var client = new SshClient(info);
-        ApplyHostKeyPolicy(client);
+        client.HostKeyReceived += gate.Inspect;
         try
         {
             await client.ConnectAsync(ct).ConfigureAwait(false);
+        }
+        catch when (gate.Refused)
+        {
+            client.Dispose();
+
+            // Written even though the connection failed. "The key at this endpoint changed on date X"
+            // is the security-relevant event, and a refusal leaving no row would leave the estate
+            // unable to tell a rebuilt host from an interception afterwards.
+            await gate.RecordAsync(ct).ConfigureAwait(false);
+
+            // Replaces whatever SSH.NET threw for the rejected key — which mapped to Unreachable and
+            // so read as a network problem, the single most misleading answer available here.
+            throw gate.Refusal();
         }
         catch
         {
             client.Dispose();
             throw;
         }
+
+        await gate.RecordAsync(ct).ConfigureAwait(false);
         return client;
     }
 
@@ -298,17 +337,6 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
         hop.Username
         ?? credential.Username
         ?? throw new ConnectorConnectException(ConnectorOutcome.AuthFailed, "No SSH username was supplied on the credential or hop.");
-
-    /// <summary>
-    /// Applies the configured host-key policy.
-    ///
-    /// <para>This used to be <c>e.CanTrust = true</c> unconditionally, which authenticates whatever
-    /// answers on the target's address and then sends it a private key. The decision now comes from
-    /// configuration and defaults to refusing (see <see cref="ConnectorSecurityOptions"/>), so a
-    /// deployment that has not consciously opted in cannot be silently intercepted.</para>
-    /// </summary>
-    private void ApplyHostKeyPolicy(SshClient client) =>
-        client.HostKeyReceived += (_, e) => e.CanTrust = _security.AllowUnknownHostKeys;
 
     private static ConnectorConnectException Map(Exception ex) => ex switch
     {

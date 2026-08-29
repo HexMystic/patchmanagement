@@ -2,11 +2,12 @@ namespace PatchManagement.Persistence.Entities;
 
 /// <summary>
 /// A host key observed at an endpoint, and whether this deployment trusts it — the store D-301 was
-/// deferred for.
+/// deferred for, <b>written since 2026-08-29</b> by <c>HostKeyStore</c> (Discovery) on behalf of
+/// <c>IHostKeyStore</c> (Connectors).
 ///
-/// <para>Until this exists, <c>ConnectorSecurityOptions.AllowUnknownHostKeys</c> is a blanket yes/no:
-/// production either refuses every connection or accepts whatever answers on the target's address
-/// and then sends it a private key. The store is what lets a first sighting be pinned and a
+/// <para>Before it had a writer, <c>ConnectorSecurityOptions.AllowUnknownHostKeys</c> was a blanket
+/// yes/no: production either refused every connection or accepted whatever answered on the target's
+/// address and then sent it a private key. The store is what lets a first sighting be pinned and a
 /// <b>changed</b> key be refused, which is the property that actually authenticates the endpoint.</para>
 ///
 /// <para><b>Nothing here is secret.</b> A host key is public material by definition, so

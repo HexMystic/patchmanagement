@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using PatchManagement.Contracts.Discovery;
 using Microsoft.Extensions.Logging;
 using PatchManagement.Connectors;
+using PatchManagement.Connectors.Ssh;
 using PatchManagement.Discovery.Correlation;
 using PatchManagement.Discovery.Inventory;
 using PatchManagement.Discovery.Store;
@@ -46,6 +47,14 @@ public static class DiscoveryServiceCollectionExtensions
 
         // Scoped: AppDbContext is scoped and carries the request's tenant. See the class remarks.
         services.TryAddScoped<IDiscoveryStore>(sp => new DiscoveryStore(
+            sp.GetRequiredService<AppDbContext>(),
+            sp.GetRequiredService<TimeProvider>()));
+
+        // D-301. The PORT is declared in the Connectors module, which consults it during a
+        // handshake; the IMPLEMENTATION lives here, with asset persistence, because "a fingerprint is
+        // just another observed fact about a host" (HARD-PROBLEMS 11's owner note). Scoped for the
+        // same reason IDiscoveryStore is: AppDbContext carries the request's tenant.
+        services.TryAddScoped<IHostKeyStore>(sp => new HostKeyStore(
             sp.GetRequiredService<AppDbContext>(),
             sp.GetRequiredService<TimeProvider>()));
 

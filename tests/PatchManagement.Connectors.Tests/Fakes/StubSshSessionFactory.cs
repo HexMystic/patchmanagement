@@ -30,9 +30,17 @@ internal sealed class StubSshSessionFactory : ISshSessionFactory
     /// <summary>The plans it was asked to connect, so bastion wiring can be asserted without a socket.</summary>
     public List<ConnectionPlan> Plans { get; } = [];
 
+    /// <summary>The host-key stores it was handed, so wiring can be asserted without a socket.</summary>
+    public List<IHostKeyStore?> HostKeyStores { get; } = [];
+
     public async Task<ISshSession> ConnectAsync(
-        ConnectionPlan plan, CredentialResolver resolve, TimeSpan connectTimeout, CancellationToken ct)
+        ConnectionPlan plan,
+        CredentialResolver resolve,
+        IHostKeyStore? hostKeys,
+        TimeSpan connectTimeout,
+        CancellationToken ct)
     {
+        HostKeyStores.Add(hostKeys);
         ConnectAttempts++;
         Plans.Add(plan);
 

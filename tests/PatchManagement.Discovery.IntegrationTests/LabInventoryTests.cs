@@ -260,7 +260,8 @@ public sealed class LabInventoryTests(DiscoveryPostgresFixture fx)
             {
                 // The lab rebuilds its containers constantly and they regenerate host keys each
                 // time, so there is nothing stable to pin. The product default REFUSES unknown keys;
-                // this opt-in is explicit, scoped to the lab, and is what D-301's store will replace.
+                // this opt-in is explicit and scoped to the lab. Since D-301 closed it means "pin on
+                // first sight" rather than "accept anything" — a changed key is refused here too.
                 ["Connectors:Security:AllowUnknownHostKeys"] = "true",
                 ["Connectors:Concurrency:GlobalMaxConnections"] = "8",
                 ["Connectors:Concurrency:PerTenantMaxConnections"] = "8",

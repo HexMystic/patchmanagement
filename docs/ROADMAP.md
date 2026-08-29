@@ -432,7 +432,7 @@ inherits and what it cannot claim until then.
 
 | ID | Deferred | Owner | Gate — what cannot be claimed until it lands |
 |----|----------|-------|----------------------------------------------|
-| **D-301** | Persistent verified-host-key (TOFU) store. The *seam* and reject-by-default ship now | **Phase 4** — it belongs with asset persistence | The connector **cannot be pointed at a real fleet**. `AllowUnknownHostKeys` defaults false, so production either refuses to connect or an operator disables verification wholesale. That flag is the gate, deliberately |
+| **D-301** | ~~Persistent verified-host-key (TOFU) store~~ **CLOSED 2026-08-29 (Phase 4, slice 5)** | **Phase 4** — it belongs with asset persistence | ~~The connector cannot be pointed at a real fleet~~ — `IHostKeyStore` now pins a first sighting, verifies every reconnect against it, and **refuses a changed key regardless of `AllowUnknownHostKeys`**, recording what was offered as `pending`. That flag narrows from "verification on/off" to "may we pin on first sight". Red-first showed the old behaviour returning **`Ok`** for an endpoint whose key disagreed with its pin |
 | **D-302** | Windows facts collection (`WindowsFactsParser`) | **Phase 8** | Inventory over WinRM returns `Unsupported`, test-enforced. Phase 6 assessment cannot cover Windows hosts |
 | **D-303** | **WinRM verification against a real Windows host** | **Phase 8** | **The Windows path is unproven.** Phase 8 inherits an implementation that compiles, has transport-seam coverage, and has never spoken to a Windows machine. It cannot be claimed working — the SOAP envelopes, Negotiate/NTLM, the shell lifecycle and the base64 transfer round-trip are all unobserved. A Windows wave planned on this is planning on untested code |
 | **D-304** | **CredSSP / constrained-Kerberos delegation — the double-hop *solution*** | **Phase 8** | Phase 3 only **surfaces** `DoubleHopRequired` instead of hanging, which is its whole obligation under HARD-PROBLEMS #9. Any Phase 8 flow needing a second hop (an SMB payload fetch, an onward session) will be refused, not silently attempted. `AllowCredentialDelegation` currently only *skips the check* — it delegates nothing |
@@ -469,7 +469,9 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   carries one nullable `BastionHop`, so opening it is a change to the **topology model** under ADR
   0017, a NEVER #6 ask, not a loop. **D-306 closed 2026-08-29 in slice 5** — contract, planner and
   factory traversal together, because a `BastionChain` an operator can configure but the factory
-  always refuses would be a control that is not one. `D-310` (per-borrow eviction sweep): still called from
+  always refuses would be a control that is not one. **D-301 closed 2026-08-29 in slice 5** — the
+  store lands with asset persistence as its owner note said, and `host_keys` finally has a writer.
+  `D-310` (per-borrow eviction sweep): still called from
   `AcquireAsync`, and it resolves by **measurement**, not by reasoning about redundancy.
 - **NEVER #4 gains an in-product half here.** The sweep is the first feature that can, by design,
   contact an arbitrary IP, and `.claude/hooks/lab_only_guard.py` inspects Bash command strings — it
@@ -630,6 +632,23 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   enforced here: a source that cannot be consulted must THROW, never report absence — an unreachable
   domain controller would otherwise flag an entire estate as unmanaged, an outage rendered as a
   finding.
+- **Slice 5, item 2 landed 2026-08-29 — D-301 closed. `host_keys` finally has a writer. `main`
+  green at 658** (642 + 9 unit + 7 integration).
+  `IHostKeyStore` is declared in the Connectors module (which consults it) and implemented as
+  `HostKeyStore` over `AppDbContext` in Discovery, where the deferral's own owner note said a
+  fingerprint belongs — "just another observed fact about a host". The pin is read BEFORE the socket
+  opens and compared synchronously inside `HostKeyReceived`; a store call on a transport thread would
+  be sync-over-async at the one place this product has to scale. The observation is written after,
+  **refusals included**, because "the key at this endpoint changed on date X" is the event the table
+  exists to capture.
+  **`AllowUnknownHostKeys` narrows in meaning:** it now answers only "may we pin something never seen
+  before", and a CHANGED key is refused whatever it is set to — otherwise the lab opt-in that every
+  fixture sets would disable the only check capable of detecting impersonation.
+  **The red run is the point.** Before wiring, `host_keys` took no rows at all ("Sequence contains no
+  elements") and an endpoint pinned to a key it does not have returned **`Ok`** — it connected, and
+  was sent a private key. **Criterion (g) now holds behaviourally for every Phase 4 table**: two
+  tenants pinning the same address get separate invisible rows, and one tenant's mismatched pin does
+  not refuse another tenant there. **D-310 remains open.**
 - **`EndpointFactsCollector`'s DI resolution fixed (Phase 3), red-first through the container.** It
   took a single `IEndpointConnector` while the module registers two, so DI handed it the last —
   `WinRmConnector` — whatever the target said. Reproduced by resolving from a real

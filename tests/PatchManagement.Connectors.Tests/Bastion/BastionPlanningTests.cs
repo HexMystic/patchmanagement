@@ -86,7 +86,8 @@ public sealed class BastionPlanningTests
 
         var factory = new StubSshSessionFactory(() => new RecordingSshSession());
         await factory.ConnectAsync(
-            ConnectionPlanner.Plan(ViaBastion()), recorder.ResolveAsync, TimeSpan.FromSeconds(5), CancellationToken.None);
+            ConnectionPlanner.Plan(ViaBastion()), recorder.ResolveAsync, hostKeys: null,
+            TimeSpan.FromSeconds(5), CancellationToken.None);
 
         // Two distinct references, resolved independently. Reusing the target's credential to reach
         // the jump host would be a silent authorization change — and would fail confusingly on any

@@ -68,7 +68,13 @@ public static class ConnectorsServiceCollectionExtensions
             sp.GetRequiredService<IOperationCoordinator>(),
             sp.GetRequiredService<ILogger<SshConnector>>(),
             sp.GetRequiredService<IOptions<ConnectorTimeoutOptions>>().Value,
-            sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<TimeProvider>(),
+            // GetService, not GetRequiredService: the host-key store is IMPLEMENTED by the module
+            // that owns asset persistence (Discovery), so this module must not require it or it
+            // could not be composed on its own. Where none is registered the connector keeps the
+            // pre-D-301 posture, in which AllowUnknownHostKeys is the whole decision and the flag
+            // defaulting to false is what stops it being pointed at a real fleet.
+            sp.GetService<IHostKeyStore>()));
 
         // WinRM — real WS-Man transport, integration-tested later (no Windows host in the dev lab).
         // No IHttpClientFactory: a pooled, named client cannot carry per-target credentials, and the

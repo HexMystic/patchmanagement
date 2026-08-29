@@ -152,6 +152,16 @@ is the point, not a side effect.
 after a restart). Accepting all keys with a warning (warnings in build output are what get missed).
 **Owner.** D-301, Phase 4 — the store belongs with asset persistence, where a fingerprint is just
 another observed fact about a host.
+**CLOSED 2026-08-29 (Phase 4, slice 5).** `IHostKeyStore` is declared in the Connectors module and
+implemented as `HostKeyStore` over `AppDbContext` in Discovery, writing the `host_keys` table that
+had schema, RLS and a policy but no writer. A pin is read before the socket opens and compared
+synchronously inside the handshake — never a store call on a transport thread — and the observation
+is written afterwards, refusals included, because "the key at this endpoint changed on date X" is
+the event the table exists to capture. `AllowUnknownHostKeys` narrows to "may we pin on first
+sight"; a CHANGED key is refused whatever it says, or the lab's convenience opt-in would disable
+the only check that detects impersonation. Proven against the real fleet: pinned from a real
+handshake, verified on reconnect, and refused — with the offered key recorded pending — when the
+store disagrees with the host.
 
 ## 12. Reachability and authentication are different questions
 **Problem.** Bounding "can I reach this host and log in" with one timeout makes the timeout decide the

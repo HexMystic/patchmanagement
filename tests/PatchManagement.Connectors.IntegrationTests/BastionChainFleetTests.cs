@@ -58,7 +58,7 @@ public sealed class BastionChainFleetTests(LabFixture lab)
         Assert.Equal(2, plan.Hops.Count);   // the plan under test comes from the real planner
 
         using var session = await Factory().ConnectAsync(
-            plan, lab.Credentials.ResolveAsync, TimeSpan.FromSeconds(45), CancellationToken.None);
+            plan, lab.Credentials.ResolveAsync, hostKeys: null, TimeSpan.FromSeconds(45), CancellationToken.None);
 
         var who = await session.RunAsync("hostname", TimeSpan.FromSeconds(30), default, CancellationToken.None);
 
@@ -89,7 +89,7 @@ public sealed class BastionChainFleetTests(LabFixture lab)
 
         var ex = await Assert.ThrowsAsync<ConnectorConnectException>(() => Factory().ConnectAsync(
             ConnectionPlanner.Plan(direct),
-            lab.Credentials.ResolveAsync,
+            lab.Credentials.ResolveAsync, hostKeys: null,
             TimeSpan.FromSeconds(20),
             CancellationToken.None));
 
@@ -121,7 +121,7 @@ public sealed class BastionChainFleetTests(LabFixture lab)
 
         using var session = await Factory().ConnectAsync(
             ConnectionPlanner.Plan(target),
-            lab.Credentials.ResolveAsync,
+            lab.Credentials.ResolveAsync, hostKeys: null,
             TimeSpan.FromSeconds(60),
             CancellationToken.None);
 
@@ -142,7 +142,7 @@ public sealed class BastionChainFleetTests(LabFixture lab)
         var plan = ConnectionPlanner.Plan(ThroughTwoHops());
 
         var session = await Factory().ConnectAsync(
-            plan, lab.Credentials.ResolveAsync, TimeSpan.FromSeconds(45), CancellationToken.None);
+            plan, lab.Credentials.ResolveAsync, hostKeys: null, TimeSpan.FromSeconds(45), CancellationToken.None);
 
         Assert.True(session.IsConnected);
         session.Dispose();
@@ -151,7 +151,7 @@ public sealed class BastionChainFleetTests(LabFixture lab)
         // The far host is only reachable through the tunnel, so a second chain succeeding after the
         // first was torn down shows the teardown did not leave the fleet in a state that blocks reuse.
         using var again = await Factory().ConnectAsync(
-            plan, lab.Credentials.ResolveAsync, TimeSpan.FromSeconds(45), CancellationToken.None);
+            plan, lab.Credentials.ResolveAsync, hostKeys: null, TimeSpan.FromSeconds(45), CancellationToken.None);
 
         var who = await again.RunAsync("hostname", TimeSpan.FromSeconds(30), default, CancellationToken.None);
         Assert.Equal(Far.Name, who.StandardOutput.Trim());

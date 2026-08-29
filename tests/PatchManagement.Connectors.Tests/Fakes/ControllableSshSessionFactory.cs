@@ -52,7 +52,8 @@ internal sealed class ControllableSshSessionFactory : ISshSessionFactory
     }
 
     public async Task<ISshSession> ConnectAsync(
-        ConnectionPlan plan, CredentialResolver resolve, TimeSpan connectTimeout, CancellationToken ct)
+        ConnectionPlan plan, CredentialResolver resolve, IHostKeyStore? hostKeys,
+        TimeSpan connectTimeout, CancellationToken ct)
     {
         using (var credential = await resolve(plan.Destination.Credential, ct).ConfigureAwait(false))
         {

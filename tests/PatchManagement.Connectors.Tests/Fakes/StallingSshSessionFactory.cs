@@ -35,7 +35,8 @@ internal sealed class StallingSshSessionFactory : ISshSessionFactory
     public void Release() => _release.TrySetResult();
 
     public async Task<ISshSession> ConnectAsync(
-        ConnectionPlan plan, CredentialResolver resolve, TimeSpan connectTimeout, CancellationToken ct)
+        ConnectionPlan plan, CredentialResolver resolve, IHostKeyStore? hostKeys,
+        TimeSpan connectTimeout, CancellationToken ct)
     {
         ConnectAttempts++;
 
