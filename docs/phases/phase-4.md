@@ -101,7 +101,7 @@ Each was verified **in code** at `48f3cf1` when the phase opened. None is assume
 **governor concurrency key**, not a cryptographic host key. Grepping `HostKey` in `src/` returns it
 alongside the D-301 policy line; skimming the results could suggest a key store exists. It does not.
 
-## The sweep is the first feature that can contact an arbitrary IP
+## The sweep is the first feature that can contact an arbitrary IP — and not the last
 
 `.claude/hooks/lab_only_guard.py` (ADR 0007) inspects **Bash `ssh`/`scp`/`sftp` command strings**. It
 structurally cannot see a socket opened by our own C#. Every prior phase reached endpoints only along
@@ -111,6 +111,38 @@ So NEVER #4 needs an **in-product** equivalent: a dev-mode target allowlist that
 anything outside loopback, **defaulted closed**, in the same shape as
 `ConnectorSecurityOptions.AllowUnknownHostKeys` — configuration, opt-in per environment, and the
 gating is the point rather than a side effect. It ships in the sweep slice, not as a later addition.
+
+**Extended to the connector 2026-08-29 (slice 5), after the pre-close review found the gap.** The
+allowlist was consumed only by `NetworkSweeper`, so **no connector target passed any check at all** —
+and D-306 had just made that matter. Before bastion chains an `EndpointTarget` named one address and
+the connector dialled it directly, so "is this reachable from a dev machine" did rough duty as a
+scope check; a chain removes that, because the destination is reached from inside the network by
+whichever jump host precedes it. An out-of-lab address became reachable *through* a lab container,
+with the hook unable to see it and the in-product guard not looking.
+
+The red run made it concrete rather than theoretical: a chain through a lab jump host to
+`debian12:22` returned **`Ok`** — a dev session connecting outside the declared loopback scope — and
+chains aimed at `10.99.0.1` returned **`Unreachable`**, meaning the connector had *attempted* the
+address and failed only because nothing answered.
+
+`IConnectionTargetPolicy` (declared in Connectors, implemented in Discovery over the **same**
+`Discovery:Security:AllowedTargets`) now checks **every node of a plan — each hop and the
+destination — before any socket is opened**, so a refused plan contacts nothing. A second
+connector-only allowlist was rejected: it would be two declarations of one promise, and duplication
+that nothing checks silently forks.
+
+**One asymmetry, deliberate and documented.** An empty allowlist permits *nothing* for a sweep and
+*everything* for a connection. A sweep contacts addresses unbidden — nobody named them, a CIDR did —
+so an undeclared scope must permit nothing. A connection is the opposite: an operator named this
+endpoint, so an undeclared scope means "this deployment has no connector-target policy", not "refuse
+every connection", which would break every production deployment that never declared sweep ranges.
+Where a scope *is* declared, as `appsettings.Development.json` declares loopback, connections honour
+it — which is exactly where NEVER #4 applies.
+
+**Mutation-checked both ways:** removing the check fails all three refusal tests; checking only the
+destination and skipping the hops fails the hop test. Two controls guard the other direction — an
+in-scope loopback target, and `localhost` itself, must still connect, because a guard that refused
+everything would pass every refusal test while making the product useless.
 
 ### Landed 2026-08-26 (slice 1)
 

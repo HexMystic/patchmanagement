@@ -475,7 +475,11 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   `AcquireAsync`, and it resolves by **measurement**, not by reasoning about redundancy.
 - **NEVER #4 gains an in-product half here.** The sweep is the first feature that can, by design,
   contact an arbitrary IP, and `.claude/hooks/lab_only_guard.py` inspects Bash command strings — it
-  structurally cannot see a socket opened by our own C#. A dev-mode target allowlist, defaulted
+  structurally cannot see a socket opened by our own C#. **Extended to the connector 2026-08-29:**
+  the allowlist was sweep-only, so no connector target was checked at all — and D-306's chains made
+  an out-of-lab destination reachable through a lab jump host. `IConnectionTargetPolicy` now checks
+  every hop and the destination against the same `Discovery:Security:AllowedTargets`, before any
+  socket opens. A dev-mode target allowlist, defaulted
   closed, ships in the sweep slice.
 - **Slice 1 landed 2026-08-26 — CIDR sweep + the in-product NEVER #4 guard. Red-first: 9 of 9 red
   before implementation**, and the red run is the point. Seven `TargetPolicyTests` failed

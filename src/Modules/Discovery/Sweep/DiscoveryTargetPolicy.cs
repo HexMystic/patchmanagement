@@ -52,6 +52,15 @@ internal sealed class DiscoveryTargetPolicy
     /// </summary>
     public bool Permits(CidrBlock requested) => _allowed.Any(a => a.Contains(requested));
 
+    /// <summary>
+    /// True when some allowed block contains this single address — the question a CONNECTION asks,
+    /// as opposed to the range-containment question a sweep asks.
+    ///
+    /// <para>Same allowlist, same fail-closed parsing, so the sweep and the connector cannot drift
+    /// into disagreeing about what this deployment is permitted to contact.</para>
+    /// </summary>
+    public bool PermitsAddress(System.Net.IPAddress address) => _allowed.Any(a => a.Contains(address));
+
     /// <summary>Why a refusal happened, in caller-safe text that names no secret.</summary>
     public string RefusalReason(CidrBlock requested) =>
         _allowed.Count == 0

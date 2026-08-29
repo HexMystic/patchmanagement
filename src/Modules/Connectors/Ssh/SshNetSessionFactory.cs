@@ -25,11 +25,26 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
     private readonly ConnectorSecurityOptions _security;
     private readonly ConnectorTimeoutOptions _timeouts;
 
+    /// <summary>
+    /// NEVER #4's in-product guard for connections. Null means no scope was declared and nothing is
+    /// restricted — see <see cref="IConnectionTargetPolicy"/> for why that is the right default here
+    /// and the opposite of the sweep's.
+    ///
+    /// <para>A constructor dependency rather than a per-call parameter because the policy is derived
+    /// from configuration and holds no per-request state, so it is a singleton like this factory —
+    /// unlike <c>IHostKeyStore</c>, which is scoped to the request's tenant and therefore has to be
+    /// threaded through <c>ConnectAsync</c>.</para>
+    /// </summary>
+    private readonly IConnectionTargetPolicy? _targets;
+
     public SshNetSessionFactory(
-        ConnectorSecurityOptions? security = null, ConnectorTimeoutOptions? timeouts = null)
+        ConnectorSecurityOptions? security = null,
+        ConnectorTimeoutOptions? timeouts = null,
+        IConnectionTargetPolicy? targetPolicy = null)
     {
         _security = security ?? new ConnectorSecurityOptions();
         _timeouts = timeouts ?? new ConnectorTimeoutOptions();
+        _targets = targetPolicy;
     }
 
     /// <summary>
@@ -134,6 +149,8 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
 
         try
         {
+            await EnsureEveryNodeIsInScopeAsync(plan, cts.Token).ConfigureAwait(false);
+
             return plan.IsDirect
                 ? await ConnectDirectAsync(plan, resolve, hostKeys, connectTimeout, cts.Token).ConfigureAwait(false)
                 : await ConnectThroughBastionAsync(plan, resolve, hostKeys, connectTimeout, cts.Token).ConfigureAwait(false);
@@ -149,6 +166,29 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
         catch (Exception ex)
         {
             throw Map(ex);
+        }
+    }
+
+    /// <summary>
+    /// Checks every node of the plan — each hop AND the destination — against the declared scope,
+    /// <b>before any socket is opened</b>, so a refused plan contacts nothing at all.
+    ///
+    /// <para>Every node, not just the destination: a chain's jump hosts are addresses this process
+    /// connects to and authenticates against, so leaving them unchecked would guard the far end while
+    /// letting the path to it run anywhere. And not just the first hop either — that one was already
+    /// constrained by having to be reachable from here, which is exactly the accidental protection
+    /// D-306 removed for everything behind it.</para>
+    /// </summary>
+    private async Task EnsureEveryNodeIsInScopeAsync(ConnectionPlan plan, CancellationToken ct)
+    {
+        if (_targets is null) return;
+
+        foreach (var node in plan.Hops.Append(plan.Destination))
+        {
+            var refusal = await _targets.RefusalReasonAsync(node.Host, ct).ConfigureAwait(false);
+
+            if (refusal is not null)
+                throw new ConnectorConnectException(ConnectorOutcome.ProtocolError, refusal);
         }
     }
 

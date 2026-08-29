@@ -58,7 +58,12 @@ public static class ConnectorsServiceCollectionExtensions
         // construct them with same-assembly factory lambdas rather than open-generic registration.
         services.TryAddSingleton<ISshSessionFactory>(sp => new SshNetSessionFactory(
             sp.GetRequiredService<IOptions<ConnectorSecurityOptions>>().Value,
-            sp.GetRequiredService<IOptions<ConnectorTimeoutOptions>>().Value));
+            sp.GetRequiredService<IOptions<ConnectorTimeoutOptions>>().Value,
+            // GetService: the policy is implemented over the SWEEP's allowlist and therefore lives in
+            // the Discovery module. A composition without it has declared no scope and is
+            // unrestricted — see IConnectionTargetPolicy for why that is right for connections and
+            // wrong for sweeps.
+            sp.GetService<IConnectionTargetPolicy>()));
         services.TryAddSingleton<SshConnectionPool>();
         services.AddScoped<IEndpointConnector>(sp => new SshConnector(
             sp.GetRequiredService<ICredentialProvider>(),

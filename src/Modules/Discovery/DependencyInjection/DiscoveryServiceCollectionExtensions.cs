@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using PatchManagement.Contracts.Discovery;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using PatchManagement.Connectors;
 using PatchManagement.Connectors.Ssh;
 using PatchManagement.Discovery.Correlation;
@@ -43,6 +44,14 @@ public static class DiscoveryServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IPortProbe, TcpPortProbe>();
+
+        // NEVER #4 for CONNECTIONS, over the same allowlist the sweep honours. Singleton: it is
+        // derived from configuration and holds no per-request state. Registered here rather than in
+        // the Connectors module because the allowlist and its CIDR parsing belong to Discovery, and
+        // a second connector-only list would be two declarations of one promise.
+        services.TryAddSingleton<IConnectionTargetPolicy>(sp => new ConnectionTargetPolicy(
+            sp.GetRequiredService<IOptions<DiscoverySecurityOptions>>().Value,
+            sp.GetRequiredService<ILogger<ConnectionTargetPolicy>>()));
         services.TryAddSingleton<INetworkSweeper, NetworkSweeper>();
 
         // Scoped: AppDbContext is scoped and carries the request's tenant. See the class remarks.
