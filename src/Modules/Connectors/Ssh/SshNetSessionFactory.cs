@@ -286,8 +286,9 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
 
             // Written even though the connection failed. "The key at this endpoint changed on date X"
             // is the security-relevant event, and a refusal leaving no row would leave the estate
-            // unable to tell a rebuilt host from an interception afterwards.
-            await gate.RecordAsync(ct).ConfigureAwait(false);
+            // unable to tell a rebuilt host from an interception afterwards. RecordAsync carries its
+            // own budget, so a refusal found as the connect budget expires is still recorded.
+            await gate.RecordAsync().ConfigureAwait(false);
 
             // Replaces whatever SSH.NET threw for the rejected key — which mapped to Unreachable and
             // so read as a network problem, the single most misleading answer available here.
@@ -299,7 +300,29 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
             throw;
         }
 
-        await gate.RecordAsync(ct).ConfigureAwait(false);
+        // Inside a try: this used to sit bare after the connect, so a store failure — a database
+        // outage, an RLS WITH CHECK violation, a duplicate row — escaped with the client still
+        // connected and never disposed. In a chain it is not in `opened` yet either, so the unwind
+        // would not have caught it: a leaked authenticated transport per failed write.
+        try
+        {
+            await gate.RecordAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            client.Dispose();
+
+            // Fail closed. The alternative — connect anyway and carry on — is worst on the path that
+            // matters most: a FIRST SIGHTING whose write failed has accepted a key and pinned
+            // nothing, so the next connection treats it as a first sighting all over again and the
+            // endpoint is never actually verified while appearing to work.
+            throw new ConnectorConnectException(
+                ConnectorOutcome.ProtocolError,
+                $"Connected to {hop.Host}:{hop.Port} but the host key could not be recorded, so this "
+                + "connection is not verifiable. Refusing rather than proceeding unrecorded.",
+                ex);
+        }
+
         return client;
     }
 

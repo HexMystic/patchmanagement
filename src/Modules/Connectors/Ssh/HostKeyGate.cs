@@ -24,23 +24,23 @@ internal sealed class HostKeyGate
     private readonly Guid _tenantId;
     private readonly string _host;
     private readonly int _port;
-    private readonly PinnedHostKey? _pin;
+    private readonly EndpointHostKeys _known;
     private readonly bool _pinsOnFirstSight;
 
     private HostKeyObservation? _observed;
 
     private HostKeyGate(
-        IHostKeyStore? store, Guid tenantId, string host, int port, PinnedHostKey? pin, bool pinsOnFirstSight)
+        IHostKeyStore? store, Guid tenantId, string host, int port, EndpointHostKeys known, bool pinsOnFirstSight)
     {
         _store = store;
         _tenantId = tenantId;
         _host = host;
         _port = port;
-        _pin = pin;
+        _known = known;
         _pinsOnFirstSight = pinsOnFirstSight;
     }
 
-    /// <summary>Reads the pin for this endpoint, before any socket is opened.</summary>
+    /// <summary>Reads what is known about this endpoint's keys, before any socket is opened.</summary>
     public static async Task<HostKeyGate> OpenAsync(
         IHostKeyStore? store,
         Guid tenantId,
@@ -49,15 +49,16 @@ internal sealed class HostKeyGate
         bool pinsOnFirstSight,
         CancellationToken ct)
     {
-        var pin = store is null
-            ? null
-            : await store.FindTrustedAsync(tenantId, host, port, ct).ConfigureAwait(false);
+        var known = store is null
+            ? EndpointHostKeys.None
+            : await store.FindAsync(tenantId, host, port, ct).ConfigureAwait(false);
 
-        return new HostKeyGate(store, tenantId, host, port, pin, pinsOnFirstSight);
+        return new HostKeyGate(store, tenantId, host, port, known, pinsOnFirstSight);
     }
 
     /// <summary>True once a presented key has been judged and rejected.</summary>
-    public bool Refused => _observed is { Verdict: HostKeyVerdict.Changed or HostKeyVerdict.Unknown };
+    public bool Refused =>
+        _observed is { Verdict: HostKeyVerdict.Changed or HostKeyVerdict.Unknown or HostKeyVerdict.Withdrawn };
 
     /// <summary>
     /// The <c>HostKeyReceived</c> handler — a thin adapter over <see cref="Observe"/> so the decision
@@ -73,7 +74,7 @@ internal sealed class HostKeyGate
     /// </summary>
     public bool Observe(string keyAlgorithm, string fingerprintSha256, byte[] publicKey)
     {
-        var verdict = Judge(_pin, fingerprintSha256, _pinsOnFirstSight);
+        var verdict = Judge(_known, fingerprintSha256, _pinsOnFirstSight);
 
         _observed = new HostKeyObservation(
             _tenantId, _host, _port, keyAlgorithm, fingerprintSha256, publicKey, verdict);
@@ -90,30 +91,54 @@ internal sealed class HostKeyGate
     /// endpoint's key silently become a different one". Letting the flag cover both would make the
     /// lab's convenience opt-in disable the only check that detects interception.</para>
     /// </summary>
-    internal static HostKeyVerdict Judge(PinnedHostKey? pin, string presentedFingerprint, bool pinsOnFirstSight)
+    internal static HostKeyVerdict Judge(
+        EndpointHostKeys known, string presentedFingerprint, bool pinsOnFirstSight)
     {
-        if (pin is null)
+        // Closed FIRST, before anything else looks at the pin. A revoked or superseded endpoint has
+        // no trusted row, so every later branch would read it as "nothing is pinned" and accept the
+        // key as a first sighting — which is how a deliberately withdrawn key came to be re-accepted
+        // on every connection.
+        if (known.ClosedFingerprints.Contains(presentedFingerprint, StringComparer.Ordinal))
+            return HostKeyVerdict.Withdrawn;
+
+        if (known.Trusted is null)
             return pinsOnFirstSight ? HostKeyVerdict.PinnedOnFirstSight : HostKeyVerdict.Unknown;
 
         // Ordinal, not culture-aware: this is a base64 digest, and a culture-sensitive comparison of
         // one is a correctness bug waiting for a locale to expose it.
-        return string.Equals(pin.FingerprintSha256, presentedFingerprint, StringComparison.Ordinal)
+        return string.Equals(known.Trusted.FingerprintSha256, presentedFingerprint, StringComparison.Ordinal)
             ? HostKeyVerdict.Verified
             : HostKeyVerdict.Changed;
     }
 
     /// <summary>
+    /// How long the audit write may take. Independent of the connect budget on purpose, and bounded
+    /// on purpose.
+    ///
+    /// <para>It cannot share the connect token: a mismatch discovered as the budget expires is
+    /// exactly when the record matters most, and writing under an already-cancelled token throws
+    /// instead — losing the row AND replacing the refusal with a cancellation. It cannot be
+    /// unbounded either (NEVER #5). This is a local database write rather than a remote endpoint
+    /// call, so it is short; if the database cannot accept a single row in this long, the connection
+    /// fails rather than proceeding unrecorded.</para>
+    /// </summary>
+    private static readonly TimeSpan AuditWriteBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// Persists the observation. No-ops when there is no store (the pre-D-301 posture, still the
     /// shape the unit suite and the lab fixture use) or when no key was ever presented.
+    ///
+    /// <para><b>Takes no cancellation token, deliberately.</b> An earlier version documented that the
+    /// write was "not cancelled by the connect budget" while passing that exact token — the comment
+    /// described an intent the code did not implement. Removing the parameter makes the guarantee
+    /// structural rather than a promise in prose.</para>
     /// </summary>
-    public async Task RecordAsync(CancellationToken ct)
+    public async Task RecordAsync()
     {
         if (_store is null || _observed is null) return;
 
-        // Deliberately NOT cancelled by the connect budget's token: the row explaining why a
-        // connection was refused is worth writing even when the operation that discovered it has run
-        // out of time. A refusal with no record is the outcome this store exists to prevent.
-        await _store.RecordAsync(_observed, ct).ConfigureAwait(false);
+        using var audit = new CancellationTokenSource(AuditWriteBudget);
+        await _store.RecordAsync(_observed, audit.Token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -123,10 +148,18 @@ internal sealed class HostKeyGate
     /// </summary>
     public ConnectorConnectException Refusal() => _observed!.Verdict switch
     {
+        HostKeyVerdict.Withdrawn => new ConnectorConnectException(
+            ConnectorOutcome.ProtocolError,
+            $"The host key presented by {_host}:{_port} has been withdrawn (revoked or superseded). "
+            + $"Presented {_observed.KeyAlgorithm} SHA256:{_observed.FingerprintSha256}. Refusing to "
+            + "authenticate: a closed status is a decision already recorded about this exact key, so "
+            + "it is not re-accepted as a first sighting. Promote it deliberately if it is trusted "
+            + "again."),
+
         HostKeyVerdict.Changed => new ConnectorConnectException(
             ConnectorOutcome.ProtocolError,
             $"The host key presented by {_host}:{_port} is not the key pinned for it. "
-            + $"Pinned {_pin!.KeyAlgorithm} SHA256:{_pin.FingerprintSha256}; "
+            + $"Pinned {_known.Trusted!.KeyAlgorithm} SHA256:{_known.Trusted.FingerprintSha256}; "
             + $"presented {_observed.KeyAlgorithm} SHA256:{_observed.FingerprintSha256}. "
             + "Refusing to authenticate. Either this endpoint was rebuilt and its new key must be "
             + "reviewed and promoted, or something else is answering on its address — the presented "

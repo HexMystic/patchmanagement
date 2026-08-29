@@ -614,9 +614,16 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   forward opened on the leg before it, the session owning and unwinding the whole path innermost-first.
   **The red run found worse than the deferral recorded:** a two-hop target did not reach the
   `Hops.Count > 1` refusal at all, it planned `Hops = [], IsDirect = True` — a direct connection with
-  both jump hosts discarded. Proven on the fleet over a real 2- and 3-hop chain through container
-  hostnames that are unreachable except through the tunnel, so a truncated chain physically cannot
-  pass. **D-301 and D-310 remain open**, and `host_keys` still has no writer.
+  both jump hosts discarded. Proven on the fleet over a real 2- and 3-hop chain.
+  **CORRECTED 2026-08-29 by the pre-close review:** this bullet originally claimed the chain ran
+  "through container hostnames that are unreachable except through the tunnel, so a truncated chain
+  physically cannot pass". **That was false.** The lab network is flat — every container reaches
+  every other — so a chain truncated to its first hop still forwards to the destination and still
+  reports the right hostname, and a `Hops.Take(1)` mutation passed all four fleet tests. Traversal is
+  now proven by giving each hop its own `CredentialRef` and asserting each resolved exactly once: a
+  hop that is never authenticated never resolves its reference. The same assertion closes multi-hop
+  credential zeroing, previously inferred from the one-hop test.
+  **D-301 and D-310 remain open**, and `host_keys` still has no writer.
   **(f) closes over a pluggable `IAssetEvidenceSource` seam** proven against file-backed synthetic
   sources — the lab has no AD and no DHCP, which is what criterion (f)'s own wording anticipates.
   **The load-bearing test is the negative one:** a host AD knows about is NOT flagged, even though

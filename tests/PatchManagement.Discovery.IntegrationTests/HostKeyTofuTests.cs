@@ -7,6 +7,8 @@ using PatchManagement.Connectors.Ssh;
 using PatchManagement.Contracts.Connectors;
 using PatchManagement.Contracts.Credentials;
 using PatchManagement.Discovery.DependencyInjection;
+using PatchManagement.Contracts.Discovery;
+using PatchManagement.Contracts.States;
 using PatchManagement.Persistence.Entities;
 using PatchManagement.TestSupport.Credentials;
 using Xunit;
@@ -176,6 +178,93 @@ public sealed class HostKeyTofuTests(DiscoveryPostgresFixture fx)
     }
 
     // -----------------------------------------------------------------------------------
+    // Closed statuses — a decision already made about a key (F2)
+    // -----------------------------------------------------------------------------------
+
+    /// <summary>
+    /// <b>A revoked key must never be re-accepted.</b> <c>revoked</c> means "withdrawn deliberately
+    /// rather than replaced" — the strongest statement the model can make that a key must not be
+    /// trusted.
+    ///
+    /// <para>The hole this closes: with no <em>trusted</em> row for the endpoint, the lookup returned
+    /// null, the verdict became "first sighting", and the connection was ACCEPTED. Recording then
+    /// matched the revoked row by fingerprint, bumped its timestamp and returned — so no pin was ever
+    /// created and the revoked key was re-accepted on every subsequent connection, forever.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_revoked_key_is_refused_rather_than_re_accepted_as_a_first_sighting()
+    {
+        var tenant = await NewTenantAsync();
+
+        // Pin the host's real key, then withdraw it — the only way to get a genuine fingerprint on a
+        // closed row, and the shape an operator produces by hand today.
+        Assert.Equal(ConnectorOutcome.Ok, (await ConnectAsync(tenant, pinsOnFirstSight: true)).Outcome);
+        var real = (await SingleKeyAsync(tenant)).FingerprintSha256;
+        await CloseKeyAsync(tenant, real, HostKeyStatuses.Revoked);
+
+        // pinsOnFirstSight: true is the hostile setting here — it is what made this accept before.
+        var result = await ConnectAsync(tenant, pinsOnFirstSight: true);
+
+        Assert.Equal(ConnectorOutcome.ProtocolError, result.Outcome);
+
+        await using var db = fx.AppContextFor(tenant);
+        var row = await db.HostKeys.SingleAsync(k => k.FingerprintSha256 == real);
+        Assert.Equal(HostKeyStatuses.Revoked, row.Status);
+
+        // Refusing must not quietly re-open it: no trusted pin may exist for this endpoint.
+        Assert.False(await db.HostKeys.AnyAsync(k => k.Status == HostKeyStatuses.Trusted));
+    }
+
+    /// <summary>
+    /// The same for <c>superseded</c>. A retired key reappearing is a rollback or a downgrade, which
+    /// is exactly the event worth refusing rather than silently accepting.
+    /// </summary>
+    [Fact]
+    public async Task A_superseded_key_is_refused_rather_than_silently_downgraded_to()
+    {
+        var tenant = await NewTenantAsync();
+
+        Assert.Equal(ConnectorOutcome.Ok, (await ConnectAsync(tenant, pinsOnFirstSight: true)).Outcome);
+        var real = (await SingleKeyAsync(tenant)).FingerprintSha256;
+        await CloseKeyAsync(tenant, real, HostKeyStatuses.Superseded);
+
+        Assert.Equal(
+            ConnectorOutcome.ProtocolError,
+            (await ConnectAsync(tenant, pinsOnFirstSight: true)).Outcome);
+
+        await using var db = fx.AppContextFor(tenant);
+        Assert.False(await db.HostKeys.AnyAsync(k => k.Status == HostKeyStatuses.Trusted));
+    }
+
+    /// <summary>
+    /// The other half of the same defect. A key refused in strict mode is recorded <c>pending</c>; if
+    /// the deployment later opts into pinning on first sight, that row must be <b>promoted</b>.
+    ///
+    /// <para>Otherwise recording matches the pending row, bumps it and returns — so the key is
+    /// accepted on every connection while never becoming a pin, which means the endpoint is
+    /// permanently unverified while appearing to work.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_pending_key_is_promoted_when_the_deployment_starts_pinning_on_first_sight()
+    {
+        var tenant = await NewTenantAsync();
+
+        Assert.Equal(
+            ConnectorOutcome.ProtocolError,
+            (await ConnectAsync(tenant, pinsOnFirstSight: false)).Outcome);
+
+        var pending = await SingleKeyAsync(tenant);
+        Assert.Equal(HostKeyStatuses.Pending, pending.Status);
+
+        Assert.Equal(ConnectorOutcome.Ok, (await ConnectAsync(tenant, pinsOnFirstSight: true)).Outcome);
+
+        var promoted = await SingleKeyAsync(tenant);
+        Assert.Equal(pending.Id, promoted.Id);                       // promoted, not duplicated
+        Assert.Equal(HostKeyStatuses.Trusted, promoted.Status);
+        Assert.Equal(pending.FingerprintSha256, promoted.FingerprintSha256);
+    }
+
+    // -----------------------------------------------------------------------------------
     // Criterion (g), behaviourally, for host_keys
     // -----------------------------------------------------------------------------------
 
@@ -228,11 +317,91 @@ public sealed class HostKeyTofuTests(DiscoveryPostgresFixture fx)
             (await ConnectAsync(unaffected, pinsOnFirstSight: true)).Outcome);
     }
 
+    /// <summary>
+    /// A real inventory over SSH with the host-key store registered — the combination nothing else
+    /// covers.
+    ///
+    /// <para>Every other lab test composes <c>AddConnectorsModule</c> alone, so inventory has only
+    /// ever run with a null store: the whole verify-and-record path was absent from the flow the
+    /// product actually performs. This runs the real <c>IInventoryService</c> against a real
+    /// container and asserts both halves — packages collected AND the endpoint pinned.</para>
+    /// </summary>
+    [Fact]
+    public async Task Inventory_runs_with_the_store_registered_and_pins_the_endpoint_it_inventoried()
+    {
+        var tenant = await NewTenantAsync();
+        var assetId = await SeedCandidateAsync(tenant, LabPort);
+
+        await using var provider = BuildProvider(tenant, pinsOnFirstSight: true);
+        using var scope = provider.CreateScope();
+
+        var result = await scope.ServiceProvider
+            .GetRequiredService<IInventoryService>()
+            .InventoryAsync(assetId, TargetFor(tenant), CancellationToken.None);
+
+        Assert.True(result.Succeeded, $"{result.Outcome}: {result.Detail}");
+
+        await using var db = fx.AppContextFor(tenant);
+        Assert.True(await db.AssetPackages.AnyAsync(p => p.AssetId == assetId), "no packages collected");
+
+        var pinned = await db.HostKeys.SingleAsync();
+        Assert.Equal(HostKeyStatuses.Trusted, pinned.Status);
+        Assert.False(string.IsNullOrWhiteSpace(pinned.FingerprintSha256));
+    }
+
     // -----------------------------------------------------------------------------------
     // Wiring
     // -----------------------------------------------------------------------------------
 
     private async Task<ConnectivityResult> ConnectAsync(Guid tenant, bool pinsOnFirstSight)
+    {
+        // A FRESH provider per call, because the session pool is a singleton: a pooled session
+        // authenticated under an earlier pin would be handed straight back, and the second half of
+        // every test here would assert nothing.
+        await using var provider = BuildProvider(tenant, pinsOnFirstSight);
+        using var scope = provider.CreateScope();
+
+        var connector = scope.ServiceProvider
+            .GetRequiredService<IEndpointConnectorRegistry>()
+            .For(EndpointProtocol.Ssh);
+
+        return await connector.TestConnectivityAsync(TargetFor(tenant), CancellationToken.None);
+    }
+
+    private static EndpointTarget TargetFor(Guid tenant) => new()
+    {
+        TenantId = tenant,
+        Host = LabHost,
+        Port = LabPort,
+        Protocol = EndpointProtocol.Ssh,
+        Credential = LabCredential,
+    };
+
+    private async Task<Guid> SeedCandidateAsync(Guid tenant, int port)
+    {
+        var id = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        await using var db = fx.AppContextFor(tenant);
+        db.Assets.Add(new Asset
+        {
+            Id = id,
+            TenantId = tenant,
+            Hostname = LabHost,
+            Ip = LabHost,
+            EndpointPort = port,
+            Managed = false,
+            Source = AssetSources.Discovery,
+            State = EndpointState.ScanFailed,
+            LastSeen = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await db.SaveChangesAsync();
+        return id;
+    }
+
+    private ServiceProvider BuildProvider(Guid tenant, bool pinsOnFirstSight)
     {
         var credentials = new FakeCredentialProvider();
         credentials.AddLabKey(LabCredential, "labadmin");
@@ -259,32 +428,28 @@ public sealed class HostKeyTofuTests(DiscoveryPostgresFixture fx)
         services.AddConnectorsModule(configuration);
         services.AddDiscoveryModule(configuration);
 
-        // A FRESH provider per call, because the session pool is a singleton: a pooled session
-        // authenticated under an earlier pin would be handed straight back, and the second half of
-        // every test here would assert nothing.
-        await using var provider = services.BuildServiceProvider(validateScopes: true);
-        using var scope = provider.CreateScope();
-
-        var connector = scope.ServiceProvider
-            .GetRequiredService<IEndpointConnectorRegistry>()
-            .For(EndpointProtocol.Ssh);
-
-        return await connector.TestConnectivityAsync(
-            new EndpointTarget
-            {
-                TenantId = tenant,
-                Host = LabHost,
-                Port = LabPort,
-                Protocol = EndpointProtocol.Ssh,
-                Credential = LabCredential,
-            },
-            CancellationToken.None);
+        return services.BuildServiceProvider(validateScopes: true);
     }
 
     private async Task<HostKey> SingleKeyAsync(Guid tenant)
     {
         await using var db = fx.AppContextFor(tenant);
         return await db.HostKeys.SingleAsync();
+    }
+
+    /// <summary>
+    /// Moves an existing key to a closed status. <c>superseded_at</c> must be set for those statuses
+    /// — the check constraint enforces it, so a test that forgot would fail at the database rather
+    /// than assert something untrue.
+    /// </summary>
+    private async Task CloseKeyAsync(Guid tenant, string fingerprint, string status)
+    {
+        await using var db = fx.AppContextFor(tenant);
+        var row = await db.HostKeys.SingleAsync(k => k.FingerprintSha256 == fingerprint);
+
+        row.Status = status;
+        row.SupersededAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
     }
 
     /// <summary>Writes a trusted pin directly, so a test can disagree with the host on purpose.</summary>

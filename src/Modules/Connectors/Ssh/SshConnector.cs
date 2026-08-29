@@ -345,7 +345,11 @@ public sealed class SshConnector : IEndpointConnector
         {
             return ConnectionPlanner.Plan(target);
         }
-        catch (ArgumentException ex)
+        // NOT ArgumentNullException, which derives from ArgumentException and is what
+        // ConnectionPlanner.Plan throws for a null target. That is a caller bug, and converting it
+        // into a typed "scan-failed" would record a programming error as an endpoint condition —
+        // the endpoint would be reported unscannable when nothing is wrong with it.
+        catch (ArgumentException ex) when (ex is not ArgumentNullException)
         {
             throw new ConnectorConnectException(ConnectorOutcome.ProtocolError, ex.Message, ex);
         }

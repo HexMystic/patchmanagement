@@ -58,12 +58,12 @@ re-assign what it inherited.
 | a | Tenant-scoped IP-range/CIDR sweep finds the 5 lab containers on `localhost:2201-2205` and reports open management ports | `LabSweepTests` (5) against the real fleet, plus `NetworkSweeperTests` (11) + `CidrBlockTests` (18) + `TargetPolicyTests` (9) against a fake probe | ☑ — the sweep of `127.0.0.1/32` returns exactly `[2201, 2202, 2203, 2204, 2205]`, compared by **equality** against the ports `lab/docker-compose.yml` publishes, read at test time rather than hardcoded. **Not red-first, and could not be** — see the note below |
 | b | OS family classified from banner/probe **before** a connector is chosen | `SshBannerClassifierTests` (17) over **captured** banners (`Samples/PROVENANCE.md`) | ☑ **for what a banner can establish, which is less than expected.** Protocol is settled for all five distros, so the connector choice is always determined. **Family is determined for Debian/Ubuntu only** — Rocky and Alma emit byte-identical `SSH-2.0-OpenSSH_9.9` naming no distro, so they classify `unknown` rather than being guessed as `rhel`. See the note below |
 | c | Candidates persisted to `assets` with `source = 'discovery'`, `managed = false` until inventoried | `DiscoveryStoreTests` (11) against real Postgres, as the restricted `patchmgmt_app` role | ☑ — one candidate per **open port**, not per address (ADR 0024's over-split; the lab forces it — five containers share `127.0.0.1`). `hostname` records the observed address rather than inventing a name, because a sweep never logs in. State is `scan-failed`: something answered a TCP probe, which is not a successful scan |
-| d | Linux package inventory populated for **all 5 distros** over SSH → `asset_packages` (name, version, epoch, arch, source), plus OS-release onto `assets` | `LabInventoryTests` (12) against the real fleet | ☑ — all five distros, >50 packages each, `source` matching the package manager. **Epoch required fixing the collector**: the rpm query asked only for VERSION-RELEASE, so every epoch was being dropped between a host that knows it and a column built to hold it |
+| d | Linux package inventory populated for **all 5 distros** over SSH → `asset_packages` (name, version, epoch, arch, source), plus OS-release onto `assets` | `LabInventoryTests` (12) against the real fleet, plus `Inventory_runs_with_the_store_registered_and_pins_the_endpoint_it_inventoried` | ☑ — all five distros, >50 packages each, `source` matching the package manager. **Epoch required fixing the collector**: the rpm query asked only for VERSION-RELEASE, so every epoch was being dropped between a host that knows it and a column built to hold it |
 | e | Failure sets the asset state **honestly** — `unreachable` / `auth-failed` / `scan-failed`, never collapsed into compliant (HARD-PROBLEMS #8) | `LabInventoryTests` — a **real** rejected key against a live host, and a real closed port | ☑ — proven by what a host actually did, not by a mapping table. A failed inventory also leaves `last_seen` alone and `managed` false |
 | f | A synthetic "seen but in no inventory" host is flagged unmanaged **with its evidence** (seen at IP X by run Y; absent from AD / DHCP / inventory) | `CorrelationTests` (6) over file-backed synthetic sources | ☑ — **and the load-bearing test is the negative one**: a host AD knows about is NOT flagged, even though `managed = false`. Absences are written as rows, not computed and discarded, so the flag is auditable later. Real LDAP/DHCP ingestion is **D-401 / D-402** below |
 | g | Everything tenant-scoped; RLS holds on every new table; `RlsConventionTests` stays green with **no new exemption** | `RlsConventionTests` (unmodified allowlist) + `DiscoveryStoreTests` two-tenant cases | ☑ **for the tables that now carry rows.** Two tenants sweeping the same address get separate, mutually invisible assets, runs and evidence — asserted through the real `RlsConnectionInterceptor` as `patchmgmt_app`, not as the owner. ~~`host_keys` has RLS and a policy but **no writer yet**~~ — **as of 2026-08-29 it does.** `HostKeyTofuTests` writes pins through the restricted `patchmgmt_app` role with the real `RlsConnectionInterceptor`, and asserts both halves behaviourally: two tenants pinning the same address get separate, mutually invisible rows, **and** one tenant's mismatched pin does not refuse another tenant at that address — the failure a store filtering in C# rather than at the database would produce, which would read as an outage rather than a bug. **Criterion (g) now holds behaviourally for every Phase 4 table** |
-| h | Every connector call time-bounded and idempotent (NEVER #5); a re-run writes the **same rows with stable ids**, not merely un-duplicated | `Re_running_a_sweep_writes_the_same_rows_with_the_same_ids` + `Re_running_advances_last_seen_on_the_same_row` | ☑ **for discovery.** Asserted on **ids**, not counts: a count is satisfied by delete-and-reinsert, by a no-op on conflict, and by a second run that wrote nothing. Findings, packages and evidence all hang off the asset id, so an id that changes silently orphans them. **Not yet closed for inventory** — slice 3 has no writes to be idempotent about |
-| i | The Discovery module is **reachable in the shipped host** | `Api_project_ships_the_discovery_module` + `Real_host_container_resolves_the_discovery_module` | ☑ **proven red-first**, both failed before `PatchManagement.Api.csproj` gained its `ProjectReference` — the deps.json guard on the missing entry, the container guard on a null `INetworkSweeper` |
+| h | Every connector call time-bounded and idempotent (NEVER #5); a re-run writes the **same rows with stable ids**, not merely un-duplicated | `Re_running_a_sweep_writes_the_same_rows_with_the_same_ids` + `Re_running_advances_last_seen_on_the_same_row` | ☑ **for discovery.** Asserted on **ids**, not counts: a count is satisfied by delete-and-reinsert, by a no-op on conflict, and by a second run that wrote nothing. Findings, packages and evidence all hang off the asset id, so an id that changes silently orphans them. ~~**Not yet closed for inventory**~~ — **closed 2026-08-29.** Inventory does write: `Re_inventorying_replaces_the_package_set_rather_than_accumulating_it` proves replace-not-merge, and D-301's `host_keys` writes are asserted idempotent on **ids** too (`Reconnecting_verifies_…_instead_of_pinning_a_second_key`, `Repeated_refusals_update_the_pending_row_rather_than_appending_one_per_attempt`) |
+| i | The Discovery module is **reachable in the shipped host** | `Api_project_ships_the_discovery_module` + `Real_host_container_resolves_the_discovery_module` + `Real_host_container_resolves_the_host_key_store_from_the_discovery_module` | ☑ **proven red-first**, both original guards failed before `PatchManagement.Api.csproj` gained its `ProjectReference` — the deps.json guard on the missing entry, the container guard on a null `INetworkSweeper`. **Extended 2026-08-29:** D-301's store is resolved from the real container too, because dropping that registration breaks nothing at compile time — the connector just resolves a null store and host-key verification silently switches itself off in production. Mutation-checked |
 
 **Why (i) is on the list from day one.** The unreferenced-module defect has now shipped three
 times — the Vault at `a50d9ec`, Phase 3's WIP, and Phase 5's foundation slice. Phase 4 adds the
@@ -337,7 +337,7 @@ schema-contract surface rather than to the phase that happened to touch it next.
 proving that what is checked in matches what is running. Not assigned here — that is the reader's
 call, and until it is assigned this is a flagged gap rather than a deferral.
 
-## Deferrals this phase names — D-401 and D-402
+## Deferrals this phase names — D-401 … D-408
 
 `DIFFERENTIATORS.md:88` — deferring is allowed; deferring **without a named owner** is not. Both
 owners below were proposed by this phase and **RATIFIED 2026-08-27**. They are now owners, not
@@ -352,6 +352,13 @@ criterion (f) asks for, and what makes "absent from AD" assertable at all. What 
 |----|----------|----------------|----------------------------------------------|
 | **D-401** | Real **Active Directory / LDAP** evidence source | **Phase 14** (identity & access) | The unmanaged finding is only as good as the sources consulted. Until AD is real, "absent from AD" means "absent from a file someone maintained", and the differentiator cannot be demonstrated to a customer against their own estate. Phase 14 owns it because it is where directory integration already lands — `operators.external_auth_ref` and federated login need an LDAP client, and two LDAP clients in one product is one too many |
 | **D-402** | Real **DHCP lease** ingestion | **Phase 11** (scheduling & reporting) | Same gate. A lease file is a point-in-time export; real ingestion is a *scheduled import* with its own freshness question — a stale lease table makes a live host look absent, which manufactures the exact false positive this feature exists to avoid. Phase 11 owns it because it owns schedules; the freshness rule belongs with whatever runs the import |
+
+| **D-403** | `NetworkSweeper` allocates one task per address before `Task.WhenAll` — a `/16` is 65,536 pending waiters | **Phase 11** (scheduling) | Concurrency is genuinely bounded by `MaxConcurrentProbes`; *task creation* is not. Correct and cheap at lab scale, so it is not churned now. Flagged in slice 2 as "revisit in slice 3", never revisited — named here so it stops being rediscovered |
+| **D-404** | `ConnectionKey.HostKeyFor` is a governor concurrency key, not a cryptographic host key | **Phase 8** (deployment) | A name collision that D-301 made materially worse: grepping `HostKey` now returns `IHostKeyStore`, `HostKeyGate`, `HostKeyStore` and `HostKeys` alongside it. Renaming touches connector internals only, so it belongs with the next phase working in there |
+| **D-405** | `ConnectionPlan` calls itself "a pure value" but its record equality compares `Hops` by **reference** | **Phase 8** | Two structurally identical plans are never `Equal`, which is a trap for anyone writing `Assert.Equal(planA, planB)` — it already caught one test in slice 5. Nothing depends on the current semantics, so this is a safe change, just not one to slip into a deferral slice |
+| **D-406** | The per-host connection budget counts only hop 0 of a chain | **Phase 8** | `ConnectionKey.HostKeyFor` returns the first hop, so a chain's intermediate hosts and destination consume connections the governor never counts. Harmless at one hop; D-306 made chains real. Phase 8 owns waves, which is where the budget first bites |
+| **D-407** | `host_keys` rotation is **aspirational**: nothing writes `superseded`/`revoked`, `superseded_at` is never set, `asset_id` is never populated, and the only route from `pending` to `trusted` is manual SQL | **Phase 14** (identity & access) | The entity documents a rotation model no code implements. The store now refuses closed statuses rather than re-accepting them, so the gap is safe — but promoting a reviewed key still means hand-editing the table, which is exactly how closed rows come to exist. Key custody belongs with Phase 14 |
+| **D-408** | Concurrent connects within one scope share a non-thread-safe `AppDbContext` | **Phase 11** | The host-key store and the credential provider both resolve from the request scope. Inventory and correlation are sequential today so nothing triggers it; scheduled concurrent work is where it would first appear |
 
 **Both share one hazard worth stating once.** `IAssetEvidenceSource` requires a source that cannot be
 consulted to **throw**, never to report absence — an unreachable domain controller would otherwise
@@ -416,10 +423,19 @@ leg, so NEVER #5 holds at any depth.
 intended topology, so choosing one would tunnel through a host nobody authorised and report success.
 
 **Proven on the fleet, because a unit test structurally cannot tell a traversed chain from a
-truncated one.** `BastionChainFleetTests` chains `127.0.0.1:2201` → `debian12:22` → `rocky9:22`. Only
-2201 is published on loopback; the rest are reachable only from inside the compose network, so a chain
-that stopped early could not reach the far host at all. The assertion is the remote `hostname`, and a
-control test asserts the far host is `Unreachable` without the tunnel — that control passed before
+truncated one.** `BastionChainFleetTests` chains `127.0.0.1:2201` → `debian12:22` → `rocky9:22`.
+
+> **CORRECTED 2026-08-29 by the pre-close review.** This paragraph originally argued that "the rest
+> are reachable only from inside the compose network, so a chain that stopped early could not reach
+> the far host at all", and rested the proof on the remote `hostname`. **That reasoning was wrong.**
+> The lab network is flat: every container reaches every other, so a chain truncated to its first hop
+> still forwards to the destination and still reports `rocky9`. A `Hops.Take(1)` mutation passed all
+> four tests. Traversal is now asserted through **one distinct `CredentialRef` per hop**, counted by
+> `RecordingCredentialProvider` — a hop that is never authenticated never resolves its reference, so
+> the mutation now fails three of the four. It also closes multi-hop credential zeroing, which had
+> been inferred from the one-hop test only.
+
+The control test asserting the far host is `Unreachable` without the tunnel — that control passed before
 and after, which is what makes the other three mean something.
 
 **One defect the tests forced out on the way.** `ConnectionPlanner.Plan` refusing an ambiguous target
@@ -537,6 +553,65 @@ how a performance test becomes decoration.
 altogether fails `An_eligible_entry_never_outlives_the_tick…`, `The_timer_still_sweeps_the_pool_on_its_own`
 and the pre-existing `An_idle_session_is_evicted_by_the_timer_with_no_further_traffic`. Without that
 second guard, deleting `EvictIdle` outright would have passed every other test in the new file.
+
+## Pre-close review, 2026-08-29 — run before flipping the status
+
+The nine criteria were re-walked against **current code** rather than commit history, the three
+discharged deferrals were re-verified at `6554ed0`, and the phase's security-relevant surface was
+swept for anything flagged but never decided. **The suite was green at 662/662 throughout and the
+review still found seven defects**, which is the entry worth keeping: a green suite proves the tests
+pass, not that nothing was missed.
+
+**A test that could not fail.** The D-306 fleet tests had never been mutation-checked. Truncating the
+chain to `plan.Hops.Take(1)` — the exact pre-D-306 defect — **passed all four of them**, because the
+lab network is flat and the destination is reachable from the first hop directly. The proof now rests
+on one distinct `CredentialRef` per hop, counted per reference: a hop that is never authenticated
+never resolves its reference. See the corrected note under D-306 below.
+
+**A revoked host key was re-accepted on every connection.** `RecordAsync` matched an existing row by
+fingerprint while ignoring its status, and the lookup fetched only the *trusted* pin. So a `revoked`
+or `superseded` endpoint had no pin, judged the presented key a first sighting, **accepted it**, then
+merely refreshed the closed row — never creating a pin, and repeating forever. Closed statuses now
+judge `Withdrawn` and are refused regardless of `AllowUnknownHostKeys`, checked **before** the pin.
+The same defect had a second half: a `pending` key was accepted but never promoted when a deployment
+turned first-sight pinning on, leaving the endpoint permanently unverified while appearing to work.
+
+**A store failure leaked an authenticated transport.** The success-path `RecordAsync` sat outside any
+`try`, so a database outage or an RLS `WITH CHECK` violation escaped with the client still connected
+and never disposed — and in a chain it is not yet in the unwind list either. It now fails closed:
+a connection whose key cannot be recorded is refused rather than proceeding unrecorded, because a
+first sighting that failed to write has accepted a key and pinned nothing.
+
+**A comment that described an intent the code did not implement.** `HostKeyGate.RecordAsync` said it
+was "deliberately NOT cancelled by the connect budget's token" while passing exactly that token — so
+a mismatch found as the budget expired lost both the audit row and the refusal itself, which was
+replaced by a cancellation. The method now takes no token and carries its own bounded budget, making
+the guarantee structural rather than a promise in prose.
+
+**Two smaller ones.** `PlanOrRefuse` caught `ArgumentException`, which includes the
+`ArgumentNullException` from the planner's own null guard — turning a caller bug into a typed
+`scan-failed`, i.e. an endpoint reported unscannable when nothing is wrong with it. And a comment
+this phase added to `LabInventoryTests` claimed "a changed key is refused here too" in a composition
+that registers no store at all.
+
+**Mutation matrix, run fresh at `6554ed0`.** Reinstating the per-borrow sweep fails 2 guards;
+disabling eviction fails 3; making `Judge` ignore the pin fails 5 unit + 3 integration; truncating
+the chain **failed nothing** until the fleet tests were rewritten, and now fails 3 of 4; dropping the
+`IHostKeyStore` registration fails the host-container guard and all 11 TOFU tests.
+
+### Still open after this review — owners assigned
+
+| Item | Owner |
+|---|---|
+| `NetworkSweeper` allocates one task per address before `Task.WhenAll`; a `/16` is 65,536 waiters. Flagged in slice 2 as "revisit in slice 3", never revisited | **D-403, Phase 11** — where scheduled sweeps make address counts real |
+| `ConnectionKey.HostKeyFor` is a governor concurrency key, not a cryptographic host key — a collision made materially worse by D-301's vocabulary (`IHostKeyStore`, `HostKeyGate`, `HostKeyStore`, `HostKeys`) | **D-404, Phase 8** — the next phase to work inside the connector |
+| `ConnectionPlan` documents itself as "a pure value" but its record equality compares `Hops` by **reference**, so two identical plans are never `Equal` | **D-405, Phase 8** — same owner, same file |
+| The per-host connection budget counts only hop 0; a chain consumes a connection on every intermediate host, none of which the governor sees | **D-406, Phase 8** — it owns deployment waves, where the budget first bites |
+| `host_keys.asset_id` is never populated, and no code writes `superseded`/`revoked` or sets `superseded_at` — the rotation model the entity documents is **aspirational**, and the only route from `pending` to `trusted` is manual SQL | **D-407, Phase 14** — identity & access, which owns credential and key custody |
+| Concurrent connects within one scope share a non-thread-safe `AppDbContext`. Inventory and correlation are sequential today, so nothing triggers it — an assumption, not a guarantee | **D-408, Phase 11** — where concurrent scheduled work first appears |
+
+**None of these is a regression and none blocks the phase.** They are named here because the review's
+whole purpose was to stop them being rediscovered later as surprises.
 
 ## Open asks (NEVER #6) — required before the slices that need them
 

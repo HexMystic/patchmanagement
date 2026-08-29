@@ -222,6 +222,40 @@ public sealed class HostModuleDiscoveryTests
         Assert.Equal("PatchManagement.Discovery", sweeper.GetType().Assembly.GetName().Name);
     }
 
+    /// <summary>
+    /// D-301's store must be reachable in the shipped host, not merely in a hand-built container.
+    ///
+    /// <para>The port is declared in the Connectors module and implemented in Discovery, so nothing
+    /// fails to compile if the registration is dropped — the connector simply resolves a null store
+    /// and silently falls back to the pre-D-301 posture, where <c>AllowUnknownHostKeys</c> is the
+    /// whole decision. That is host-key verification quietly switching itself off in production with
+    /// every test still green, which is the same defect class as the unreferenced module this file
+    /// exists for.</para>
+    ///
+    /// <para>Resolved by type NAME, because this project deliberately references no module.</para>
+    /// </summary>
+    [Fact]
+    public void Real_host_container_resolves_the_host_key_store_from_the_discovery_module()
+    {
+        var portType = Type.GetType(
+            "PatchManagement.Connectors.Ssh.IHostKeyStore, PatchManagement.Connectors");
+
+        Assert.True(portType is not null,
+            "IHostKeyStore is not present in the host output — the Connectors module is missing.");
+
+        using var factory = new WebApplicationFactory<Program>();
+        using var scope = factory.Services.CreateScope();
+
+        var store = scope.ServiceProvider.GetService(portType!);
+
+        Assert.True(store is not null,
+            "The real host's container has no IHostKeyStore, so SshConnector resolves null and host-key "
+            + "verification is silently disabled in the shipped app: a changed key would be accepted. "
+            + "AddDiscoveryModule must register it.");
+
+        Assert.Equal("PatchManagement.Discovery", store!.GetType().Assembly.GetName().Name);
+    }
+
     /// <summary>Path to the API's own build output, matching this test run's configuration.</summary>
     private static string ApiDepsJsonPath()
     {

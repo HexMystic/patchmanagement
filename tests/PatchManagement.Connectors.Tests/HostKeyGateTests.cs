@@ -13,6 +13,9 @@ namespace PatchManagement.Connectors.Tests;
 /// </summary>
 public sealed class HostKeyGateTests
 {
+    /// <summary>An endpoint whose only history is one trusted pin.</summary>
+    private static EndpointHostKeys Known(PinnedHostKey pin) => new(pin, []);
+
     private static readonly PinnedHostKey Pinned =
         new("ssh-ed25519", "AAAApinnedFINGERPRINTvalue0000000000000000000");
 
@@ -23,7 +26,7 @@ public sealed class HostKeyGateTests
     {
         Assert.Equal(
             HostKeyVerdict.Verified,
-            HostKeyGate.Judge(Pinned, Pinned.FingerprintSha256, pinsOnFirstSight: false));
+            HostKeyGate.Judge(Known(Pinned), Pinned.FingerprintSha256, pinsOnFirstSight: false));
     }
 
     [Fact]
@@ -31,7 +34,7 @@ public sealed class HostKeyGateTests
     {
         Assert.Equal(
             HostKeyVerdict.PinnedOnFirstSight,
-            HostKeyGate.Judge(pin: null, ADifferentKey, pinsOnFirstSight: true));
+            HostKeyGate.Judge(EndpointHostKeys.None, ADifferentKey, pinsOnFirstSight: true));
     }
 
     [Fact]
@@ -39,7 +42,7 @@ public sealed class HostKeyGateTests
     {
         Assert.Equal(
             HostKeyVerdict.Unknown,
-            HostKeyGate.Judge(pin: null, ADifferentKey, pinsOnFirstSight: false));
+            HostKeyGate.Judge(EndpointHostKeys.None, ADifferentKey, pinsOnFirstSight: false));
     }
 
     /// <summary>
@@ -58,7 +61,7 @@ public sealed class HostKeyGateTests
     {
         Assert.Equal(
             HostKeyVerdict.Changed,
-            HostKeyGate.Judge(Pinned, ADifferentKey, pinsOnFirstSight));
+            HostKeyGate.Judge(Known(Pinned), ADifferentKey, pinsOnFirstSight));
     }
 
     /// <summary>
@@ -70,7 +73,7 @@ public sealed class HostKeyGateTests
     {
         Assert.Equal(
             HostKeyVerdict.Changed,
-            HostKeyGate.Judge(Pinned, Pinned.FingerprintSha256.ToUpperInvariant(), pinsOnFirstSight: true));
+            HostKeyGate.Judge(Known(Pinned), Pinned.FingerprintSha256.ToUpperInvariant(), pinsOnFirstSight: true));
     }
 
     [Fact]
@@ -85,7 +88,7 @@ public sealed class HostKeyGateTests
         Assert.False(gate.Refused);
 
         // And recording is a no-op rather than a null dereference.
-        await gate.RecordAsync(CancellationToken.None);
+        await gate.RecordAsync();
     }
 
     [Fact]
@@ -100,7 +103,7 @@ public sealed class HostKeyGateTests
         Assert.False(gate.Observe("ssh-ed25519", ADifferentKey, [9, 9, 9]));
         Assert.True(gate.Refused);
 
-        await gate.RecordAsync(CancellationToken.None);
+        await gate.RecordAsync();
 
         // "The key at this endpoint changed" is the security-relevant event. A refusal that wrote
         // nothing would leave the estate unable to tell a rebuilt host from an interception later.
@@ -132,13 +135,66 @@ public sealed class HostKeyGateTests
         Assert.Contains("10.0.0.5:22", refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// <b>A withdrawn key is refused, and the policy flag does not get a vote.</b>
+    ///
+    /// <para>This is the case that made a revoked key re-acceptable: a closed endpoint has no
+    /// <em>trusted</em> row, so judging on the pin alone reads it as "nothing is pinned" and, under
+    /// first-sight pinning, accepts it. The closed check therefore runs BEFORE the pin is consulted,
+    /// and ignores <c>pinsOnFirstSight</c> exactly as the changed-key check does.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_withdrawn_key_is_refused_whatever_the_pinning_policy_says(bool pinsOnFirstSight)
+    {
+        var closed = new EndpointHostKeys(Trusted: null, ClosedFingerprints: [ADifferentKey]);
+
+        Assert.Equal(
+            HostKeyVerdict.Withdrawn,
+            HostKeyGate.Judge(closed, ADifferentKey, pinsOnFirstSight));
+    }
+
+    /// <summary>
+    /// A closed key does not taint the endpoint. After a genuine rotation the retired fingerprint is
+    /// closed and a new one is pinned; the new key must still verify normally, or rotating a host
+    /// would lock the estate out of it.
+    /// </summary>
+    [Fact]
+    public void A_closed_fingerprint_does_not_stop_a_different_key_from_verifying()
+    {
+        var rotated = new EndpointHostKeys(Trusted: Pinned, ClosedFingerprints: [ADifferentKey]);
+
+        Assert.Equal(
+            HostKeyVerdict.Verified,
+            HostKeyGate.Judge(rotated, Pinned.FingerprintSha256, pinsOnFirstSight: false));
+    }
+
+    /// <summary>A withdrawn key is refused, so it must also be recorded like any other refusal.</summary>
+    [Fact]
+    public async Task A_withdrawn_key_counts_as_refused_so_the_attempt_is_recorded()
+    {
+        var store = new FakeHostKeyStore { Closed = [ADifferentKey] };
+
+        var gate = await HostKeyGate.OpenAsync(
+            store, Guid.NewGuid(), "10.0.0.5", 22, pinsOnFirstSight: true, CancellationToken.None);
+
+        Assert.False(gate.Observe("ssh-ed25519", ADifferentKey, [7]));
+        Assert.True(gate.Refused);
+        Assert.Contains("withdrawn", gate.Refusal().Message, StringComparison.OrdinalIgnoreCase);
+
+        await gate.RecordAsync();
+        Assert.Equal(HostKeyVerdict.Withdrawn, Assert.Single(store.Recorded).Verdict);
+    }
+
     private sealed class FakeHostKeyStore : IHostKeyStore
     {
         public PinnedHostKey? Trusted { get; init; }
+        public string[] Closed { get; init; } = [];
         public List<HostKeyObservation> Recorded { get; } = [];
 
-        public Task<PinnedHostKey?> FindTrustedAsync(Guid tenantId, string host, int port, CancellationToken ct) =>
-            Task.FromResult(Trusted);
+        public Task<EndpointHostKeys> FindAsync(Guid tenantId, string host, int port, CancellationToken ct) =>
+            Task.FromResult(new EndpointHostKeys(Trusted, Closed));
 
         public Task RecordAsync(HostKeyObservation observation, CancellationToken ct)
         {

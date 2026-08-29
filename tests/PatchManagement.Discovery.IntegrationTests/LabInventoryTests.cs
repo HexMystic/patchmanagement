@@ -260,8 +260,12 @@ public sealed class LabInventoryTests(DiscoveryPostgresFixture fx)
             {
                 // The lab rebuilds its containers constantly and they regenerate host keys each
                 // time, so there is nothing stable to pin. The product default REFUSES unknown keys;
-                // this opt-in is explicit and scoped to the lab. Since D-301 closed it means "pin on
-                // first sight" rather than "accept anything" — a changed key is refused here too.
+                // this opt-in is explicit and scoped to the lab.
+                //
+                // NOTE: this composition registers no IHostKeyStore, so nothing is pinned here and no
+                // changed key would be refused — the flag is the whole decision, exactly as before
+                // D-301. An earlier version of this comment claimed otherwise. Host-key verification
+                // is exercised where a store exists, in HostKeyTofuTests.
                 ["Connectors:Security:AllowUnknownHostKeys"] = "true",
                 ["Connectors:Concurrency:GlobalMaxConnections"] = "8",
                 ["Connectors:Concurrency:PerTenantMaxConnections"] = "8",

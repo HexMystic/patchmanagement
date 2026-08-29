@@ -16,23 +16,32 @@ namespace PatchManagement.Discovery.Store;
 /// </summary>
 internal sealed class HostKeyStore(AppDbContext db, TimeProvider time) : IHostKeyStore
 {
-    public async Task<PinnedHostKey?> FindTrustedAsync(
+    public async Task<EndpointHostKeys> FindAsync(
         Guid tenantId, string host, int port, CancellationToken ct)
     {
-        // A partial unique index admits at most one trusted key per endpoint, so "which key do we
-        // trust" has exactly one answer and SingleOrDefault is the honest query — a FirstOrDefault
-        // here would quietly pick one of two if that invariant ever broke.
-        var pinned = await db.HostKeys
+        // One read for the whole endpoint. Fetching only the pin would make a revoked key on an
+        // otherwise-unpinned endpoint indistinguishable from a first sighting, which is precisely how
+        // a withdrawn key came to be accepted on every connection.
+        var rows = await db.HostKeys
             .AsNoTracking()
-            .Where(k => k.TenantId == tenantId
-                        && k.Host == host
-                        && k.Port == port
-                        && k.Status == HostKeyStatuses.Trusted)
-            .Select(k => new PinnedHostKey(k.KeyAlgorithm, k.FingerprintSha256))
-            .SingleOrDefaultAsync(ct)
+            .Where(k => k.TenantId == tenantId && k.Host == host && k.Port == port)
+            .Select(k => new { k.Status, k.KeyAlgorithm, k.FingerprintSha256 })
+            .ToListAsync(ct)
             .ConfigureAwait(false);
 
-        return pinned;
+        // A partial unique index admits at most one trusted key per endpoint, so "which key do we
+        // trust" has exactly one answer and Single is the honest query — First would quietly pick
+        // one of two if that invariant ever broke.
+        var trusted = rows.SingleOrDefault(r => r.Status == HostKeyStatuses.Trusted);
+
+        var closed = rows
+            .Where(r => HostKeyStatuses.Closed.Contains(r.Status))
+            .Select(r => r.FingerprintSha256)
+            .ToArray();
+
+        return new EndpointHostKeys(
+            trusted is null ? null : new PinnedHostKey(trusted.KeyAlgorithm, trusted.FingerprintSha256),
+            closed);
     }
 
     public async Task RecordAsync(HostKeyObservation observation, CancellationToken ct)
@@ -55,6 +64,20 @@ internal sealed class HostKeyStore(AppDbContext db, TimeProvider time) : IHostKe
         if (existing is not null)
         {
             existing.LastVerifiedAt = now;
+
+            // Promote rather than duplicate. A key refused under a strict policy is already on file
+            // as pending; when the deployment opts into first-sight pinning, THIS row must become the
+            // pin. Leaving it pending would accept the key on every connection while the endpoint
+            // stayed permanently unverified — working, and unpinned.
+            //
+            // Only ever from pending: a closed row cannot reach here, because a closed fingerprint
+            // judges Withdrawn and never PinnedOnFirstSight.
+            if (observation.Verdict is HostKeyVerdict.PinnedOnFirstSight
+                && existing.Status == HostKeyStatuses.Pending)
+            {
+                existing.Status = HostKeyStatuses.Trusted;
+            }
+
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
             return;
         }
