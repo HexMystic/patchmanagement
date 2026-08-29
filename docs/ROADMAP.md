@@ -440,7 +440,7 @@ inherits and what it cannot claim until then.
 | **D-306** | ~~Multi-hop (>1) bastion chains~~ **CLOSED 2026-08-29 (Phase 4, slice 5)** | **Phase 4** — topology lives with assets | ~~A two-hop plan is refused by name~~ — and red-first showed the reachable behaviour was worse than that: a two-hop target planned `Hops = [], IsDirect = True`, i.e. a **direct** connection with both jump hosts discarded. Now `BastionChain` (additive, ADR 0017) is the topology model, the planner emits every hop and the factory walks them; proven on a real 2- and 3-hop lab chain |
 | **D-307** | Passphrase-protected private keys; `CredentialKind` expansion | **Phase 15** (key custody) | `new PrivateKeyFile(stream)` is key-only; an encrypted key fails as `ProtocolError` |
 | **D-308** | Collapse `Vault.Tests/Support` onto the shared `TestSupport` project | **Phase 15** — the next phase to edit vault tests | Two capturing-logger implementations coexist. Kept out of Phase 3 to hold this phase's diff inside its owned paths |
-| **D-310** | `AcquireAsync` runs a full eviction sweep per borrow, now under the pool's lifetime lock | **Phase 4** — where pool load first becomes real | The O(entries) scan predates R4; the lock added to fix the shutdown race makes it serial. The timer already evicts quiet pools, so the call may simply be redundant — but dropping it changes eviction timing, which is outside R4's scope |
+| **D-310** | ~~`AcquireAsync` runs a full eviction sweep per borrow~~ **RESOLVED 2026-08-29 (Phase 4, slice 5) — measured, then removed** | **Phase 4** — where pool load first becomes real | ~~The call may simply be redundant~~ — measurement says it was **not**: eviction timing does change. But it cost 10.3 / 81.9 / 330.2 µs per borrow at 100 / 1,000 / 5,000 entries versus a flat ~2 µs without, all under the lifetime lock, and the timing change is bounded by one `PooledSessionIdleTimeout` on a host nobody is talking to. Removed |
 | **D-311** | Extend the text-materialisation ban to `src/Modules/Vault` | **Phase 15** — the next phase to edit vault tests | The ban covers the connector surface only. Phase 2 has two materialising calls (username decode; KEK base64 for the key file) — both legitimate, both already documented, neither enforced. Held out of Phase 3: the vault is Phase 2's owned path and `Connectors.Tests` has no vault dependency by design |
 | **D-309** | SSH password / keyboard-interactive auth | **Phase 8** | Key-only. The lab is key-only by construction, so this is untested either way |
 
@@ -649,6 +649,20 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   was sent a private key. **Criterion (g) now holds behaviourally for every Phase 4 table**: two
   tenants pinning the same address get separate invisible rows, and one tenant's mismatched pin does
   not refuse another tenant there. **D-310 remains open.**
+- **Slice 5, item 3 landed 2026-08-29 — D-310 resolved by measurement. `main` green at 662.**
+  The deferral refused to be settled by argument, so both halves were measured over 2,000 borrows
+  against in-memory sessions: **10.3 / 81.9 / 330.2 µs per borrow at 100 / 1,000 / 5,000 entries,
+  against a flat ~2 µs with the call gone.** The suspicion recorded against it was wrong — the sweep
+  was NOT redundant, an eligible entry really was being evicted earlier than the timer managed — and
+  it was removed anyway: the cost is linear in pool size while the saving is flat (~174x at 5,000
+  entries), every scan was taken under the lifetime lock so acquires serialised, and the timing it
+  bought is bounded by one `PooledSessionIdleTimeout` on a host nobody is talking to. **Removing it
+  broke no pre-existing test**, which is what decided it. Cost is asserted by COUNTING entries
+  scanned rather than by a stopwatch, because a perf assertion measures the CI machine and gets
+  re-run until green. Both directions are mutation-checked: reinstating the call fails the two new
+  guards, and disabling eviction entirely fails three more — without that second guard, deleting
+  `EvictIdle` outright would have passed everything else. **All three inherited deferrals are now
+  discharged.**
 - **`EndpointFactsCollector`'s DI resolution fixed (Phase 3), red-first through the container.** It
   took a single `IEndpointConnector` while the module registers two, so DI handed it the last —
   `WinRmConnector` — whatever the target said. Reproduced by resolving from a real

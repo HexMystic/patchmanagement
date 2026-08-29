@@ -95,7 +95,7 @@ Each was verified **in code** at `48f3cf1` when the phase opened. None is assume
 |----|------------------------------|--------------------------|
 | **D-301** — persistent verified-host-key (TOFU) store | ~~**OPEN.**~~ **CLOSED 2026-08-29, slice 5.** At phase open `ConnectorSecurityOptions.cs:26` was a single bool and `SshNetSessionFactory.cs:278-279` set `e.CanTrust = _security.AllowUnknownHostKeys` — a blanket yes/no, with no fingerprint read, compared or persisted anywhere in `src/` | Done: `IHostKeyStore` (Connectors) implemented as `HostKeyStore` over `AppDbContext` (Discovery), and `A_changed_fingerprint_is_refused_and_the_presented_key_is_recorded` against the real fleet. See the slice-5 note below |
 | **D-306** — multi-hop (>1) bastion chains | ~~**OPEN, and larger than the factory.**~~ **CLOSED 2026-08-29, slice 5.** At phase open `SshNetSessionFactory.cs:184-190` refused `Hops.Count > 1` by name, but that branch was **unreachable from the planner** — `EndpointTarget.Bastion` is a single `BastionHop?`, so `ConnectionPlanner.Plan` could only ever emit 0 or 1 hops, and the two-hop plan proving the refusal was hand-constructed | Done: `BastionChain` (additive, ADR 0017), the planner emitting every hop, and the factory **walking** the chain. See the slice-5 note below |
-| **D-310** — `AcquireAsync` runs a full eviction sweep per borrow | **OPEN.** `SshConnectionPool.AcquireAsync:80` calls `EvictIdle()` on every borrow; `EvictIdle` takes `lock (_lifetime)` and scans all entries, so acquires serialise on an O(entries) scan | **Measurement, not reasoning.** A sweep is the first thing to borrow hard against many hosts at once. Whether dropping the call changes eviction timing observably is the question to answer with evidence |
+| **D-310** — `AcquireAsync` runs a full eviction sweep per borrow | ~~**OPEN.**~~ **RESOLVED 2026-08-29, slice 5 — measured, then removed.** `AcquireAsync:80` called `EvictIdle()` on every borrow, taking `lock (_lifetime)` and scanning all entries | Measured: 10.3 / 81.9 / 330.2 µs per borrow at 100 / 1,000 / 5,000 entries, against a flat ~2 µs without. The sweep was **not** redundant — timing does change — but the change is bounded by one `PooledSessionIdleTimeout` and it broke no pre-existing test. See the slice-5 note below |
 
 **A name collision worth knowing before reading the connector.** `ConnectionKey.HostKeyFor` is a
 **governor concurrency key**, not a cryptographic host key. Grepping `HostKey` in `src/` returns it
@@ -491,6 +491,53 @@ to the frozen `ConnectorOutcome` enum and therefore a NEVER #6 ask, which this s
 `AuthFailed` was rejected as the alternative: our credential was never rejected, and it would send an
 operator to whoever owns credentials over what may be an interception.
 
+### D-310 resolved 2026-08-29 — measured, then removed
+
+The deferral refused to be settled by argument: *"Measurement, not reasoning. Whether dropping the
+call changes eviction timing observably is the question to answer with evidence."* Both halves were
+measured, over 2,000 borrows against in-memory sessions (no sockets, so this is pool cost and nothing
+else):
+
+| pool entries | with per-borrow sweep | without |
+|---|---|---|
+| 100 | 10.3 µs/borrow | 2.6 µs/borrow |
+| 1,000 | 81.9 µs/borrow | 2.2 µs/borrow |
+| 5,000 | 330.2 µs/borrow | 1.9 µs/borrow |
+
+**The suspicion in the deferral was wrong, and the call was removed anyway.** It was *not* redundant:
+an entry that has become eligible was genuinely being evicted earlier than the timer would have
+managed, so removing it does change observed timing. But the cost is linear in pool size while the
+saving is flat — about **174× cheaper per borrow at 5,000 entries** — and every one of those scans
+was taken under the pool's lifetime lock, serialising acquires on the exact path a deployment wave
+takes. Connection concurrency, not the database, is the scaling wall (CLAUDE.md §2).
+
+**What the timing change actually costs is bounded**, which is what made it acceptable: an idle
+session now waits for the next tick rather than the next borrow, so it lives at most one extra
+`PooledSessionIdleTimeout` — 10 minutes instead of 5 at the default — and only on a host nobody is
+talking to. `An_eligible_entry_never_outlives_the_tick_after_it_becomes_eligible` pins that bound.
+
+**Removing it broke no pre-existing test.** Only the two written to measure it changed, which is the
+evidence that decided it.
+
+**Measuring the timing needed a constructed window, and saying so matters** — a casual version of
+this test passes either way and proves nothing. Ticks fall on period boundaries from construction
+(t=5, t=10, …), so an entry last used at t=3 is eligible from t=8: after one tick, before the next. A
+borrow at t=9 is the only moment the two designs differ. The advance is *stepped* to t=5 and then to
+t=9 because `FakeTimeProvider` moves its clock to the end of an `Advance` before running the timers
+that came due inside it — one 6-minute jump runs the t=5 sweep against a t=9 clock and evicts the
+entry there, closing the window. The first attempt did exactly that and failed its own guard.
+
+**The cost is asserted by counting, not timing.** `SshConnectionPool` exposes `EntriesScanned` and
+`EvictionSweeps` beside the existing `PooledSessionCount` instrumentation. A stopwatch assertion
+would measure the CI machine as much as the pool and would eventually be re-run until green, which is
+how a performance test becomes decoration.
+
+**Both directions are mutation-checked.** Reinstating the per-borrow call fails
+`Acquiring_does_not_scan_the_pool` and `An_eligible_entry_waits_for_the_timer…`; disabling eviction
+altogether fails `An_eligible_entry_never_outlives_the_tick…`, `The_timer_still_sweeps_the_pool_on_its_own`
+and the pre-existing `An_idle_session_is_evicted_by_the_timer_with_no_further_traffic`. Without that
+second guard, deleting `EvictIdle` outright would have passed every other test in the new file.
+
 ## Open asks (NEVER #6) — required before the slices that need them
 
 1. ~~**Schema.**~~ **CLOSED 2026-08-26** — approved and migrated as
@@ -516,4 +563,4 @@ operator to whoever owns credentials over what may be an interception.
 | 5 | Deferrals: D-301 store, D-306 chain, D-310 measurement | ask 2 |
 
 **Slice 5 progress.** D-306 closed 2026-08-29 (`main` 632 → 642); D-301 closed 2026-08-29
-(642 → 658). **D-310 remains open.**
+(642 → 658); D-310 resolved 2026-08-29 (658 → 662). **All three inherited deferrals are discharged.**

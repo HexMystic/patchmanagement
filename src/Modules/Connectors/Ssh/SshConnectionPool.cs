@@ -69,9 +69,34 @@ internal sealed class SshConnectionPool : IAsyncDisposable
     public int PooledSessionCount => _entries.Values.Count(e => e.Session is { IsConnected: true });
 
     /// <summary>
+    /// Total entries examined by every eviction sweep so far (instrumentation/tests).
+    ///
+    /// <para>Exists because D-310 is a <b>measurement</b>, and the cost of a sweep is work done, not
+    /// seconds elapsed. Counting is what makes that measurable in a suite: a stopwatch assertion
+    /// measures the machine as much as the pool, and a perf test that flakes is one people re-run
+    /// until it passes. See <c>PoolEvictionTimingTests</c>.</para>
+    /// </summary>
+    public long EntriesScanned => Interlocked.Read(ref _entriesScanned);
+
+    /// <summary>Number of eviction sweeps that have run (instrumentation/tests).</summary>
+    public long EvictionSweeps => Interlocked.Read(ref _evictionSweeps);
+
+    private long _entriesScanned;
+    private long _evictionSweeps;
+
+    /// <summary>
     /// Borrow a shared session for <paramref name="key"/>, creating it via <paramref name="connect"/>
     /// if none is cached or the cached one is dead. Dispose the returned lease when the operation
     /// finishes; the underlying session stays open for reuse.
+    ///
+    /// <para><b>Borrowing does not sweep (D-310, resolved by measurement 2026-08-29).</b> This used
+    /// to call <c>EvictIdle()</c> first, which takes <see cref="_lifetime"/> and walks every entry —
+    /// so acquires serialised on an O(entries) scan at the one place this product has to scale.
+    /// Measured over 2,000 borrows: 10.3us/borrow at 100 entries, 81.9 at 1,000, 330.2 at 5,000,
+    /// against a flat ~2us with the call gone. The sweep was NOT redundant — an eligible entry now
+    /// waits for the next tick instead of going at the next borrow — but that costs at most one extra
+    /// <c>PooledSessionIdleTimeout</c> of life for a session on a host nobody is talking to, and it
+    /// broke no pre-existing test. See <c>PoolEvictionTimingTests</c>.</para>
     /// </summary>
     public async Task<PooledSessionLease> AcquireAsync(
         string key,
@@ -79,7 +104,6 @@ internal sealed class SshConnectionPool : IAsyncDisposable
         CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        EvictIdle();
 
         var entry = _entries.GetOrAdd(key, _ => new PoolEntry(_time));
         await entry.Gate.WaitAsync(ct).ConfigureAwait(false);
@@ -112,6 +136,9 @@ internal sealed class SshConnectionPool : IAsyncDisposable
         lock (_lifetime)
         {
             if (_disposed) return;
+
+            Interlocked.Increment(ref _evictionSweeps);
+            Interlocked.Add(ref _entriesScanned, _entries.Count);
 
             var cutoff = _time.GetUtcNow() - _options.PooledSessionIdleTimeout;
             foreach (var (key, entry) in _entries)
