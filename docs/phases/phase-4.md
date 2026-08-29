@@ -43,8 +43,8 @@ Two sources state them. `docs/ROADMAP.md` states them abstractly; the table belo
 **operative** form, because it names observable conditions. A criterion is ticked only when a
 named test proves it — never because the code looks right.
 
-**9 of 9 ticked** as of 2026-08-27. `main` is green at **658** across nine projects (632 at the
-criteria close; slice 5 has added 26 so far — 10 for D-306, 16 for D-301).
+**9 of 9 ticked** as of 2026-08-27. `main` is green at **662** across nine projects (632 at the
+criteria close; slice 5 added 30 — 10 for D-306, 16 for D-301, 4 for D-310).
 
 **The exit criteria are met; the PHASE is not closed.** It inherited three deferrals — **D-301**
 (host-key store), **D-306** (multi-hop bastion) and **D-310** (per-borrow eviction sweep). Slice 5
