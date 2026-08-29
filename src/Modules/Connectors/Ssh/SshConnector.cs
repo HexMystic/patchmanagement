@@ -293,7 +293,7 @@ public sealed class SshConnector : IEndpointConnector
     /// </summary>
     private async Task<SessionScope> OpenAsync(EndpointTarget target, TimeSpan connectTimeout, CancellationToken ct)
     {
-        var plan = ConnectionPlanner.Plan(target);
+        var plan = PlanOrRefuse(target);
         var key = ConnectionKey.For(plan);
 
         var lease = await _governor
@@ -314,6 +314,30 @@ public sealed class SshConnector : IEndpointConnector
         {
             await lease.DisposeAsync().ConfigureAwait(false);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Plans the route, converting a refusal by <see cref="ConnectionPlanner"/> into the typed
+    /// failure this connector is contracted to return.
+    ///
+    /// <para>A target that configures a topology no one can resolve — both <c>Bastion</c> and
+    /// <c>BastionChain</c> — is a configuration error, and the planner is right to refuse it rather
+    /// than pick one. But it must not leave here as a raw <see cref="ArgumentException"/>: every
+    /// operation on <see cref="IEndpointConnector"/> models failure in its result (CLAUDE.md §5), and
+    /// a sweep walking 10,000 targets must not be taken down by one bad row. <c>ProtocolError</c> maps
+    /// to <c>scan-failed</c> — we could not scan, and the detail says exactly why — rather than to
+    /// <c>Unreachable</c>, which would send someone to the network team over a config mistake.</para>
+    /// </summary>
+    private static ConnectionPlan PlanOrRefuse(EndpointTarget target)
+    {
+        try
+        {
+            return ConnectionPlanner.Plan(target);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new ConnectorConnectException(ConnectorOutcome.ProtocolError, ex.Message, ex);
         }
     }
 

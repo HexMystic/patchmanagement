@@ -98,30 +98,30 @@ public sealed class BastionPlanningTests
         Assert.True(recorder.AllHandedOutBuffersAreZeroed);
     }
 
+    /// <summary>
+    /// <b>Replaces</b> <c>A_multi_hop_chain_is_rejected_by_name_rather_than_silently_truncated</c>
+    /// (D-306, closed slice 5). That test hand-built a two-hop <see cref="ConnectionPlan"/> because
+    /// no target could produce one, and asserted the factory refused it.
+    ///
+    /// <para>The property it protected — a chain is never silently truncated to its first hop — is
+    /// what survives, and it is now proven the other way round: every hop is traversed. Planning is
+    /// asserted here; that the connection actually lands on the LAST host, reachable only through the
+    /// ones before it, is asserted against the real fleet in <c>BastionChainFleetTests</c>, because a
+    /// unit test cannot tell a traversed chain from a truncated one.</para>
+    /// </summary>
     [Fact]
-    public async Task A_multi_hop_chain_is_rejected_by_name_rather_than_silently_truncated()
+    public void A_multi_hop_chain_is_planned_in_full_rather_than_truncated_to_its_first_hop()
     {
-        var plan = new ConnectionPlan(
-            Tenant,
-            new HopSpec("10.0.0.5", 22, TargetCredential, null),
+        var plan = ConnectionPlanner.Plan(Direct() with
+        {
+            BastionChain = new BastionChain(
             [
-                new HopSpec("jump-a", 22, BastionCredential, "jumpuser"),
-                new HopSpec("jump-b", 22, BastionCredential, "jumpuser"),
-            ]);
+                new BastionHop("jump-a", 22, BastionCredential, "jumpuser"),
+                new BastionHop("jump-b", 22, BastionCredential, "jumpuser"),
+            ]),
+        });
 
-        var credentials = new FakeCredentialProvider();
-        credentials.Add(TargetCredential, "k"u8.ToArray(), CredentialKind.SshKey, "labadmin");
-        credentials.Add(BastionCredential, "k"u8.ToArray(), CredentialKind.SshKey, "jumpuser");
-
-        var factory = new SshNetSessionFactory();
-
-        // The factory indexes Hops[0] under a comment claiming a loop it does not have. Silently
-        // using the first hop of a two-hop chain would connect somewhere the operator did not ask
-        // for and report success — the worst possible outcome for a chain that was misconfigured.
-        var ex = await Assert.ThrowsAsync<ConnectorConnectException>(() => factory.ConnectAsync(
-            plan, credentials.ResolveAsync, TimeSpan.FromSeconds(5), CancellationToken.None));
-
-        Assert.Equal(ConnectorOutcome.ProtocolError, ex.Outcome);
-        Assert.Contains("hop", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["jump-a", "jump-b"], plan.Hops.Select(h => h.Host));
+        Assert.Equal("10.0.0.5", plan.Destination.Host);
     }
 }

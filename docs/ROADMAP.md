@@ -437,7 +437,7 @@ inherits and what it cannot claim until then.
 | **D-303** | **WinRM verification against a real Windows host** | **Phase 8** | **The Windows path is unproven.** Phase 8 inherits an implementation that compiles, has transport-seam coverage, and has never spoken to a Windows machine. It cannot be claimed working — the SOAP envelopes, Negotiate/NTLM, the shell lifecycle and the base64 transfer round-trip are all unobserved. A Windows wave planned on this is planning on untested code |
 | **D-304** | **CredSSP / constrained-Kerberos delegation — the double-hop *solution*** | **Phase 8** | Phase 3 only **surfaces** `DoubleHopRequired` instead of hanging, which is its whole obligation under HARD-PROBLEMS #9. Any Phase 8 flow needing a second hop (an SMB payload fetch, an onward session) will be refused, not silently attempted. `AllowCredentialDelegation` currently only *skips the check* — it delegates nothing |
 | **D-305** | Redis-backed distributed concurrency tokens | **Phase 11** (scheduling) | The budget is per-process. Multi-instance deployments would each hold a full budget. The `IConnectionGovernor` surface is already scheduler-ready, so this is an implementation, not a redesign |
-| **D-306** | Multi-hop (>1) bastion chains | **Phase 4** — topology lives with assets | A two-hop plan is **refused by name**, not silently truncated to the first hop |
+| **D-306** | ~~Multi-hop (>1) bastion chains~~ **CLOSED 2026-08-29 (Phase 4, slice 5)** | **Phase 4** — topology lives with assets | ~~A two-hop plan is refused by name~~ — and red-first showed the reachable behaviour was worse than that: a two-hop target planned `Hops = [], IsDirect = True`, i.e. a **direct** connection with both jump hosts discarded. Now `BastionChain` (additive, ADR 0017) is the topology model, the planner emits every hop and the factory walks them; proven on a real 2- and 3-hop lab chain |
 | **D-307** | Passphrase-protected private keys; `CredentialKind` expansion | **Phase 15** (key custody) | `new PrivateKeyFile(stream)` is key-only; an encrypted key fails as `ProtocolError` |
 | **D-308** | Collapse `Vault.Tests/Support` onto the shared `TestSupport` project | **Phase 15** — the next phase to edit vault tests | Two capturing-logger implementations coexist. Kept out of Phase 3 to hold this phase's diff inside its owned paths |
 | **D-310** | `AcquireAsync` runs a full eviction sweep per borrow, now under the pool's lifetime lock | **Phase 4** — where pool load first becomes real | The O(entries) scan predates R4; the lock added to fix the shutdown race makes it serial. The timer already evicts quiet pools, so the call may simply be redundant — but dropping it changes eviction timing, which is outside R4's scope |
@@ -467,7 +467,9 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
   `AllowUnknownHostKeys` gate still stands. `D-306` (multi-hop bastion): the `Hops.Count > 1`
   refusal at `SshNetSessionFactory.cs:184-190` is **unreachable from the planner** — `EndpointTarget`
   carries one nullable `BastionHop`, so opening it is a change to the **topology model** under ADR
-  0017, a NEVER #6 ask, not a loop. `D-310` (per-borrow eviction sweep): still called from
+  0017, a NEVER #6 ask, not a loop. **D-306 closed 2026-08-29 in slice 5** — contract, planner and
+  factory traversal together, because a `BastionChain` an operator can configure but the factory
+  always refuses would be a control that is not one. `D-310` (per-borrow eviction sweep): still called from
   `AcquireAsync`, and it resolves by **measurement**, not by reasoning about redundancy.
 - **NEVER #4 gains an in-product half here.** The sweep is the first feature that can, by design,
   contact an arbitrary IP, and `.claude/hooks/lab_only_guard.py` inspects Bash command strings — it
@@ -604,6 +606,15 @@ only against a fake session. The lab grants `NOPASSWD` sudo with a locked accoun
 - **Slice 4 landed 2026-08-27 — correlation, plus a Phase 3 DI fix. All 9 exit criteria tick;
   `main` green at 632.** The phase is NOT complete: D-301, D-306 and D-310 are still open, and
   `host_keys` still has no writer.
+- **Slice 5, item 1 landed 2026-08-29 — D-306 closed. `main` green at 642** (632 + 6 unit + 4 fleet).
+  `BastionChain` lands additively beside `EndpointTarget.Bastion` (approved 2026-08-27), the planner
+  emits every hop, and `SshNetSessionFactory` **walks** the chain — each leg dialled through a local
+  forward opened on the leg before it, the session owning and unwinding the whole path innermost-first.
+  **The red run found worse than the deferral recorded:** a two-hop target did not reach the
+  `Hops.Count > 1` refusal at all, it planned `Hops = [], IsDirect = True` — a direct connection with
+  both jump hosts discarded. Proven on the fleet over a real 2- and 3-hop chain through container
+  hostnames that are unreachable except through the tunnel, so a truncated chain physically cannot
+  pass. **D-301 and D-310 remain open**, and `host_keys` still has no writer.
   **(f) closes over a pluggable `IAssetEvidenceSource` seam** proven against file-backed synthetic
   sources — the lab has no AD and no DHCP, which is what criterion (f)'s own wording anticipates.
   **The load-bearing test is the negative one:** a host AD knows about is NOT flagged, even though

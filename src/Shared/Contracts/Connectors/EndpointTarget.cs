@@ -44,8 +44,24 @@ public sealed record EndpointTarget
     /// </summary>
     public CredentialRef? PrivilegeCredential { get; init; }
 
-    /// <summary>Optional jump host. Null = direct connection. Non-null = tunnel through it.</summary>
+    /// <summary>
+    /// Optional single jump host — the one-hop shorthand. Null = direct connection.
+    /// Mutually exclusive with <see cref="BastionChain"/>; setting both is refused by the planner.
+    /// </summary>
     public BastionHop? Bastion { get; init; }
+
+    /// <summary>
+    /// Optional ordered chain of jump hosts, for the two-or-more case (D-306). Null = no chain.
+    ///
+    /// <para>Added <b>alongside</b> <see cref="Bastion"/> rather than replacing it (approved
+    /// 2026-08-27, additive under ADR 0017): a chain of one plans identically to the shorthand, so
+    /// this is a true superset and no existing configuration changes meaning.</para>
+    ///
+    /// <para>Setting both is <b>refused by name</b> rather than resolved by precedence. Either could
+    /// plausibly be "the" topology, so quietly preferring one would tunnel through a host the
+    /// operator did not choose and then report success.</para>
+    /// </summary>
+    public BastionChain? BastionChain { get; init; }
 
     /// <summary>Optional stable asset id for correlation/logging (never a secret).</summary>
     public string? AssetId { get; init; }

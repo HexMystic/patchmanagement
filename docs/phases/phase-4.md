@@ -43,7 +43,8 @@ Two sources state them. `docs/ROADMAP.md` states them abstractly; the table belo
 **operative** form, because it names observable conditions. A criterion is ticked only when a
 named test proves it — never because the code looks right.
 
-**9 of 9 ticked** as of 2026-08-27. `main` is green at **632** across nine projects.
+**9 of 9 ticked** as of 2026-08-27. `main` is green at **642** across nine projects (632 at the
+criteria close; slice 5 has added 10 so far).
 
 **The exit criteria are met; the PHASE is not closed.** It still owns three inherited deferrals —
 **D-301** (host-key store), **D-306** (multi-hop bastion) and **D-310** (per-borrow eviction sweep) —
@@ -93,7 +94,7 @@ Each was verified **in code** at `48f3cf1` when the phase opened. None is assume
 | ID | Verified state at phase open | What closing it requires |
 |----|------------------------------|--------------------------|
 | **D-301** — persistent verified-host-key (TOFU) store | **OPEN.** `ConnectorSecurityOptions.cs:26` is a single bool; `SshNetSessionFactory.cs:278-279` sets `e.CanTrust = _security.AllowUnknownHostKeys` — a blanket yes/no. No fingerprint is read, compared or persisted anywhere in `src/` | A `host_keys` store, and a test proving a **changed** fingerprint is refused. Until then the `AllowUnknownHostKeys` gate stands and the connector cannot be pointed at a real fleet |
-| **D-306** — multi-hop (>1) bastion chains | **OPEN, and larger than the factory.** `SshNetSessionFactory.cs:184-190` refuses `Hops.Count > 1` by name (`BastionPlanningTests.cs:105-127` proves it), but **that branch is unreachable from the planner**: `EndpointTarget.Bastion` is a single `BastionHop?`, so `ConnectionPlanner.Plan` can only ever emit 0 or 1 hops. The two-hop plan in that test is hand-constructed | A change to the **topology model on the target** — a `Shared/Contracts/Connectors` change under ADR 0017, and therefore a NEVER #6 ask — not merely implementing a loop |
+| **D-306** — multi-hop (>1) bastion chains | ~~**OPEN, and larger than the factory.**~~ **CLOSED 2026-08-29, slice 5.** At phase open `SshNetSessionFactory.cs:184-190` refused `Hops.Count > 1` by name, but that branch was **unreachable from the planner** — `EndpointTarget.Bastion` is a single `BastionHop?`, so `ConnectionPlanner.Plan` could only ever emit 0 or 1 hops, and the two-hop plan proving the refusal was hand-constructed | Done: `BastionChain` (additive, ADR 0017), the planner emitting every hop, and the factory **walking** the chain. See the slice-5 note below |
 | **D-310** — `AcquireAsync` runs a full eviction sweep per borrow | **OPEN.** `SshConnectionPool.AcquireAsync:80` calls `EvictIdle()` on every borrow; `EvictIdle` takes `lock (_lifetime)` and scans all entries, so acquires serialise on an O(entries) scan | **Measurement, not reasoning.** A sweep is the first thing to borrow hard against many hosts at once. Whether dropping the call changes eviction timing observably is the question to answer with evidence |
 
 **A name collision worth knowing before reading the connector.** `ConnectionKey.HostKeyFor` is a
@@ -386,6 +387,54 @@ changes a frozen contract.
   is flagged what it is flagged (§4.6); letting a delete erase it would make the flag retroactively
   unexplainable.
 
+### D-306 closed 2026-08-29 — and why it could not stop at the contract
+
+The deferral's "what it needs" column said *a change to the topology model … **not merely
+implementing a loop***. Read as "the contract is the whole job", the slice would have ended with a
+configurable `BastionChain` that the factory still refused above one hop. That was rejected: it is
+the same defect one level up — a control an operator can set that cannot do anything except produce
+a runtime refusal, which is precisely the "options flag that nothing reads" this repo already
+names as worse than no flag (`HostKeyPolicyTests`). So the sentence is read as *more than* a loop,
+not *instead of* one, and the slice landed contract + planner + traversal.
+
+**What was actually wrong was worse than the deferral recorded.** The row says a two-hop plan is
+"refused by name, not silently truncated to the first hop". Red-first showed the reachable
+behaviour was neither: a target carrying a two-hop chain planned
+
+    ConnectionPlan { Hops = [], IsDirect = True }
+
+— a **direct** connection to the destination, with both jump hosts discarded. On a segmented estate
+that is the failure the refusal existed to prevent, except it never reached the refusal.
+
+**No arbitrary hop cap was added.** A maximum depth would be a number invented here rather than
+derived from anything (§4.6 — no unexplained numbers). The walk is bounded by configuration (a finite
+list an operator wrote) and by the connect timeout, which covers the whole chain rather than each
+leg, so NEVER #5 holds at any depth.
+
+**The refusal that survives is the ambiguous one, and it IS reachable.** Setting both `Bastion` and
+`BastionChain` is refused by name rather than resolved by precedence: either could plausibly be the
+intended topology, so choosing one would tunnel through a host nobody authorised and report success.
+
+**Proven on the fleet, because a unit test structurally cannot tell a traversed chain from a
+truncated one.** `BastionChainFleetTests` chains `127.0.0.1:2201` → `debian12:22` → `rocky9:22`. Only
+2201 is published on loopback; the rest are reachable only from inside the compose network, so a chain
+that stopped early could not reach the far host at all. The assertion is the remote `hostname`, and a
+control test asserts the far host is `Unreachable` without the tunnel — that control passed before
+and after, which is what makes the other three mean something.
+
+**One defect the tests forced out on the way.** `ConnectionPlanner.Plan` refusing an ambiguous target
+threw a raw `ArgumentException` straight out of `IEndpointConnector`, whose every operation is
+contracted to return typed results (§5). One bad configuration row would have taken down a sweep
+walking 10,000 targets. It is now `ProtocolError` → `scan-failed`, deliberately **not**
+`Unreachable`, which would send someone to the network team over a typo (HARD-PROBLEMS #12).
+
+**Two things checked and deliberately left alone.** `ConnectionKey.For` already walked every hop, so
+pool keys and the per-host budget were chain-ready with no change. And `ConnectionPlan` documents
+itself as "a pure value" while its record equality compares `Hops` by **reference** — two identical
+plans are never `Equal`. The chain tests compare content explicitly and name the trap; changing the
+type's equality is a shared-type behaviour change with no caller demanding it, so it was not slipped
+into this slice.
+
 ## Open asks (NEVER #6) — required before the slices that need them
 
 1. ~~**Schema.**~~ **CLOSED 2026-08-26** — approved and migrated as
@@ -395,9 +444,9 @@ changes a frozen contract.
    `BastionChain` is added alongside `EndpointTarget.Bastion`, which stays as the one-hop shorthand.
    The breaking alternative (widening `Bastion` to a list) was rejected: no existing caller changes
    under the additive shape, and ADR 0017's contract surface is extended rather than altered.
-   **Approved, NOT YET BUILT** — this is slice 5's first item. The refusal branch in
-   `SshNetSessionFactory` is currently unreachable from the planner, so what lands is a change to the
-   topology model, not the implementation of a loop.
+   **Approved 2026-08-27, BUILT 2026-08-29** as the first item of slice 5. What landed is the topology
+   model *and* the loop the old comment had only claimed — see the slice-5 note below for why closing
+   D-306 could not stop at the contract.
 
 ## Slice plan — red-first
 
@@ -409,3 +458,5 @@ changes a frozen contract.
 | 3 | Inventory over the 5-distro fleet | Docker (lab fleet) |
 | 4 | Correlation + evidence | slice 2 |
 | 5 | Deferrals: D-301 store, D-306 chain, D-310 measurement | ask 2 |
+
+**Slice 5 progress.** D-306 closed 2026-08-29 (`main` 632 → 642). D-301 and D-310 remain open.

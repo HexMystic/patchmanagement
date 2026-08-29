@@ -155,9 +155,100 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
         // Unreachable at once instead of consuming the authentication budget.
         await EnsureReachableAsync(destination.Host, destination.Port, ct).ConfigureAwait(false);
 
-        using var credential = await resolve(destination.Credential, ct).ConfigureAwait(false);
-        var user = UsernameFor(destination, credential);
-        var info = BuildConnectionInfo(destination.Host, destination.Port, user, credential, timeout);
+        var client = await AuthenticateAsync(
+            destination, destination.Host, destination.Port, resolve, timeout, ct).ConfigureAwait(false);
+
+        return new SshNetSession(client, client.ConnectionInfo);
+    }
+
+    /// <summary>
+    /// Walks a bastion chain: the first hop is reached over a real socket, and every hop after it —
+    /// and finally the destination — is reached through a local port forwarded over the hop before.
+    ///
+    /// <para><b>This used to be an indexer under a comment claiming a loop</b> (D-306). A two-hop
+    /// chain would have connected through the first jump host, ignored the second and reported
+    /// success, so it was refused by name instead. That refusal was then unreachable from any real
+    /// target, because <c>EndpointTarget.Bastion</c> is a single hop; <see cref="BastionChain"/> is
+    /// what made the case expressible, and this is the loop the old comment described.</para>
+    ///
+    /// <para><b>No arbitrary depth cap.</b> A number would be policy invented here rather than
+    /// derived from anything (CLAUDE.md §4.6). The chain is already bounded by configuration — it is
+    /// a finite list an operator wrote — and by <paramref name="timeout"/>, which covers the whole
+    /// walk rather than each hop, so NEVER #5 holds however long the chain is.</para>
+    /// </summary>
+    private async Task<ISshSession> ConnectThroughBastionAsync(
+        ConnectionPlan plan, CredentialResolver resolve, TimeSpan timeout, CancellationToken ct)
+    {
+        // Only the FIRST hop is probed. Every later leg is dialled at 127.0.0.1 against a listener
+        // SSH.NET has already opened, so a reachability probe there would always succeed and would
+        // say nothing about whether the far end is answering — it would just spend budget.
+        await EnsureReachableAsync(plan.Hops[0].Host, plan.Hops[0].Port, ct).ConfigureAwait(false);
+
+        // Created in order, disposed in reverse: each forward belongs to the client before it, so
+        // tearing down an outer client first would strand the inner one on a dead transport.
+        var opened = new List<IDisposable>();
+        try
+        {
+            SshClient? previous = null;
+
+            foreach (var hop in plan.Hops)
+            {
+                // The first hop is a real address; every later one is reached through the tunnel the
+                // previous hop is carrying. This is the only place the two differ.
+                var (host, port) = previous is null
+                    ? (hop.Host, hop.Port)
+                    : Forward(previous, hop.Host, hop.Port, opened);
+
+                previous = await AuthenticateAsync(hop, host, port, resolve, timeout, ct).ConfigureAwait(false);
+                opened.Add(previous);
+            }
+
+            var (destHost, destPort) = Forward(previous!, plan.Destination.Host, plan.Destination.Port, opened);
+            var client = await AuthenticateAsync(
+                plan.Destination, destHost, destPort, resolve, timeout, ct).ConfigureAwait(false);
+
+            // The session owns the whole chain: disposing it tears down every forward and every
+            // intermediate client, innermost first.
+            opened.Reverse();
+            return new SshNetSession(client, client.ConnectionInfo, [.. opened]);
+        }
+        catch
+        {
+            for (var i = opened.Count - 1; i >= 0; i--)
+            {
+                try { opened[i].Dispose(); }
+                catch { /* unwinding a half-built chain must not mask the original failure */ }
+            }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Opens a local forward on <paramref name="through"/> to <paramref name="host"/>:<paramref name="port"/>
+    /// and returns the loopback address the next leg dials. Port 0 lets the OS choose, so concurrent
+    /// chains never collide on a fixed local port.
+    /// </summary>
+    private static (string Host, int Port) Forward(
+        SshClient through, string host, int port, List<IDisposable> opened)
+    {
+        var forward = new ForwardedPortLocal("127.0.0.1", 0, host, (uint)port);
+        opened.Add(forward);
+        through.AddForwardedPort(forward);
+        forward.Start();
+        return ("127.0.0.1", (int)forward.BoundPort);
+    }
+
+    /// <summary>
+    /// Resolves one hop's credential, authenticates at <paramref name="host"/>:<paramref name="port"/>,
+    /// and disposes the secret before returning — key material never outlives the leg it authenticated
+    /// (NEVER #1/#2). Each hop resolves its OWN reference: reusing the target's credential to reach a
+    /// jump host would be a silent authorization change.
+    /// </summary>
+    private async Task<SshClient> AuthenticateAsync(
+        HopSpec hop, string host, int port, CredentialResolver resolve, TimeSpan timeout, CancellationToken ct)
+    {
+        using var credential = await resolve(hop.Credential, ct).ConfigureAwait(false);
+        var info = BuildConnectionInfo(host, port, UsernameFor(hop, credential), credential, timeout);
 
         var client = new SshClient(info);
         ApplyHostKeyPolicy(client);
@@ -170,66 +261,7 @@ internal sealed class SshNetSessionFactory : ISshSessionFactory
             client.Dispose();
             throw;
         }
-        return new SshNetSession(client, info);
-    }
-
-    private async Task<ISshSession> ConnectThroughBastionAsync(
-        ConnectionPlan plan, CredentialResolver resolve, TimeSpan timeout, CancellationToken ct)
-    {
-        // Exactly one hop is supported. The previous comment here claimed "the loop keeps the code
-        // honest for chains" above an indexer, not a loop — so a two-hop chain would have connected
-        // through the first jump host, ignored the second, and reported success. Connecting somewhere
-        // the operator did not ask for is the worst available outcome for a misconfigured chain, so
-        // it is refused by name instead. Multi-hop support is a deferred item with a named owner.
-        if (plan.Hops.Count > 1)
-        {
-            throw new ConnectorConnectException(
-                ConnectorOutcome.ProtocolError,
-                $"This connector supports a single bastion hop; the plan specifies {plan.Hops.Count}. "
-                + "Multi-hop chains are not implemented — configure one jump host, or chain at the "
-                + "SSH-config level on the bastion itself.");
-        }
-
-        var hop = plan.Hops[0];
-
-        // The bastion is the machine we actually open a socket to; the destination is reached
-        // through the tunnel, so it is the bastion's reachability that is testable here.
-        await EnsureReachableAsync(hop.Host, hop.Port, ct).ConfigureAwait(false);
-
-        SshClient? bastion = null;
-        ForwardedPortLocal? forward = null;
-        try
-        {
-            using (var hopCredential = await resolve(hop.Credential, ct).ConfigureAwait(false))
-            {
-                var hopUser = UsernameFor(hop, hopCredential);
-                var hopInfo = BuildConnectionInfo(hop.Host, hop.Port, hopUser, hopCredential, timeout);
-                bastion = new SshClient(hopInfo);
-                ApplyHostKeyPolicy(bastion);
-                await bastion.ConnectAsync(ct).ConfigureAwait(false);
-            }
-
-            forward = new ForwardedPortLocal("127.0.0.1", 0, plan.Destination.Host, (uint)plan.Destination.Port);
-            bastion.AddForwardedPort(forward);
-            forward.Start();
-
-            using var destCredential = await resolve(plan.Destination.Credential, ct).ConfigureAwait(false);
-            var destUser = UsernameFor(plan.Destination, destCredential);
-            var destInfo = BuildConnectionInfo("127.0.0.1", (int)forward.BoundPort, destUser, destCredential, timeout);
-
-            var client = new SshClient(destInfo);
-            ApplyHostKeyPolicy(client);
-            await client.ConnectAsync(ct).ConfigureAwait(false);
-
-            // The session owns the tunnel: disposing it tears down the forward and the bastion.
-            return new SshNetSession(client, destInfo, forward, bastion);
-        }
-        catch
-        {
-            forward?.Dispose();
-            bastion?.Dispose();
-            throw;
-        }
+        return client;
     }
 
     private static ConnectionInfo BuildConnectionInfo(
