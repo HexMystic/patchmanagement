@@ -43,13 +43,18 @@ Two sources state them. `docs/ROADMAP.md` states them abstractly; the table belo
 **operative** form, because it names observable conditions. A criterion is ticked only when a
 named test proves it — never because the code looks right.
 
-**9 of 9 ticked** as of 2026-08-27. `main` is green at **662** across nine projects (632 at the
-criteria close; slice 5 added 30 — 10 for D-306, 16 for D-301, 4 for D-310).
+**9 of 9 ticked** as of 2026-08-27. `main` is green at **676** across nine projects (632 at the
+criteria close; slice 5 added 44 — 10 for D-306, 16 for D-301, 4 for D-310, 9 from the pre-close
+review, 5 for the NEVER #4 connector guard).
 
-**The exit criteria are met; the PHASE is not closed.** It inherited three deferrals — **D-301**
+**PHASE CLOSED 2026-08-29 at 676/676 green.** All three inherited deferrals are discharged and the
+pre-close review is complete. What follows is the record of how each criterion was met, kept in the
+past tense it was written in.
+
+~~**The exit criteria are met; the PHASE is not closed.**~~ It inherited three deferrals — **D-301**
 (host-key store), **D-306** (multi-hop bastion) and **D-310** (per-borrow eviction sweep). Slice 5
-closed **D-306** and **D-301** on 2026-08-29; `host_keys` now has a writer, so criterion (g) holds
-behaviourally as well as structurally. **D-310 remains open.** `docs/WORKFLOW.md` §5 requires every criterion met AND
+closed all three on 2026-08-29; `host_keys` now has a writer, so criterion (g) holds behaviourally
+as well as structurally. `docs/WORKFLOW.md` §5 requires every criterion met AND
 tests passing before the status moves; the deferral table requires the owner to discharge or
 re-assign what it inherited.
 
@@ -669,5 +674,6 @@ whole purpose was to stop them being rediscovered later as surprises.
 | 4 | Correlation + evidence | slice 2 |
 | 5 | Deferrals: D-301 store, D-306 chain, D-310 measurement | ask 2 |
 
-**Slice 5 progress.** D-306 closed 2026-08-29 (`main` 632 → 642); D-301 closed 2026-08-29
-(642 → 658); D-310 resolved 2026-08-29 (658 → 662). **All three inherited deferrals are discharged.**
+**Slice 5, complete.** D-306 closed (`main` 632 → 642); D-301 closed (642 → 658); D-310 resolved by
+measurement (658 → 662); pre-close review, 7 defects fixed (662 → 671); NEVER #4 extended to the
+connector (671 → 676). **All three inherited deferrals are discharged and the phase is closed.**
